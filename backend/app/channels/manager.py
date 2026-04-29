@@ -577,6 +577,23 @@ class ChannelManager:
 
         return assistant_id, run_config, run_context
 
+    @staticmethod
+    def _resolve_outbound_target(msg: InboundMessage) -> tuple[str, str, str | None]:
+        """Resolve outbound destination, allowing per-message override.
+
+        When ``msg.metadata.reply_target`` is present with
+        ``channel_name`` + ``chat_id``, responses are routed there.
+        Otherwise, responses go back to the source channel/chat.
+        """
+        reply_target = msg.metadata.get("reply_target")
+        if isinstance(reply_target, Mapping):
+            channel_name = reply_target.get("channel_name")
+            chat_id = reply_target.get("chat_id")
+            if isinstance(channel_name, str) and channel_name and isinstance(chat_id, str) and chat_id:
+                thread_ts = reply_target.get("thread_ts")
+                return channel_name, chat_id, thread_ts if isinstance(thread_ts, str) and thread_ts else None
+        return msg.channel_name, msg.chat_id, msg.thread_ts
+
     # -- LangGraph SDK client (lazy) ----------------------------------------
 
     def _get_client(self):
@@ -682,6 +699,7 @@ class ChannelManager:
 
     async def _handle_chat(self, msg: InboundMessage, extra_context: dict[str, Any] | None = None) -> None:
         client = self._get_client()
+        target_channel_name, target_chat_id, target_thread_ts = self._resolve_outbound_target(msg)
 
         # Look up existing DeerFlow thread.
         # topic_id may be None (e.g. Telegram private chats) — the store
@@ -753,15 +771,15 @@ class ChannelManager:
                 response_text = "(No response from agent)"
 
         outbound = OutboundMessage(
-            channel_name=msg.channel_name,
-            chat_id=msg.chat_id,
+            channel_name=target_channel_name,
+            chat_id=target_chat_id,
             thread_id=thread_id,
             text=response_text,
             artifacts=artifacts,
             attachments=attachments,
-            thread_ts=msg.thread_ts,
+            thread_ts=target_thread_ts,
         )
-        logger.info("[Manager] publishing outbound message to bus: channel=%s, chat_id=%s", msg.channel_name, msg.chat_id)
+        logger.info("[Manager] publishing outbound message to bus: channel=%s, chat_id=%s", target_channel_name, target_chat_id)
         await self.bus.publish_outbound(outbound)
 
     async def _handle_streaming_chat(
@@ -774,6 +792,7 @@ class ChannelManager:
         run_context: dict[str, Any],
     ) -> None:
         logger.info("[Manager] invoking runs.stream(thread_id=%s, text=%r)", thread_id, msg.text[:100])
+        target_channel_name, target_chat_id, target_thread_ts = self._resolve_outbound_target(msg)
 
         last_values: dict[str, Any] | list | None = None
         streamed_buffers: dict[str, str] = {}
@@ -815,12 +834,12 @@ class ChannelManager:
 
                 await self.bus.publish_outbound(
                     OutboundMessage(
-                        channel_name=msg.channel_name,
-                        chat_id=msg.chat_id,
+                        channel_name=target_channel_name,
+                        chat_id=target_chat_id,
                         thread_id=thread_id,
                         text=latest_text,
                         is_final=False,
-                        thread_ts=msg.thread_ts,
+                        thread_ts=target_thread_ts,
                     )
                 )
                 last_published_text = latest_text
@@ -857,14 +876,14 @@ class ChannelManager:
             )
             await self.bus.publish_outbound(
                 OutboundMessage(
-                    channel_name=msg.channel_name,
-                    chat_id=msg.chat_id,
+                    channel_name=target_channel_name,
+                    chat_id=target_chat_id,
                     thread_id=thread_id,
                     text=response_text,
                     artifacts=artifacts,
                     attachments=attachments,
                     is_final=True,
-                    thread_ts=msg.thread_ts,
+                    thread_ts=target_thread_ts,
                 )
             )
 
@@ -874,6 +893,7 @@ class ChannelManager:
         text = msg.text.strip()
         parts = text.split(maxsplit=1)
         command = parts[0].lower().lstrip("/")
+        target_channel_name, target_chat_id, target_thread_ts = self._resolve_outbound_target(msg)
 
         if command == "bootstrap":
             from dataclasses import replace as _dc_replace
@@ -918,11 +938,11 @@ class ChannelManager:
             reply = f"Unknown command: /{command}. Available commands: {available}"
 
         outbound = OutboundMessage(
-            channel_name=msg.channel_name,
-            chat_id=msg.chat_id,
+            channel_name=target_channel_name,
+            chat_id=target_chat_id,
             thread_id=self.store.get_thread_id(msg.channel_name, msg.chat_id) or "",
             text=reply,
-            thread_ts=msg.thread_ts,
+            thread_ts=target_thread_ts,
         )
         await self.bus.publish_outbound(outbound)
 
@@ -950,11 +970,12 @@ class ChannelManager:
     # -- error helper ------------------------------------------------------
 
     async def _send_error(self, msg: InboundMessage, error_text: str) -> None:
+        target_channel_name, target_chat_id, target_thread_ts = self._resolve_outbound_target(msg)
         outbound = OutboundMessage(
-            channel_name=msg.channel_name,
-            chat_id=msg.chat_id,
+            channel_name=target_channel_name,
+            chat_id=target_chat_id,
             thread_id=self.store.get_thread_id(msg.channel_name, msg.chat_id) or "",
             text=error_text,
-            thread_ts=msg.thread_ts,
+            thread_ts=target_thread_ts,
         )
         await self.bus.publish_outbound(outbound)

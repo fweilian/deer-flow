@@ -586,6 +586,26 @@ sandbox:
 #   use: deerflow.community.aio_sandbox:AioSandboxProvider
 #   provisioner_url: http://provisioner:8002
 
+# Option 4: CMB HTTP Sandbox (custom remote API)
+# Connects to a remote sandbox service over HTTP APIs.
+# The provider keeps one sandbox session per thread and syncs files via upload APIs.
+# sandbox:
+#   use: deerflow.community.cmb_sandbox:CmbSandboxProvider
+#
+#   # API endpoint and key can be configured here or via env vars:
+#   # SANDBOX_BASE_URL / SANDBOX_API_KEY
+#   # base_url: https://cmb-agent-sandbox.local.cn/agent/sandbox/api/v1
+#   # api_key: $SANDBOX_API_KEY
+#
+#   # Optional custom source header and timeout tuning
+#   # cmb_source: deerflow-cmb-sandbox
+#   # cmb_timeout: 120
+#   # cmb_request_timeout: 120
+#   # cmb_log_truncate_length: 500
+#
+#   # Optional idle cleanup (seconds). 0 disables idle cleanup.
+#   # cmb_idle_timeout: 0
+
 # ============================================================================
 # Subagents Configuration
 # ============================================================================

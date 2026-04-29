@@ -2549,3 +2549,78 @@ class TestSlackMarkdownConversion:
         result = _slack_md_converter.convert("# Title")
         assert "*Title*" in result
         assert "#" not in result
+
+
+class TestChannelManagerOutboundTarget:
+    def test_resolve_outbound_target_defaults_to_source(self, tmp_path):
+        from app.channels.manager import ChannelManager
+
+        bus = MessageBus()
+        store = ChannelStore(path=tmp_path / "store.json")
+        manager = ChannelManager(bus=bus, store=store)
+        msg = InboundMessage(
+            channel_name="webhook",
+            chat_id="webhook:route:1",
+            user_id="u1",
+            text="hello",
+            thread_ts="source-thread",
+        )
+
+        assert manager._resolve_outbound_target(msg) == ("webhook", "webhook:route:1", "source-thread")
+
+    def test_resolve_outbound_target_uses_reply_target(self, tmp_path):
+        from app.channels.manager import ChannelManager
+
+        bus = MessageBus()
+        store = ChannelStore(path=tmp_path / "store.json")
+        manager = ChannelManager(bus=bus, store=store)
+        msg = InboundMessage(
+            channel_name="webhook",
+            chat_id="webhook:route:2",
+            user_id="u1",
+            text="hello",
+            thread_ts="source-thread",
+            metadata={
+                "reply_target": {
+                    "channel_name": "telegram",
+                    "chat_id": "123456",
+                    "thread_ts": "target-thread",
+                }
+            },
+        )
+
+        assert manager._resolve_outbound_target(msg) == ("telegram", "123456", "target-thread")
+
+    def test_send_error_routes_to_reply_target(self, tmp_path):
+        from app.channels.manager import ChannelManager
+
+        async def go():
+            bus = MessageBus()
+            store = ChannelStore(path=tmp_path / "store.json")
+            manager = ChannelManager(bus=bus, store=store)
+            published: list[OutboundMessage] = []
+
+            async def collect(msg: OutboundMessage):
+                published.append(msg)
+
+            bus.subscribe_outbound(collect)
+
+            msg = InboundMessage(
+                channel_name="webhook",
+                chat_id="webhook:route:3",
+                user_id="u1",
+                text="hello",
+                metadata={
+                    "reply_target": {
+                        "channel_name": "telegram",
+                        "chat_id": "999",
+                    }
+                },
+            )
+            await manager._send_error(msg, "boom")
+            assert len(published) == 1
+            assert published[0].channel_name == "telegram"
+            assert published[0].chat_id == "999"
+            assert published[0].text == "boom"
+
+        _run(go())
