@@ -883,6 +883,31 @@ checkpointer:
 #     # domain: https://open.feishu.cn       # China (default)
 #     # domain: https://open.larksuite.com   # International
 #
+#   webhook:
+#     enabled: false
+#     # Optional: max webhook body size (bytes), route rate limit and idempotency TTL
+#     max_body_bytes: 1048576
+#     rate_limit_per_minute: 30
+#     idempotency_ttl_seconds: 3600
+#     routes:
+#       github_push:
+#         # Keep this secret consistent with your GitHub webhook settings
+#         secret: $GITHUB_WEBHOOK_SECRET
+#         events: ["push"]
+#         prompt: |
+#           You received a GitHub push event. Summarize key changes and what to follow up.
+#           Repo: {repository.full_name}
+#           Ref: {ref}
+#           Pusher: {pusher.name}
+#           Compare: {compare}
+#
+#           Payload:
+#           {__raw__}
+#         # Default: log only. Set deliver + chat_id to forward replies to another channel user.
+#         deliver: feishu
+#         deliver_extra:
+#           chat_id: "1234"
+#
 #   slack:
 #     enabled: false
 #     bot_token: $SLACK_BOT_TOKEN     # xoxb-...
