@@ -16,7 +16,7 @@ from deerflow.agents.middlewares.todo_middleware import TodoMiddleware
 from deerflow.agents.middlewares.token_usage_middleware import TokenUsageMiddleware
 from deerflow.agents.middlewares.tool_error_handling_middleware import build_lead_runtime_middlewares
 from deerflow.agents.middlewares.view_image_middleware import ViewImageMiddleware
-from deerflow.agents.thread_state import ThreadState
+from deerflow.agents.thread_state import AgentContext, ThreadState
 from deerflow.config.agents_config import load_agent_config, validate_agent_name
 from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.models import create_chat_model
@@ -388,6 +388,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
                 app_config=resolved_app_config,
             ),
             state_schema=ThreadState,
+            context_schema=AgentContext,
         )
 
     # Default lead agent (unchanged behavior)
@@ -408,4 +409,5 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             app_config=resolved_app_config,
         ),
         state_schema=ThreadState,
+        context_schema=AgentContext,
     )

@@ -25,9 +25,10 @@ import { useAgent } from "@/core/agents";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 import { useNotification } from "@/core/notification/hooks";
-import { useThreadSettings } from "@/core/settings";
+import { useLocalSettings, useThreadSettings } from "@/core/settings";
 import { useThreadStream } from "@/core/threads/hooks";
-import { textOfMessage } from "@/core/threads/utils";
+import type { AgentThreadState } from "@/core/threads/types";
+import { notificationBodyOfThread } from "@/core/threads/utils";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
@@ -45,9 +46,32 @@ export default function AgentChatPage() {
   const { threadId, setThreadId, isNewThread, setIsNewThread } =
     useThreadChat();
   const [settings, setSettings] = useThreadSettings(threadId);
+  const [localSettings, setLocalSettings] = useLocalSettings();
   const { tokenUsageEnabled } = useModels();
 
   const { showNotification } = useNotification();
+  const showThreadNotification = useCallback(
+    (state: AgentThreadState, fallback?: string) => {
+      if (document.hidden || !document.hasFocus()) {
+        showNotification(state.title, {
+          body: notificationBodyOfThread(state, fallback),
+        });
+      }
+    },
+    [showNotification],
+  );
+  const notifyThreadUpdate = useCallback(
+    (state: AgentThreadState) => {
+      showThreadNotification(state);
+    },
+    [showThreadNotification],
+  );
+  const notifyThreadFinish = useCallback(
+    (state: AgentThreadState) => {
+      showThreadNotification(state, "Conversation finished");
+    },
+    [showThreadNotification],
+  );
   const {
     thread,
     sendMessage,
@@ -67,22 +91,8 @@ export default function AgentChatPage() {
         `/workspace/agents/${agent_name}/chats/${createdThreadId}`,
       );
     },
-    onFinish: (state) => {
-      if (document.hidden || !document.hasFocus()) {
-        let body = "Conversation finished";
-        const lastMessage = state.messages[state.messages.length - 1];
-        if (lastMessage) {
-          const textContent = textOfMessage(lastMessage);
-          if (textContent) {
-            body =
-              textContent.length > 200
-                ? textContent.substring(0, 200) + "..."
-                : textContent;
-          }
-        }
-        showNotification(state.title, { body });
-      }
-    },
+    onFinish: notifyThreadFinish,
+    onThreadUpdate: notifyThreadUpdate,
   });
 
   const handleSubmit = useCallback(
@@ -100,6 +110,9 @@ export default function AgentChatPage() {
     ? MESSAGE_LIST_DEFAULT_PADDING_BOTTOM +
       MESSAGE_LIST_FOLLOWUPS_EXTRA_PADDING_BOTTOM
     : undefined;
+  const tokenUsageInlineMode = tokenUsageEnabled
+    ? localSettings.tokenUsage.inlineMode
+    : "off";
 
   return (
     <ThreadContext.Provider value={{ thread }}>
@@ -139,6 +152,10 @@ export default function AgentChatPage() {
               <TokenUsageIndicator
                 enabled={tokenUsageEnabled}
                 messages={thread.messages}
+                preferences={localSettings.tokenUsage}
+                onPreferencesChange={(preferences) =>
+                  setLocalSettings("tokenUsage", preferences)
+                }
               />
               <ExportTrigger threadId={threadId} />
               <ArtifactTrigger />
@@ -152,10 +169,10 @@ export default function AgentChatPage() {
                 threadId={threadId}
                 thread={thread}
                 paddingBottom={messageListPaddingBottom}
-                tokenUsageEnabled={tokenUsageEnabled}
                 hasMoreHistory={hasMoreHistory}
                 loadMoreHistory={loadMoreHistory}
                 isHistoryLoading={isHistoryLoading}
+                tokenUsageInlineMode={tokenUsageInlineMode}
               />
             </div>
 

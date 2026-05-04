@@ -24,9 +24,10 @@ import { Welcome } from "@/components/workspace/welcome";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 import { useNotification } from "@/core/notification/hooks";
-import { useThreadSettings } from "@/core/settings";
+import { useLocalSettings, useThreadSettings } from "@/core/settings";
 import { useThreadStream } from "@/core/threads/hooks";
-import { textOfMessage } from "@/core/threads/utils";
+import type { AgentThreadState } from "@/core/threads/types";
+import { notificationBodyOfThread } from "@/core/threads/utils";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,7 @@ export default function ChatPage() {
   const { threadId, setThreadId, isNewThread, setIsNewThread, isMock } =
     useThreadChat();
   const [settings, setSettings] = useThreadSettings(threadId);
+  const [localSettings, setLocalSettings] = useLocalSettings();
   const { tokenUsageEnabled } = useModels();
   const mountedRef = useRef(false);
   useSpecificChatMode();
@@ -45,6 +47,28 @@ export default function ChatPage() {
   }, []);
 
   const { showNotification } = useNotification();
+  const showThreadNotification = useCallback(
+    (state: AgentThreadState, fallback?: string) => {
+      if (document.hidden || !document.hasFocus()) {
+        showNotification(state.title, {
+          body: notificationBodyOfThread(state, fallback),
+        });
+      }
+    },
+    [showNotification],
+  );
+  const notifyThreadUpdate = useCallback(
+    (state: AgentThreadState) => {
+      showThreadNotification(state);
+    },
+    [showThreadNotification],
+  );
+  const notifyThreadFinish = useCallback(
+    (state: AgentThreadState) => {
+      showThreadNotification(state, "Conversation finished");
+    },
+    [showThreadNotification],
+  );
 
   const {
     thread,
@@ -67,22 +91,8 @@ export default function ChatPage() {
       // ! Important: Never use next.js router for navigation in this case, otherwise it will cause the thread to re-mount and lose all states. Use native history API instead.
       history.replaceState(null, "", `/workspace/chats/${createdThreadId}`);
     },
-    onFinish: (state) => {
-      if (document.hidden || !document.hasFocus()) {
-        let body = "Conversation finished";
-        const lastMessage = state.messages.at(-1);
-        if (lastMessage) {
-          const textContent = textOfMessage(lastMessage);
-          if (textContent) {
-            body =
-              textContent.length > 200
-                ? textContent.substring(0, 200) + "..."
-                : textContent;
-          }
-        }
-        showNotification(state.title, { body });
-      }
-    },
+    onFinish: notifyThreadFinish,
+    onThreadUpdate: notifyThreadUpdate,
   });
 
   const handleSubmit = useCallback(
@@ -99,6 +109,9 @@ export default function ChatPage() {
     ? MESSAGE_LIST_DEFAULT_PADDING_BOTTOM +
       MESSAGE_LIST_FOLLOWUPS_EXTRA_PADDING_BOTTOM
     : undefined;
+  const tokenUsageInlineMode = tokenUsageEnabled
+    ? localSettings.tokenUsage.inlineMode
+    : "off";
 
   return (
     <ThreadContext.Provider value={{ thread, isMock }}>
@@ -119,6 +132,10 @@ export default function ChatPage() {
               <TokenUsageIndicator
                 enabled={tokenUsageEnabled}
                 messages={thread.messages}
+                preferences={localSettings.tokenUsage}
+                onPreferencesChange={(preferences) =>
+                  setLocalSettings("tokenUsage", preferences)
+                }
               />
               <ExportTrigger threadId={threadId} />
               <ArtifactTrigger />
@@ -131,10 +148,10 @@ export default function ChatPage() {
                 threadId={threadId}
                 thread={thread}
                 paddingBottom={messageListPaddingBottom}
-                tokenUsageEnabled={tokenUsageEnabled}
                 hasMoreHistory={hasMoreHistory}
                 loadMoreHistory={loadMoreHistory}
                 isHistoryLoading={isHistoryLoading}
+                tokenUsageInlineMode={tokenUsageInlineMode}
               />
             </div>
             <div className="absolute right-0 bottom-0 left-0 z-30 flex justify-center px-4">

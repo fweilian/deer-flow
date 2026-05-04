@@ -589,12 +589,30 @@ class ChannelManager:
             user_layer.get("config"),
         )
 
+        configurable = run_config.get("configurable")
+        if isinstance(configurable, Mapping):
+            configurable = dict(configurable)
+        else:
+            configurable = {}
+        run_config["configurable"] = configurable
+        # Pin channel-triggered runs to the root graph namespace so follow-up
+        # turns continue from the same conversation checkpoint.
+        configurable["checkpoint_ns"] = ""
+        configurable["thread_id"] = thread_id
+
         run_context = _merge_dicts(
             DEFAULT_RUN_CONTEXT,
             self._default_session.get("context"),
             channel_layer.get("context"),
             user_layer.get("context"),
-            {"thread_id": thread_id},
+            {
+                "thread_id": thread_id,
+                "channel_name": msg.channel_name,
+                "chat_id": msg.chat_id,
+                "user_id": msg.user_id,
+                "thread_ts": msg.thread_ts,
+                "topic_id": msg.topic_id,
+            },
         )
 
         # Custom agents are implemented as lead_agent + agent_name context.
