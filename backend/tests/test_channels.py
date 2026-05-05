@@ -2208,6 +2208,24 @@ class TestChannelService:
 
         _run(go())
 
+    def test_disabled_zhaohu_channel_with_creds_emits_warning(self, caplog):
+        import logging
+
+        from app.channels.service import ChannelService
+
+        async def go():
+            service = ChannelService(
+                channels_config={
+                    "zhaohu": {"enabled": False, "client_id": "cid", "client_secret": "secret", "from_id": "robot"},
+                }
+            )
+            with caplog.at_level(logging.WARNING, logger="app.channels.service"):
+                await service.start()
+            await service.stop()
+
+        _run(go())
+        assert any("zhaohu" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+
     def test_disabled_channels_are_skipped(self):
         from app.channels.service import ChannelService
 

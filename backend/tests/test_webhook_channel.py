@@ -222,6 +222,52 @@ class TestWebhookChannel:
 
         _run(go())
 
+    def test_deliver_only_sends_to_zhaohu_target_user_id(self):
+        async def go():
+            bus = MessageBus()
+            channel = WebhookChannel(
+                bus=bus,
+                config={
+                    "routes": {
+                        "github_alert": {
+                            "secret": "top-secret",
+                            "deliver_only": True,
+                            "deliver": "zhaohu",
+                            "deliver_extra": {"chat_id": "zhaohu-user-001"},
+                            "prompt": "Alert {event_type}",
+                        }
+                    }
+                },
+            )
+            await channel.start()
+
+            sent: list[OutboundMessage] = []
+
+            async def collect(msg: OutboundMessage):
+                sent.append(msg)
+
+            bus.subscribe_outbound(collect)
+
+            body = b"{}"
+            headers = {
+                "X-Hub-Signature-256": _github_signature("top-secret", body),
+                "X-GitHub-Event": "issues",
+                "X-GitHub-Delivery": "delivery-zhaohu-1",
+            }
+            status, resp = await channel.handle_webhook_request("github_alert", headers=headers, body=body, content_length=len(body))
+
+            assert status == 200
+            assert resp["status"] == "delivered"
+            assert len(sent) == 1
+            assert sent[0].channel_name == "zhaohu"
+            assert sent[0].chat_id == "zhaohu-user-001"
+            assert "Alert issues" in sent[0].text
+            assert bus.inbound_queue.empty()
+
+            await channel.stop()
+
+        _run(go())
+
     def test_gitee_plain_signature_supported(self):
         async def go():
             bus = MessageBus()

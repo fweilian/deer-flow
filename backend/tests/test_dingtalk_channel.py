@@ -1106,6 +1106,26 @@ class TestChannelRegistration:
         assert "dingtalk" in CHANNEL_CAPABILITIES
         assert CHANNEL_CAPABILITIES["dingtalk"]["supports_streaming"] is False
 
+    def test_zhaohu_in_channel_registry(self):
+        from app.channels.service import _CHANNEL_REGISTRY
+
+        assert "zhaohu" in _CHANNEL_REGISTRY
+        assert _CHANNEL_REGISTRY["zhaohu"] == "app.channels.zhaohu:ZhaohuChannel"
+
+    def test_zhaohu_in_credential_keys(self):
+        from app.channels.service import _CHANNEL_CREDENTIAL_KEYS
+
+        assert "zhaohu" in _CHANNEL_CREDENTIAL_KEYS
+        assert "client_id" in _CHANNEL_CREDENTIAL_KEYS["zhaohu"]
+        assert "client_secret" in _CHANNEL_CREDENTIAL_KEYS["zhaohu"]
+        assert "from_id" in _CHANNEL_CREDENTIAL_KEYS["zhaohu"]
+
+    def test_zhaohu_in_channel_capabilities(self):
+        from app.channels.manager import CHANNEL_CAPABILITIES
+
+        assert "zhaohu" in CHANNEL_CAPABILITIES
+        assert CHANNEL_CAPABILITIES["zhaohu"]["supports_streaming"] is False
+
 
 # ---------------------------------------------------------------------------
 # AI Card streaming mode tests

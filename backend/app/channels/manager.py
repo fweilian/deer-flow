@@ -45,6 +45,7 @@ CHANNEL_CAPABILITIES = {
     "telegram": {"supports_streaming": False},
     "wechat": {"supports_streaming": False},
     "wecom": {"supports_streaming": True},
+    "zhaohu": {"supports_streaming": False},
 }
 
 InboundFileReader = Callable[[dict[str, Any], httpx.AsyncClient], Awaitable[bytes | None]]

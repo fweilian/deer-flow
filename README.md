@@ -346,6 +346,7 @@ DeerFlow supports receiving tasks from messaging apps. Channels auto-start when 
 | WeChat | Tencent iLink (long-polling) | Moderate |
 | WeCom | WebSocket | Moderate |
 | DingTalk | Stream Push (WebSocket) | Moderate |
+| Zhaohu | HTTP API (outbound only) | Moderate |
 
 **Configuration in `config.yaml`:**
 
@@ -422,6 +423,12 @@ channels:
     client_secret: $DINGTALK_CLIENT_SECRET     # Client Secret of your DingTalk application
     allowed_users: []                          # empty = allow all
     card_template_id: ""                       # Optional: AI Card template ID for streaming typewriter effect
+
+  zhaohu:
+    enabled: true
+    client_id: $ZHAOHU_CLIENT_ID
+    client_secret: $ZHAOHU_CLIENT_SECRET
+    from_id: $ZHAOHU_FROM_ID                   # DeerFlow chat_id is mapped to Zhaohu toId (target user ID)
 ```
 
 Notes:
@@ -454,6 +461,11 @@ WECOM_BOT_SECRET=your_bot_secret
 # DingTalk
 DINGTALK_CLIENT_ID=your_client_id
 DINGTALK_CLIENT_SECRET=your_client_secret
+
+# Zhaohu
+ZHAOHU_CLIENT_ID=your_client_id
+ZHAOHU_CLIENT_SECRET=your_client_secret
+ZHAOHU_FROM_ID=your_sender_id
 ```
 
 **Telegram Setup**

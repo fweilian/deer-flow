@@ -26,6 +26,7 @@ _CHANNEL_REGISTRY: dict[str, str] = {
     "webhook": "app.channels.webhook:WebhookChannel",
     "wechat": "app.channels.wechat:WechatChannel",
     "wecom": "app.channels.wecom:WeComChannel",
+    "zhaohu": "app.channels.zhaohu:ZhaohuChannel",
 }
 
 # Keys that indicate a user has configured credentials for a channel.
@@ -37,6 +38,7 @@ _CHANNEL_CREDENTIAL_KEYS: dict[str, list[str]] = {
     "telegram": ["bot_token"],
     "wecom": ["bot_id", "bot_secret"],
     "wechat": ["bot_token"],
+    "zhaohu": ["client_id", "client_secret", "from_id"],
 }
 
 _CHANNELS_LANGGRAPH_URL_ENV = "DEER_FLOW_CHANNELS_LANGGRAPH_URL"
