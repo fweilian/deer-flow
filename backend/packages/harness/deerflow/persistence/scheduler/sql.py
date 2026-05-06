@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from deerflow.persistence.scheduler.model import CronJobRow
+from deerflow.persistence.scheduler.model import CronJobFireRow, CronJobRow
 from deerflow.runtime.scheduler.schemas import CronJobCreate, CronJobRecord, compute_next_fire_at
+from deerflow.runtime.scheduler.service import CronJobFireRecord
 
 CronMultitaskStrategy = Literal["reject", "interrupt", "rollback", "enqueue"]
 
@@ -58,6 +60,20 @@ class CronSchedulerRepository:
             last_run_id=row.last_run_id,
             created_at=_datetime_to_timestamp(row.created_at) or 0.0,
             updated_at=_datetime_to_timestamp(row.updated_at) or 0.0,
+        )
+
+    @staticmethod
+    def _fire_row_to_record(row: CronJobFireRow) -> CronJobFireRecord:
+        return CronJobFireRecord(
+            fire_id=row.fire_id,
+            job_id=row.job_id,
+            scheduled_fire_at=_datetime_to_timestamp(row.scheduled_fire_at) or 0.0,
+            status=row.status,
+            claim_owner=row.claim_owner,
+            claim_token=row.claim_token,
+            lease_until=_datetime_to_timestamp(row.lease_until),
+            run_id=row.run_id,
+            error=row.error,
         )
 
     async def create_job(
@@ -109,3 +125,106 @@ class CronSchedulerRepository:
         async with self._sf() as session:
             result = await session.execute(stmt)
             return [self._row_to_record(row) for row in result.scalars()]
+
+    async def claim_fire(
+        self,
+        job_id: str,
+        *,
+        scheduled_fire_at: float | datetime,
+        instance_id: str,
+        lease_seconds: int,
+    ) -> CronJobFireRecord | None:
+        fire_time = _coerce_datetime(scheduled_fire_at)
+        claimed_at = datetime.now(UTC)
+        row = CronJobFireRow(
+            fire_id=uuid4().hex,
+            job_id=job_id,
+            scheduled_fire_at=fire_time,
+            status="claimed",
+            claim_owner=instance_id,
+            claim_token=uuid4().hex,
+            lease_until=claimed_at + timedelta(seconds=lease_seconds),
+        )
+        async with self._sf() as session:
+            session.add(row)
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                return None
+            await session.refresh(row)
+            return self._fire_row_to_record(row)
+
+    async def recover_expired_fire(
+        self,
+        job_id: str,
+        *,
+        scheduled_fire_at: float | datetime,
+        instance_id: str,
+        lease_seconds: int,
+        now: float | datetime | None = None,
+    ) -> CronJobFireRecord | None:
+        fire_time = _coerce_datetime(scheduled_fire_at)
+        recovery_at = _coerce_datetime(now)
+        lease_until = recovery_at + timedelta(seconds=lease_seconds)
+        claim_token = uuid4().hex
+        stmt = (
+            update(CronJobFireRow)
+            .where(
+                CronJobFireRow.job_id == job_id,
+                CronJobFireRow.scheduled_fire_at == fire_time,
+                CronJobFireRow.status == "claimed",
+                CronJobFireRow.lease_until.is_not(None),
+                CronJobFireRow.lease_until <= recovery_at,
+            )
+            .values(
+                claim_owner=instance_id,
+                claim_token=claim_token,
+                lease_until=lease_until,
+            )
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            if result.rowcount == 0:
+                await session.rollback()
+                return None
+            fire = (
+                await session.execute(
+                    select(CronJobFireRow).where(
+                        CronJobFireRow.job_id == job_id,
+                        CronJobFireRow.scheduled_fire_at == fire_time,
+                    )
+                )
+            ).scalar_one()
+            await session.commit()
+            return self._fire_row_to_record(fire)
+
+    async def mark_fire_dispatched(
+        self,
+        job_id: str,
+        fire_id: str,
+        *,
+        run_id: str,
+        fired_at: float | datetime,
+    ) -> None:
+        fired_time = _coerce_datetime(fired_at)
+        async with self._sf() as session:
+            fire = (
+                await session.execute(
+                    select(CronJobFireRow).where(
+                        CronJobFireRow.job_id == job_id,
+                        CronJobFireRow.fire_id == fire_id,
+                    )
+                )
+            ).scalar_one()
+            job = (await session.execute(select(CronJobRow).where(CronJobRow.job_id == job_id))).scalar_one()
+
+            fire.status = "dispatched"
+            fire.run_id = run_id
+            fire.lease_until = None
+            job.last_fire_at = fired_time
+            job.last_run_id = run_id
+            job.next_fire_at = _coerce_datetime(compute_next_fire_at(job.cron_expr, job.timezone, now=fired_time))
+            job.updated_at = datetime.now(UTC)
+
+            await session.commit()

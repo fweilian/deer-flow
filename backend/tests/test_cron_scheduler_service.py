@@ -1,0 +1,117 @@
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
+import pytest
+from sqlalchemy import select
+
+from deerflow.persistence.engine import close_engine, get_session_factory, init_engine
+from deerflow.persistence.scheduler.model import CronJobFireRow, CronJobRow
+from deerflow.persistence.scheduler.sql import CronSchedulerRepository
+from deerflow.runtime.scheduler.schemas import CronJobCreate
+from deerflow.runtime.scheduler.service import CronSchedulerService
+
+
+@pytest.fixture
+async def session_factory(tmp_path):
+    url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+    await init_engine("sqlite", url=url, sqlite_dir=str(tmp_path))
+    try:
+        yield get_session_factory()
+    finally:
+        await close_engine()
+
+
+@pytest.mark.anyio
+async def test_claim_due_fire_is_unique(session_factory):
+    repo = CronSchedulerRepository(session_factory)
+    service = CronSchedulerService(repo, run_launcher=AsyncMock(), instance_id="worker-a")
+    job = await repo.create_job(
+        CronJobCreate(
+            thread_id="thread-1",
+            assistant_id="lead_agent",
+            cron="*/5 * * * *",
+            timezone="Asia/Shanghai",
+        ),
+        now=1_746_500_000,
+    )
+
+    first = await repo.claim_fire(job.job_id, scheduled_fire_at=job.next_fire_at, instance_id="worker-a", lease_seconds=30)
+    second = await repo.claim_fire(job.job_id, scheduled_fire_at=job.next_fire_at, instance_id="worker-b", lease_seconds=30)
+
+    assert service.instance_id == "worker-a"
+    assert first is not None
+    assert second is None
+
+
+@pytest.mark.anyio
+async def test_dispatch_due_jobs_launches_and_marks_fire(session_factory):
+    repo = CronSchedulerRepository(session_factory)
+    launcher = AsyncMock(return_value=type("Run", (), {"run_id": "run-1"})())
+    service = CronSchedulerService(repo, run_launcher=launcher, instance_id="worker-a")
+    job = await repo.create_job(
+        CronJobCreate(
+            thread_id="thread-1",
+            assistant_id="lead_agent",
+            cron="*/5 * * * *",
+            timezone="Asia/Shanghai",
+        ),
+        now=1_746_500_000,
+    )
+
+    launched = await service.dispatch_due_jobs(now=job.next_fire_at)
+
+    assert launched == ["run-1"]
+    launcher.assert_awaited_once()
+
+    async with session_factory() as session:
+        fire = (
+            await session.execute(
+                select(CronJobFireRow).where(
+                    CronJobFireRow.job_id == job.job_id,
+                    CronJobFireRow.scheduled_fire_at == datetime.fromtimestamp(job.next_fire_at, UTC),
+                )
+            )
+        ).scalar_one()
+        refreshed_job = (await session.execute(select(CronJobRow).where(CronJobRow.job_id == job.job_id))).scalar_one()
+
+    assert fire.status == "dispatched"
+    assert fire.run_id == "run-1"
+    assert refreshed_job.last_run_id == "run-1"
+    assert refreshed_job.last_fire_at is not None
+    assert refreshed_job.next_fire_at is not None
+    assert refreshed_job.next_fire_at > refreshed_job.last_fire_at
+
+
+@pytest.mark.anyio
+async def test_dispatch_due_jobs_recovers_expired_fire_lease(session_factory):
+    repo = CronSchedulerRepository(session_factory)
+    launcher = AsyncMock(return_value=type("Run", (), {"run_id": "run-1"})())
+    service = CronSchedulerService(repo, run_launcher=launcher, instance_id="worker-b", lease_seconds=30)
+    job = await repo.create_job(
+        CronJobCreate(
+            thread_id="thread-1",
+            assistant_id="lead_agent",
+            cron="*/5 * * * *",
+            timezone="Asia/Shanghai",
+        ),
+        now=1_746_500_000,
+    )
+
+    fire = await repo.claim_fire(job.job_id, scheduled_fire_at=job.next_fire_at, instance_id="worker-a", lease_seconds=30)
+    assert fire is not None
+
+    async with session_factory() as session:
+        stale_fire = (await session.execute(select(CronJobFireRow).where(CronJobFireRow.fire_id == fire.fire_id))).scalar_one()
+        stale_fire.lease_until = datetime.fromtimestamp(job.next_fire_at - 1, UTC)
+        await session.commit()
+
+    launched = await service.dispatch_due_jobs(now=job.next_fire_at)
+
+    assert launched == ["run-1"]
+    launcher.assert_awaited_once()
+
+    async with session_factory() as session:
+        refreshed_fire = (await session.execute(select(CronJobFireRow).where(CronJobFireRow.fire_id == fire.fire_id))).scalar_one()
+
+    assert refreshed_fire.claim_owner == "worker-b"
+    assert refreshed_fire.status == "dispatched"
