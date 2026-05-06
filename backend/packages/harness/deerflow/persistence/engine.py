@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Literal
 
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 
 def _json_serializer(obj: object) -> str:
@@ -25,6 +26,13 @@ logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+async def _validate_existing_schema(conn: AsyncConnection) -> None:
+    """Validate the pre-created PostgreSQL application schema."""
+    from deerflow.persistence.postgres_schema import validate_app_schema
+
+    await validate_app_schema(conn)
 
 
 async def _auto_create_postgres_db(url: str) -> None:
@@ -61,6 +69,7 @@ async def init_engine(
     echo: bool = False,
     pool_size: int = 5,
     sqlite_dir: str = "",
+    schema_init: Literal["auto", "manual"] = "auto",
 ) -> None:
     """Create the async engine and session factory, then auto-create tables.
 
@@ -125,7 +134,8 @@ async def init_engine(
 
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
-    # Auto-create tables (dev convenience). Production should use Alembic.
+    # Auto-create tables (dev convenience). Production should use Alembic or
+    # the bundled manual schema SQL when schema_init=manual.
     from deerflow.persistence.base import Base
 
     # Import all models so Base.metadata discovers them.
@@ -139,9 +149,12 @@ async def init_engine(
 
     try:
         async with _engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            if backend == "postgres" and schema_init == "manual":
+                await _validate_existing_schema(conn)
+            else:
+                await conn.run_sync(Base.metadata.create_all)
     except Exception as exc:
-        if backend == "postgres" and "does not exist" in str(exc):
+        if backend == "postgres" and schema_init == "auto" and "does not exist" in str(exc):
             # Database not yet created — attempt to auto-create it, then retry.
             await _auto_create_postgres_db(url)
             # Rebuild engine against the now-existing database
@@ -167,6 +180,7 @@ async def init_engine_from_config(config) -> None:
         echo=config.echo_sql,
         pool_size=config.pool_size,
         sqlite_dir=config.sqlite_dir if config.backend == "sqlite" else "",
+        schema_init=config.schema_init,
     )
 
 

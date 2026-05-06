@@ -9,6 +9,7 @@ Tests:
 """
 
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,6 +24,7 @@ class TestDatabaseConfig:
         c = DatabaseConfig()
         assert c.backend == "memory"
         assert c.pool_size == 5
+        assert c.schema_init == "auto"
 
     def test_sqlite_paths_unified(self):
         c = DatabaseConfig(backend="sqlite", sqlite_dir="./mydata")
@@ -59,6 +61,10 @@ class TestDatabaseConfig:
         c = DatabaseConfig(backend="memory")
         with pytest.raises(ValueError, match="No SQLAlchemy URL"):
             _ = c.app_sqlalchemy_url
+
+    def test_schema_init_manual_is_supported(self):
+        c = DatabaseConfig(backend="postgres", postgres_url="postgresql://u:p@h:5432/db", schema_init="manual")
+        assert c.schema_init == "manual"
 
 
 # -- MemoryRunStore --
@@ -231,3 +237,29 @@ class TestEngineLifecycle:
             pass  # noqa: S110 — intentionally ignored
         with pytest.raises(ImportError, match="uv sync --extra postgres"):
             await init_engine("postgres", url="postgresql+asyncpg://x:x@localhost/x")
+
+    @pytest.mark.anyio
+    async def test_postgres_manual_skips_create_all(self):
+        from deerflow.persistence.engine import close_engine, init_engine
+
+        mock_engine = MagicMock()
+        mock_conn = AsyncMock()
+        mock_begin = AsyncMock()
+        mock_begin.__aenter__.return_value = mock_conn
+        mock_begin.__aexit__.return_value = False
+        mock_engine.begin.return_value = mock_begin
+        mock_engine.dispose = AsyncMock()
+
+        with (
+            patch.dict("sys.modules", {"asyncpg": MagicMock()}),
+            patch("deerflow.persistence.engine.create_async_engine", return_value=mock_engine),
+            patch("deerflow.persistence.engine._validate_existing_schema", new_callable=AsyncMock) as mock_validate,
+            patch("deerflow.persistence.engine._auto_create_postgres_db", new_callable=AsyncMock) as mock_create_db,
+        ):
+            await init_engine("postgres", url="postgresql+asyncpg://u:p@localhost/db", schema_init="manual")
+
+        mock_validate.assert_awaited_once_with(mock_conn)
+        mock_conn.run_sync.assert_not_called()
+        mock_create_db.assert_not_awaited()
+
+        await close_engine()

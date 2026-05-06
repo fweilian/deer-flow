@@ -246,6 +246,39 @@ class TestGetCheckpointer:
         mock_saver_cls.from_conn_string.assert_called_once_with("postgresql://localhost/db")
         mock_saver_instance.setup.assert_called_once()
 
+    def test_postgres_manual_skips_setup_and_validates_schema(self):
+        from deerflow.config.database_config import DatabaseConfig
+        from deerflow.runtime.checkpointer.provider import checkpointer_context
+
+        mock_config = MagicMock()
+        mock_config.checkpointer = None
+        mock_config.database = DatabaseConfig(
+            backend="postgres",
+            postgres_url="postgresql://localhost/db",
+            schema_init="manual",
+        )
+
+        mock_saver_instance = MagicMock()
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_saver_instance)
+        mock_cm.__exit__ = MagicMock(return_value=False)
+
+        mock_saver_cls = MagicMock()
+        mock_saver_cls.from_conn_string = MagicMock(return_value=mock_cm)
+        mock_pg_module = MagicMock()
+        mock_pg_module.PostgresSaver = mock_saver_cls
+
+        with (
+            patch("deerflow.runtime.checkpointer.provider.get_app_config", return_value=mock_config),
+            patch.dict(sys.modules, {"langgraph.checkpoint.postgres": mock_pg_module}),
+            patch("deerflow.runtime.checkpointer.provider._validate_checkpoint_schema") as mock_validate,
+        ):
+            with checkpointer_context() as saver:
+                assert saver is mock_saver_instance
+
+        mock_saver_instance.setup.assert_not_called()
+        mock_validate.assert_called_once_with(mock_saver_instance.conn, minimum_version=9)
+
 
 class TestAsyncCheckpointer:
     @pytest.mark.anyio
@@ -285,6 +318,44 @@ class TestAsyncCheckpointer:
         assert called_path == "/tmp/resolved/test.db"
         mock_saver_cls.from_conn_string.assert_called_once_with("/tmp/resolved/test.db")
         mock_saver.setup.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_database_postgres_manual_skips_setup_and_validates_schema(self):
+        from deerflow.config.database_config import DatabaseConfig
+        from deerflow.runtime.checkpointer.async_provider import make_checkpointer
+
+        mock_config = MagicMock()
+        mock_config.checkpointer = None
+        mock_config.database = DatabaseConfig(
+            backend="postgres",
+            postgres_url="postgresql://localhost/db",
+            schema_init="manual",
+        )
+
+        mock_saver = AsyncMock()
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__.return_value = mock_saver
+        mock_cm.__aexit__.return_value = False
+
+        mock_saver_cls = MagicMock()
+        mock_saver_cls.from_conn_string.return_value = mock_cm
+        mock_module = MagicMock()
+        mock_module.AsyncPostgresSaver = mock_saver_cls
+
+        with (
+            patch("deerflow.runtime.checkpointer.async_provider.get_app_config", return_value=mock_config),
+            patch.dict(sys.modules, {"langgraph.checkpoint.postgres.aio": mock_module}),
+            patch(
+                "deerflow.runtime.checkpointer.async_provider._validate_checkpoint_schema",
+                new_callable=AsyncMock,
+            ) as mock_validate,
+        ):
+            async with make_checkpointer() as saver:
+                assert saver is mock_saver
+
+        mock_saver_cls.from_conn_string.assert_called_once_with("postgresql://localhost/db")
+        mock_saver.setup.assert_not_awaited()
+        mock_validate.assert_awaited_once_with(mock_saver.conn, minimum_version=9)
 
 
 # ---------------------------------------------------------------------------

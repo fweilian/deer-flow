@@ -63,6 +63,10 @@ class DatabaseConfig(BaseModel):
         default=5,
         description="Connection pool size for the app ORM engine (postgres only).",
     )
+    schema_init: Literal["auto", "manual"] = Field(
+        default="auto",
+        description=("Schema initialization mode for PostgreSQL. 'auto' allows runtime DDL such as auto-create database/tables/indexes. 'manual' forbids runtime DDL and only validates that the required schema already exists."),
+    )
 
     # -- Derived helpers (not user-configured) --
 

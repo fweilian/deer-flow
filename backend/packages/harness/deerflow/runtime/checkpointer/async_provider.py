@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator
 from langgraph.types import Checkpointer
 
 from deerflow.config.app_config import AppConfig, get_app_config
+from deerflow.persistence.postgres_schema import validate_checkpoint_schema_async as _validate_checkpoint_schema
 from deerflow.runtime.checkpointer.provider import (
     POSTGRES_CONN_REQUIRED,
     POSTGRES_INSTALL,
@@ -115,7 +116,10 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
             raise ValueError("database.postgres_url is required for the postgres backend")
 
         async with AsyncPostgresSaver.from_conn_string(db_config.postgres_url) as saver:
-            await saver.setup()
+            if db_config.schema_init == "manual":
+                await _validate_checkpoint_schema(saver.conn, minimum_version=9)
+            else:
+                await saver.setup()
             yield saver
         return
 
@@ -149,7 +153,8 @@ async def make_checkpointer(app_config: AppConfig | None = None) -> AsyncIterato
 
     # Unified database config
     db_config = getattr(app_config, "database", None)
-    if db_config is not None and db_config.backend != "memory":
+    db_backend = getattr(db_config, "backend", None)
+    if db_backend in {"sqlite", "postgres"}:
         async with _async_checkpointer_from_database(db_config) as saver:
             yield saver
             return

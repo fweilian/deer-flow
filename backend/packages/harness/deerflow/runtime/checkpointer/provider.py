@@ -27,6 +27,7 @@ from langgraph.types import Checkpointer
 
 from deerflow.config.app_config import get_app_config
 from deerflow.config.checkpointer_config import CheckpointerConfig
+from deerflow.persistence.postgres_schema import validate_checkpoint_schema as _validate_checkpoint_schema
 from deerflow.runtime.store._sqlite_utils import ensure_sqlite_parent_dir, resolve_sqlite_conn_str
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,48 @@ def _sync_checkpointer_cm(config: CheckpointerConfig) -> Iterator[Checkpointer]:
     raise ValueError(f"Unknown checkpointer type: {config.type!r}")
 
 
+@contextlib.contextmanager
+def _sync_checkpointer_from_database_cm(db_config) -> Iterator[Checkpointer]:
+    """Context manager that builds a sync checkpointer from DatabaseConfig."""
+    if db_config.backend == "memory":
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        yield InMemorySaver()
+        return
+
+    if db_config.backend == "sqlite":
+        try:
+            from langgraph.checkpoint.sqlite import SqliteSaver
+        except ImportError as exc:
+            raise ImportError(SQLITE_INSTALL) from exc
+
+        conn_str = db_config.checkpointer_sqlite_path
+        ensure_sqlite_parent_dir(conn_str)
+        with SqliteSaver.from_conn_string(conn_str) as saver:
+            saver.setup()
+            yield saver
+        return
+
+    if db_config.backend == "postgres":
+        try:
+            from langgraph.checkpoint.postgres import PostgresSaver
+        except ImportError as exc:
+            raise ImportError(POSTGRES_INSTALL) from exc
+
+        if not db_config.postgres_url:
+            raise ValueError("database.postgres_url is required for the postgres backend")
+
+        with PostgresSaver.from_conn_string(db_config.postgres_url) as saver:
+            if db_config.schema_init == "manual":
+                _validate_checkpoint_schema(saver.conn, minimum_version=9)
+            else:
+                saver.setup()
+            yield saver
+        return
+
+    raise ValueError(f"Unknown database backend: {db_config.backend!r}")
+
+
 # ---------------------------------------------------------------------------
 # Sync singleton
 # ---------------------------------------------------------------------------
@@ -134,6 +177,19 @@ def get_checkpointer() -> Checkpointer:
             pass
         config = get_checkpointer_config()
     if config is None:
+        app_cfg = None
+        try:
+            app_cfg = get_app_config()
+        except FileNotFoundError:
+            app_cfg = None
+
+        db_config = getattr(app_cfg, "database", None) if app_cfg is not None else None
+        db_backend = getattr(db_config, "backend", None)
+        if db_backend in {"sqlite", "postgres"}:
+            _checkpointer_ctx = _sync_checkpointer_from_database_cm(db_config)
+            _checkpointer = _checkpointer_ctx.__enter__()
+            return _checkpointer
+
         from langgraph.checkpoint.memory import InMemorySaver
 
         logger.info("Checkpointer: using InMemorySaver (in-process, not persistent)")
@@ -182,11 +238,20 @@ def checkpointer_context() -> Iterator[Checkpointer]:
     """
 
     config = get_app_config()
+    if config.checkpointer is not None:
+        with _sync_checkpointer_cm(config.checkpointer) as saver:
+            yield saver
+        return
+
+    db_config = getattr(config, "database", None)
+    db_backend = getattr(db_config, "backend", None)
+    if db_backend in {"sqlite", "postgres"}:
+        with _sync_checkpointer_from_database_cm(db_config) as saver:
+            yield saver
+        return
+
     if config.checkpointer is None:
         from langgraph.checkpoint.memory import InMemorySaver
 
         yield InMemorySaver()
         return
-
-    with _sync_checkpointer_cm(config.checkpointer) as saver:
-        yield saver

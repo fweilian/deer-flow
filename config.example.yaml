@@ -882,6 +882,13 @@ skill_evolution:
 # database:
 #   backend: postgres
 #   postgres_url: $DATABASE_URL
+#   # Production without DDL privileges:
+#   # 1. Run backend/sql/postgres/deerflow_manual_schema.sql first
+#   # 2. Then start DeerFlow with schema_init: manual
+#   schema_init: manual
+#   # In manual mode DeerFlow will only validate the schema and fail fast if
+#   # any required table/index/migration version is missing. It will NOT run
+#   # CREATE DATABASE / CREATE TABLE / ALTER TABLE / CREATE INDEX at runtime.
 database:
   backend: sqlite
   sqlite_dir: .deer-flow/data
