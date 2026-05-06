@@ -32,6 +32,7 @@ from deerflow.runtime import (
     UnsupportedStrategyError,
     run_agent,
 )
+from deerflow.runtime.runs.store.base import RunStore
 
 logger = logging.getLogger(__name__)
 
@@ -251,19 +252,8 @@ async def start_run(
     return await _launch_run(body, thread_id, bridge=bridge, run_mgr=run_mgr, run_ctx=run_ctx)
 
 
-async def find_existing_cron_run(run_store: Any, thread_id: str, idempotency_key: str) -> dict[str, Any] | None:
-    find_existing = getattr(run_store, "find_run_by_scheduler_idempotency_key", None)
-    if callable(find_existing):
-        return await find_existing(thread_id, idempotency_key)
-
-    existing_runs = await run_store.list_by_thread(thread_id)
-    for run in existing_runs:
-        scheduler_meta = (run.get("metadata") or {}).get("scheduler") or {}
-        if scheduler_meta.get("idempotency_key") != idempotency_key:
-            continue
-        if run.get("status") in {"pending", "running", "success"}:
-            return run
-    return None
+async def find_existing_cron_run(run_store: RunStore, thread_id: str, idempotency_key: str) -> dict[str, Any] | None:
+    return await run_store.find_run_by_scheduler_idempotency_key(thread_id, idempotency_key)
 
 
 async def start_cron_run(job: Any, fire: Any, request: Request) -> RunRecord | SimpleNamespace:
@@ -284,7 +274,6 @@ async def start_cron_run(job: Any, fire: Any, request: Request) -> RunRecord | S
         bridge=bridge,
         run_mgr=run_mgr,
         run_ctx=run_ctx,
-        run_store=run_store,
     )
 
 
@@ -296,13 +285,8 @@ async def start_cron_run_with_deps(
     bridge: StreamBridge,
     run_mgr: RunManager,
     run_ctx: Any,
-    run_store: Any,
-) -> RunRecord | SimpleNamespace:
+) -> RunRecord:
     idempotency_key = f"cron:{job.job_id}:{int(fire.scheduled_fire_at)}"
-    existing = await find_existing_cron_run(run_store, thread_id, idempotency_key)
-    if existing is not None:
-        return SimpleNamespace(run_id=existing["run_id"])
-
     metadata = dict(job.metadata or {})
     metadata["scheduler"] = {
         "job_id": job.job_id,

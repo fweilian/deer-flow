@@ -52,6 +52,16 @@ class MemoryRunStore(RunStore):
         results.sort(key=lambda r: r["created_at"], reverse=True)
         return results[:limit]
 
+    async def find_run_by_scheduler_idempotency_key(self, thread_id, key):
+        runs = await self.list_by_thread(thread_id)
+        for run in runs:
+            scheduler_meta = (run.get("metadata") or {}).get("scheduler") or {}
+            if scheduler_meta.get("idempotency_key") != key:
+                continue
+            if run.get("status") in {"pending", "running", "success"}:
+                return run
+        return None
+
     async def update_status(self, run_id, status, *, error=None):
         if run_id in self._runs:
             self._runs[run_id]["status"] = status

@@ -47,6 +47,15 @@ class RunStore(abc.ABC):
         pass
 
     @abc.abstractmethod
+    async def find_run_by_scheduler_idempotency_key(
+        self,
+        thread_id: str,
+        key: str,
+    ) -> dict[str, Any] | None:
+        """Return the newest pending/running/success run for a cron idempotency key."""
+        pass
+
+    @abc.abstractmethod
     async def update_status(
         self,
         run_id: str,

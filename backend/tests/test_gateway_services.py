@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -471,3 +472,58 @@ async def test_start_cron_run_reuses_existing_record(monkeypatch):
     assert reused.run_id == "run-1"
     find_existing.assert_awaited_once_with(app.state.run_store, "thread-1", "cron:job-1:1746500000")
     launch_run.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_start_cron_run_with_deps_injects_scheduler_metadata(monkeypatch):
+    from app.gateway.services import start_cron_run_with_deps
+    from deerflow.runtime.scheduler.schemas import CronJobFireRecord, CronJobRecord
+
+    launch_run = AsyncMock(return_value=SimpleNamespace(run_id="run-2"))
+    monkeypatch.setattr("app.gateway.services._launch_run", launch_run)
+
+    job = CronJobRecord(
+        job_id="job-1",
+        thread_id="thread-1",
+        assistant_id="lead_agent",
+        cron="*/5 * * * *",
+        timezone="Asia/Shanghai",
+        input={"messages": [{"role": "user", "content": "hello"}]},
+        metadata={"source": "test", "scheduler": {"prior": "value"}},
+        config={"configurable": {"model_name": "gpt-4"}},
+        context={"thinking_enabled": True},
+        multitask_strategy="enqueue",
+        enabled=True,
+        next_fire_at=1746500000,
+        last_fire_at=None,
+        last_run_id=None,
+        created_at=1746400000,
+        updated_at=1746400000,
+    )
+    fire = CronJobFireRecord(
+        fire_id="fire-1",
+        job_id="job-1",
+        scheduled_fire_at=1746500000,
+        status="claimed",
+        claim_owner="worker-a",
+        claim_token="token-1",
+    )
+
+    await start_cron_run_with_deps(
+        job,
+        fire,
+        thread_id="thread-1",
+        bridge=object(),
+        run_mgr=object(),
+        run_ctx=object(),
+    )
+
+    cron_request = launch_run.await_args.args[0]
+
+    assert cron_request.metadata["source"] == "test"
+    assert cron_request.metadata["scheduler"] == {
+        "job_id": "job-1",
+        "fire_id": "fire-1",
+        "scheduled_fire_at": 1746500000,
+        "idempotency_key": "cron:job-1:1746500000",
+    }
