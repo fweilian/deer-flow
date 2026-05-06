@@ -28,13 +28,20 @@ def _validate_timezone(value: str) -> str:
     return value
 
 
+def _validate_cron(value: str) -> str:
+    if not croniter.is_valid(value):
+        raise ValueError(f"Invalid cron expression: {value}")
+    return value
+
+
 def compute_next_fire_at(cron: str, timezone: str, *, now: float | datetime | None = None) -> float:
     """Return the next scheduled fire time as a UTC unix timestamp."""
 
+    cron_expr = _validate_cron(cron)
     tz_name = _validate_timezone(timezone)
     base_utc = _coerce_now(now)
     base_local = base_utc.astimezone(ZoneInfo(tz_name))
-    next_local = croniter(cron, base_local).get_next(datetime)
+    next_local = croniter(cron_expr, base_local).get_next(datetime)
     return next_local.astimezone(UTC).timestamp()
 
 
@@ -53,9 +60,7 @@ class CronJobCreate(BaseModel):
     @field_validator("cron")
     @classmethod
     def _validate_cron(cls, value: str) -> str:
-        if not croniter.is_valid(value):
-            raise ValueError(f"Invalid cron expression: {value}")
-        return value
+        return _validate_cron(value)
 
     @field_validator("timezone")
     @classmethod
