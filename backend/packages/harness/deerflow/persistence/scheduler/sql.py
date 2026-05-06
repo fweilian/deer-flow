@@ -11,8 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from deerflow.persistence.scheduler.model import CronJobFireRow, CronJobRow
-from deerflow.runtime.scheduler.schemas import CronJobCreate, CronJobRecord, compute_next_fire_at
-from deerflow.runtime.scheduler.service import CronJobFireRecord
+from deerflow.runtime.scheduler.schemas import CronJobCreate, CronJobFireRecord, CronJobRecord, compute_next_fire_at
 
 CronMultitaskStrategy = Literal["reject", "interrupt", "rollback", "enqueue"]
 
@@ -204,9 +203,10 @@ class CronSchedulerRepository:
         job_id: str,
         fire_id: str,
         *,
+        claim_token: str | None,
         run_id: str,
         fired_at: float | datetime,
-    ) -> None:
+    ) -> bool:
         fired_time = _coerce_datetime(fired_at)
         async with self._sf() as session:
             fire = (
@@ -217,6 +217,10 @@ class CronSchedulerRepository:
                     )
                 )
             ).scalar_one()
+            if fire.status != "claimed" or fire.claim_token != claim_token:
+                await session.rollback()
+                return False
+
             job = (await session.execute(select(CronJobRow).where(CronJobRow.job_id == job_id))).scalar_one()
 
             fire.status = "dispatched"
@@ -228,3 +232,4 @@ class CronSchedulerRepository:
             job.updated_at = datetime.now(UTC)
 
             await session.commit()
+            return True

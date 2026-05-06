@@ -24,7 +24,6 @@ async def session_factory(tmp_path):
 @pytest.mark.anyio
 async def test_claim_due_fire_is_unique(session_factory):
     repo = CronSchedulerRepository(session_factory)
-    service = CronSchedulerService(repo, run_launcher=AsyncMock(), instance_id="worker-a")
     job = await repo.create_job(
         CronJobCreate(
             thread_id="thread-1",
@@ -38,8 +37,8 @@ async def test_claim_due_fire_is_unique(session_factory):
     first = await repo.claim_fire(job.job_id, scheduled_fire_at=job.next_fire_at, instance_id="worker-a", lease_seconds=30)
     second = await repo.claim_fire(job.job_id, scheduled_fire_at=job.next_fire_at, instance_id="worker-b", lease_seconds=30)
 
-    assert service.instance_id == "worker-a"
     assert first is not None
+    assert first.claim_token is not None
     assert second is None
 
 
@@ -115,3 +114,62 @@ async def test_dispatch_due_jobs_recovers_expired_fire_lease(session_factory):
 
     assert refreshed_fire.claim_owner == "worker-b"
     assert refreshed_fire.status == "dispatched"
+
+
+@pytest.mark.anyio
+async def test_stale_claim_token_cannot_mark_recovered_fire_dispatched(session_factory):
+    repo = CronSchedulerRepository(session_factory)
+    job = await repo.create_job(
+        CronJobCreate(
+            thread_id="thread-1",
+            assistant_id="lead_agent",
+            cron="*/5 * * * *",
+            timezone="Asia/Shanghai",
+        ),
+        now=1_746_500_000,
+    )
+
+    stale_fire = await repo.claim_fire(job.job_id, scheduled_fire_at=job.next_fire_at, instance_id="worker-a", lease_seconds=30)
+    assert stale_fire is not None
+
+    async with session_factory() as session:
+        fire_row = (await session.execute(select(CronJobFireRow).where(CronJobFireRow.fire_id == stale_fire.fire_id))).scalar_one()
+        fire_row.lease_until = datetime.fromtimestamp(job.next_fire_at - 1, UTC)
+        await session.commit()
+
+    recovered_fire = await repo.recover_expired_fire(
+        job.job_id,
+        scheduled_fire_at=job.next_fire_at,
+        instance_id="worker-b",
+        lease_seconds=30,
+        now=job.next_fire_at,
+    )
+
+    assert recovered_fire is not None
+    assert recovered_fire.claim_token != stale_fire.claim_token
+
+    stale_completed = await repo.mark_fire_dispatched(
+        job.job_id,
+        stale_fire.fire_id,
+        claim_token=stale_fire.claim_token,
+        run_id="run-stale",
+        fired_at=job.next_fire_at,
+    )
+    recovered_completed = await repo.mark_fire_dispatched(
+        job.job_id,
+        recovered_fire.fire_id,
+        claim_token=recovered_fire.claim_token,
+        run_id="run-fresh",
+        fired_at=job.next_fire_at,
+    )
+
+    assert stale_completed is False
+    assert recovered_completed is True
+
+    async with session_factory() as session:
+        refreshed_fire = (await session.execute(select(CronJobFireRow).where(CronJobFireRow.fire_id == stale_fire.fire_id))).scalar_one()
+        refreshed_job = (await session.execute(select(CronJobRow).where(CronJobRow.job_id == job.job_id))).scalar_one()
+
+    assert refreshed_fire.run_id == "run-fresh"
+    assert refreshed_fire.claim_owner == "worker-b"
+    assert refreshed_job.last_run_id == "run-fresh"

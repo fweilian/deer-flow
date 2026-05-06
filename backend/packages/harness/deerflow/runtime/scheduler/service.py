@@ -1,32 +1,22 @@
-"""Cron scheduler orchestration and fire-claim records."""
+"""Cron scheduler orchestration."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Protocol
 
-from deerflow.runtime.scheduler.schemas import CronJobRecord
+from deerflow.runtime.scheduler.schemas import CronJobFireRecord, CronJobRecord
 
 if TYPE_CHECKING:
     from deerflow.persistence.scheduler.sql import CronSchedulerRepository
 
 
-@dataclass(slots=True)
-class CronJobFireRecord:
-    fire_id: str
-    job_id: str
-    scheduled_fire_at: float
-    status: str
-    claim_owner: str | None = None
-    claim_token: str | None = None
-    lease_until: float | None = None
-    run_id: str | None = None
-    error: str | None = None
+class RunLaunchResult(Protocol):
+    run_id: str
 
 
-RunLauncher = Callable[[CronJobRecord, CronJobFireRecord], Awaitable[Any]]
+RunLauncher = Callable[[CronJobRecord, CronJobFireRecord], Awaitable[RunLaunchResult]]
 
 
 class CronSchedulerService:
@@ -85,6 +75,7 @@ class CronSchedulerService:
             await self._repo.mark_fire_dispatched(
                 job.job_id,
                 fire.fire_id,
+                claim_token=fire.claim_token,
                 run_id=run.run_id,
                 fired_at=job.next_fire_at,
             )

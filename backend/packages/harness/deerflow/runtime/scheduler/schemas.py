@@ -75,3 +75,15 @@ class CronJobRecord(CronJobCreate):
     last_run_id: str | None = None
     created_at: float
     updated_at: float
+
+
+class CronJobFireRecord(BaseModel):
+    fire_id: str
+    job_id: str
+    scheduled_fire_at: float
+    status: str
+    claim_owner: str | None = None
+    claim_token: str | None = None
+    lease_until: float | None = None
+    run_id: str | None = None
+    error: str | None = None
