@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
+
+import pytest
+from fastapi import FastAPI
+from starlette.requests import Request
 
 
 def test_format_sse_basic():
@@ -416,3 +421,53 @@ def test_build_run_config_no_request_config():
     config = build_run_config("thread-abc", None, None)
     assert config["configurable"] == {"thread_id": "thread-abc"}
     assert "context" not in config
+
+
+@pytest.mark.anyio
+async def test_start_cron_run_reuses_existing_record(monkeypatch):
+    from app.gateway.services import start_cron_run
+    from deerflow.runtime.scheduler.schemas import CronJobFireRecord, CronJobRecord
+
+    existing_run = {"run_id": "run-1", "thread_id": "thread-1", "assistant_id": "lead_agent"}
+    find_existing = AsyncMock(return_value=existing_run)
+    launch_run = AsyncMock()
+
+    monkeypatch.setattr("app.gateway.services.find_existing_cron_run", find_existing)
+    monkeypatch.setattr("app.gateway.services._launch_run", launch_run)
+
+    app = FastAPI()
+    app.state.run_store = object()
+    request = Request({"type": "http", "method": "POST", "path": "/", "headers": [], "app": app})
+
+    job = CronJobRecord(
+        job_id="job-1",
+        thread_id="thread-1",
+        assistant_id="lead_agent",
+        cron="*/5 * * * *",
+        timezone="Asia/Shanghai",
+        input={"messages": [{"role": "user", "content": "hello"}]},
+        metadata={"source": "test"},
+        config={"configurable": {"model_name": "gpt-4"}},
+        context={"thinking_enabled": True},
+        multitask_strategy="enqueue",
+        enabled=True,
+        next_fire_at=1746500000,
+        last_fire_at=None,
+        last_run_id=None,
+        created_at=1746400000,
+        updated_at=1746400000,
+    )
+    fire = CronJobFireRecord(
+        fire_id="fire-1",
+        job_id="job-1",
+        scheduled_fire_at=1746500000,
+        status="claimed",
+        claim_owner="worker-a",
+        claim_token="token-1",
+    )
+
+    reused = await start_cron_run(job, fire, request)
+
+    assert reused.run_id == "run-1"
+    find_existing.assert_awaited_once_with(app.state.run_store, "thread-1", "cron:job-1:1746500000")
+    launch_run.assert_not_awaited()

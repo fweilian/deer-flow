@@ -129,6 +129,21 @@ class RunRepository(RunStore):
             result = await session.execute(stmt)
             return [self._row_to_dict(r) for r in result.scalars()]
 
+    async def find_run_by_scheduler_idempotency_key(self, thread_id: str, key: str) -> dict[str, Any] | None:
+        stmt = (
+            select(RunRow)
+            .where(
+                RunRow.thread_id == thread_id,
+                RunRow.metadata_json["scheduler"]["idempotency_key"].as_string() == key,
+                RunRow.status.in_(("pending", "running", "success")),
+            )
+            .order_by(RunRow.created_at.desc())
+            .limit(1)
+        )
+        async with self._sf() as session:
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            return self._row_to_dict(row) if row is not None else None
+
     async def update_status(self, run_id, status, *, error=None):
         values: dict[str, Any] = {"status": status, "updated_at": datetime.now(UTC)}
         if error is not None:

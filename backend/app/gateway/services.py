@@ -12,12 +12,13 @@ import json
 import logging
 import re
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import HTTPException, Request
 from langchain_core.messages import HumanMessage
 
-from app.gateway.deps import get_run_context, get_run_manager, get_stream_bridge
+from app.gateway.deps import get_run_context, get_run_manager, get_run_store, get_stream_bridge
 from app.gateway.utils import sanitize_log_param
 from deerflow.runtime import (
     END_SENTINEL,
@@ -247,6 +248,92 @@ async def start_run(
     run_mgr = get_run_manager(request)
     run_ctx = get_run_context(request)
 
+    return await _launch_run(body, thread_id, bridge=bridge, run_mgr=run_mgr, run_ctx=run_ctx)
+
+
+async def find_existing_cron_run(run_store: Any, thread_id: str, idempotency_key: str) -> dict[str, Any] | None:
+    find_existing = getattr(run_store, "find_run_by_scheduler_idempotency_key", None)
+    if callable(find_existing):
+        return await find_existing(thread_id, idempotency_key)
+
+    existing_runs = await run_store.list_by_thread(thread_id)
+    for run in existing_runs:
+        scheduler_meta = (run.get("metadata") or {}).get("scheduler") or {}
+        if scheduler_meta.get("idempotency_key") != idempotency_key:
+            continue
+        if run.get("status") in {"pending", "running", "success"}:
+            return run
+    return None
+
+
+async def start_cron_run(job: Any, fire: Any, request: Request) -> RunRecord | SimpleNamespace:
+    run_store = get_run_store(request)
+    idempotency_key = f"cron:{job.job_id}:{int(fire.scheduled_fire_at)}"
+    existing = await find_existing_cron_run(run_store, job.thread_id, idempotency_key)
+    if existing is not None:
+        return SimpleNamespace(run_id=existing["run_id"])
+
+    bridge = get_stream_bridge(request)
+    run_mgr = get_run_manager(request)
+    run_ctx = get_run_context(request)
+
+    return await start_cron_run_with_deps(
+        job,
+        fire,
+        thread_id=job.thread_id,
+        bridge=bridge,
+        run_mgr=run_mgr,
+        run_ctx=run_ctx,
+        run_store=run_store,
+    )
+
+
+async def start_cron_run_with_deps(
+    job: Any,
+    fire: Any,
+    *,
+    thread_id: str,
+    bridge: StreamBridge,
+    run_mgr: RunManager,
+    run_ctx: Any,
+    run_store: Any,
+) -> RunRecord | SimpleNamespace:
+    idempotency_key = f"cron:{job.job_id}:{int(fire.scheduled_fire_at)}"
+    existing = await find_existing_cron_run(run_store, thread_id, idempotency_key)
+    if existing is not None:
+        return SimpleNamespace(run_id=existing["run_id"])
+
+    metadata = dict(job.metadata or {})
+    metadata["scheduler"] = {
+        "job_id": job.job_id,
+        "fire_id": fire.fire_id,
+        "scheduled_fire_at": fire.scheduled_fire_at,
+        "idempotency_key": idempotency_key,
+    }
+    cron_request = SimpleNamespace(
+        assistant_id=job.assistant_id,
+        input=job.input,
+        metadata=metadata,
+        config=job.config,
+        context=job.context,
+        on_disconnect="continue",
+        multitask_strategy=job.multitask_strategy,
+        stream_mode=None,
+        stream_subgraphs=False,
+        interrupt_before=None,
+        interrupt_after=None,
+    )
+    return await _launch_run(cron_request, thread_id, bridge=bridge, run_mgr=run_mgr, run_ctx=run_ctx)
+
+
+async def _launch_run(
+    body: Any,
+    thread_id: str,
+    *,
+    bridge: StreamBridge,
+    run_mgr: RunManager,
+    run_ctx: Any,
+) -> RunRecord:
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
 
     try:
