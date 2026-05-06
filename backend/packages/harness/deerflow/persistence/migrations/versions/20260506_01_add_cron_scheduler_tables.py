@@ -1,4 +1,11 @@
-"""add cron scheduler tables
+"""Add cron scheduler tables as an incremental migration.
+
+This repository currently bootstraps older application tables through ORM
+metadata in dev and test flows, and this versions directory does not yet
+contain historical baseline revisions for those pre-existing tables.
+
+Treat this file as the dedicated cron-table migration for the scheduler work,
+not as a full schema baseline for the whole persistence package.
 
 Revision ID: 20260506_01
 Revises:

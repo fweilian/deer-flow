@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal, cast
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -10,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from deerflow.persistence.scheduler.model import CronJobRow
 from deerflow.runtime.scheduler.schemas import CronJobCreate, CronJobRecord, compute_next_fire_at
+
+CronMultitaskStrategy = Literal["reject", "interrupt", "rollback", "enqueue"]
 
 
 def _coerce_datetime(value: float | datetime | None) -> datetime:
@@ -45,11 +48,11 @@ class CronSchedulerRepository:
             cron=row.cron_expr,
             timezone=row.timezone,
             enabled=row.enabled,
-            input=row.input_json or None,
+            input=row.input_json,
             metadata=row.metadata_json or {},
-            config=row.config_json or None,
-            context=row.context_json or None,
-            multitask_strategy=row.multitask_strategy,  # type: ignore[arg-type]
+            config=row.config_json,
+            context=row.context_json,
+            multitask_strategy=cast(CronMultitaskStrategy, row.multitask_strategy),
             next_fire_at=_datetime_to_timestamp(row.next_fire_at),
             last_fire_at=_datetime_to_timestamp(row.last_fire_at),
             last_run_id=row.last_run_id,
@@ -71,10 +74,10 @@ class CronSchedulerRepository:
             cron_expr=payload.cron,
             timezone=payload.timezone,
             enabled=payload.enabled,
-            input_json=payload.input or {},
+            input_json=payload.input,
             metadata_json=payload.metadata,
-            config_json=payload.config or {},
-            context_json=payload.context or {},
+            config_json=payload.config,
+            context_json=payload.context,
             multitask_strategy=payload.multitask_strategy,
             next_fire_at=_coerce_datetime(compute_next_fire_at(payload.cron, payload.timezone, now=created_at)),
             created_at=created_at,
