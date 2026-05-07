@@ -3,7 +3,7 @@
 Provides an **async context manager** for long-running async servers that need
 proper resource cleanup.
 
-Supported backends: memory, sqlite, postgres.
+Supported backends: memory, sqlite, postgres, gaussdb.
 
 Usage (e.g. FastAPI lifespan)::
 
@@ -26,6 +26,8 @@ from langgraph.types import Checkpointer
 
 from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.runtime.checkpointer.provider import (
+    GAUSSDB_CONN_REQUIRED,
+    GAUSSDB_INSTALL,
     POSTGRES_CONN_REQUIRED,
     POSTGRES_INSTALL,
     SQLITE_INSTALL,
@@ -75,6 +77,20 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
             yield saver
         return
 
+    if config.type == "gaussdb":
+        try:
+            from deerflow.runtime.checkpointer.gaussdb import AsyncGaussDBSaver
+        except ImportError as exc:
+            raise ImportError(GAUSSDB_INSTALL) from exc
+
+        if not config.connection_string:
+            raise ValueError(GAUSSDB_CONN_REQUIRED)
+
+        async with AsyncGaussDBSaver.from_conn_string(config.connection_string) as saver:
+            await saver.setup()
+            yield saver
+        return
+
     raise ValueError(f"Unknown checkpointer type: {config.type!r}")
 
 
@@ -115,6 +131,20 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
             raise ValueError("database.postgres_url is required for the postgres backend")
 
         async with AsyncPostgresSaver.from_conn_string(db_config.postgres_url) as saver:
+            await saver.setup()
+            yield saver
+        return
+
+    if db_config.backend == "gaussdb":
+        try:
+            from deerflow.runtime.checkpointer.gaussdb import AsyncGaussDBSaver
+        except ImportError as exc:
+            raise ImportError(GAUSSDB_INSTALL) from exc
+
+        if not db_config.gaussdb_url:
+            raise ValueError("database.gaussdb_url is required for the gaussdb backend")
+
+        async with AsyncGaussDBSaver.from_conn_string(db_config.gaussdb_url) as saver:
             await saver.setup()
             yield saver
         return

@@ -55,6 +55,30 @@ class TestDatabaseConfig:
         url = c.app_sqlalchemy_url
         assert url.count("asyncpg") == 1
 
+    def test_app_sqlalchemy_url_gaussdb(self):
+        c = DatabaseConfig(
+            backend="gaussdb",
+            gaussdb_url="gaussdb://u:p@h:5432/db",
+        )
+        url = c.app_sqlalchemy_url
+        assert url.startswith("gaussdb+async_gaussdb://")
+        assert "u:p@h:5432/db" in url
+
+    def test_app_sqlalchemy_url_gaussdb_already_async_driver(self):
+        c = DatabaseConfig(
+            backend="gaussdb",
+            gaussdb_url="gaussdb+async_gaussdb://u:p@h:5432/db",
+        )
+        url = c.app_sqlalchemy_url
+        assert url.count("async_gaussdb") == 1
+
+    def test_gaussdb_has_no_postgres_url_alias(self):
+        c = DatabaseConfig(
+            backend="gaussdb",
+            gaussdb_url="gaussdb://u:p@h:5432/db",
+        )
+        assert c.gaussdb_url == "gaussdb://u:p@h:5432/db"
+
     def test_memory_has_no_url(self):
         c = DatabaseConfig(backend="memory")
         with pytest.raises(ValueError, match="No SQLAlchemy URL"):
@@ -231,3 +255,17 @@ class TestEngineLifecycle:
             pass  # noqa: S110 — intentionally ignored
         with pytest.raises(ImportError, match="uv sync --extra postgres"):
             await init_engine("postgres", url="postgresql+asyncpg://x:x@localhost/x")
+
+    @pytest.mark.anyio
+    async def test_gaussdb_without_async_driver_gives_actionable_error(self):
+        """If async_gaussdb is not installed, error message tells user what to do."""
+        from deerflow.persistence.engine import init_engine
+
+        try:
+            import async_gaussdb  # noqa: F401
+
+            pytest.skip("async_gaussdb is installed -- cannot test missing-dep path")
+        except ImportError:
+            pass  # noqa: S110 — intentionally ignored
+        with pytest.raises(ImportError, match="uv sync --extra gaussdb"):
+            await init_engine("gaussdb", url="gaussdb+async_gaussdb://x:x@localhost/x")

@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-CheckpointerType = Literal["memory", "sqlite", "postgres"]
+CheckpointerType = Literal["memory", "sqlite", "postgres", "gaussdb"]
 
 
 class CheckpointerConfig(BaseModel):
@@ -14,14 +14,16 @@ class CheckpointerConfig(BaseModel):
         description="Checkpointer backend type. "
         "'memory' is in-process only (lost on restart). "
         "'sqlite' persists to a local file (requires langgraph-checkpoint-sqlite). "
-        "'postgres' persists to PostgreSQL (requires langgraph-checkpoint-postgres)."
+        "'postgres' persists to PostgreSQL (requires langgraph-checkpoint-postgres). "
+        "'gaussdb' persists to GaussDB using DeerFlow's compatibility layer."
     )
     connection_string: str | None = Field(
         default=None,
-        description="Connection string for sqlite (file path) or postgres (DSN). "
-        "Required for sqlite and postgres types. "
+        description="Connection string for sqlite (file path), postgres (DSN), or gaussdb (DSN). "
+        "Required for sqlite, postgres, and gaussdb types. "
         "For sqlite, use a file path like '.deer-flow/checkpoints.db' or ':memory:' for in-memory. "
-        "For postgres, use a DSN like 'postgresql://user:pass@localhost:5432/db'.",
+        "For postgres, use a DSN like 'postgresql://user:pass@localhost:5432/db'. "
+        "For gaussdb, use the driver-compatible DSN such as 'gaussdb://user:pass@host:5432/db'.",
     )
 
 

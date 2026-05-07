@@ -223,6 +223,30 @@ wheels = [
 ]
 
 [[package]]
+name = "async-gaussdb"
+version = "0.30.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/fe/9d90e68b217a4a1b94f4de1cd84d4f35bf98512c28bed401fd5359f3e9c8/async_gaussdb-0.30.4.tar.gz", hash = "sha256:8f11572019c1948bb9e2ee5d0454876f1d46997662d4fcb2ffcc855ee748c728", size = 997818, upload-time = "2025-12-11T04:30:24.93Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a2/52/12fd64ef4d766f82bc117464e245e712150812a53c4eea14e68f0a2959e9/async_gaussdb-0.30.4-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:0e75d0b0e5b6ff94446e67fb81ffb999206243d99afff7d7c9cf3b473d266192", size = 643849, upload-time = "2025-12-11T04:29:39.379Z" },
+    { url = "https://files.pythonhosted.org/packages/51/b5/6fdbd4ec6bd159b5feb396ffd5b08f935180af9fc86b4191047a8738b809/async_gaussdb-0.30.4-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:867b47d468001907af1b1de7b5dc076e60da7bb72e3ef6e127feb2c16be31a75", size = 623624, upload-time = "2025-12-11T04:29:40.36Z" },
+    { url = "https://files.pythonhosted.org/packages/33/8c/bcf6e4fd207bfc9716242d4f11d7f24916f8dff534c0f1304f1d2979bc91/async_gaussdb-0.30.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2a2ac226f7ff184cd77ae5cd8d6f389aaa2578cac722d14f48d6cbcd52069655", size = 3318807, upload-time = "2025-12-11T04:29:41.813Z" },
+    { url = "https://files.pythonhosted.org/packages/74/6d/aee0907d743be10d03a2c13e3d144c8bf8a9eda99573ac3ab9cdc792fd13/async_gaussdb-0.30.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:cab9753b08877b72772dc9887cfc1a19afa530a5bb1803e358ea28545d591915", size = 3377036, upload-time = "2025-12-11T04:29:43.418Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/f9/dd5f968d811755fa9d0287f628f42a25f5b64bcead1b6d7fb0c8aee53094/async_gaussdb-0.30.4-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:7b655de13dc1d28722065abbcbf0d0b7a22042f6b77308f3153fdccf1c811dcd", size = 3248341, upload-time = "2025-12-11T04:29:44.711Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/82/de6cc8225003794275fd36f7910894ad336ca9b5a24a6060adbc8ad3a17e/async_gaussdb-0.30.4-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:e1cbe01e1df80415792ae37741f40b6d42ca6e12052223ec372b3d3cd3f2fcce", size = 3387494, upload-time = "2025-12-11T04:29:46.85Z" },
+    { url = "https://files.pythonhosted.org/packages/89/3b/8a2187e6ab364753d98707d05a3f3548a1fe100566ad6d3c986f23fa2e8a/async_gaussdb-0.30.4-cp312-cp312-win32.whl", hash = "sha256:44028d5fecb1f912e0b65ed1f679c07d02d9b0d9fd629192283ee69b211a9fd7", size = 501802, upload-time = "2025-12-11T04:29:48.015Z" },
+    { url = "https://files.pythonhosted.org/packages/04/83/ce7eadc1c433bb4db34fa25b2971cc8d662723d7275b0a622bb5a48a56cf/async_gaussdb-0.30.4-cp312-cp312-win_amd64.whl", hash = "sha256:33167f03ffc1d9a42416eb26bfa116798566fceb60b196b44103d7f80e7cca81", size = 564466, upload-time = "2025-12-11T04:29:49.42Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/05/b36725148c55f5d6b28d09745773b18f1f5fa19540744d1d0b5b90beaf7c/async_gaussdb-0.30.4-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:adf508e601bd5cab9545ea6b974769131e264a3142d59f5341663ac60e4e488e", size = 642846, upload-time = "2025-12-11T04:29:50.84Z" },
+    { url = "https://files.pythonhosted.org/packages/df/2e/12c2748413a9e76ce385ffe8a71ec36da70a3eef0456f193a97894a5cce7/async_gaussdb-0.30.4-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:db5ee373de60d3d471140662796651c2bb5d5241685f5f35a5c1eefabcd55d03", size = 622349, upload-time = "2025-12-11T04:29:52.288Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/b3/d5ec6f370c699bea2bb170a1617d7d13114156cff639593d3b36fad74602/async_gaussdb-0.30.4-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6b6feebe028dc848fe25a9b2fc62d1e604e8f3714c69d33ef839371a857a8807", size = 3311335, upload-time = "2025-12-11T04:29:53.271Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/d8/467d6449327fbaaba1e587fb1d9b1b359b7617d4ce532d4ed2c334a4ea0a/async_gaussdb-0.30.4-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a7d0151fa03de653a2e8b0c9d7e4f028f3c08c73135e80275149902f31e807d6", size = 3365779, upload-time = "2025-12-11T04:29:54.535Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/5a/0b085217af2e953903b2eef6045c1c7b34fb134ec564c289aa35260a7c0f/async_gaussdb-0.30.4-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:76adff12536f85703ac1d85a38dc4b79ed8618267352f089c71bb04de6d03694", size = 3233085, upload-time = "2025-12-11T04:29:56.066Z" },
+    { url = "https://files.pythonhosted.org/packages/59/6a/b0e9c2a1ccfe8c34f21d9d1409ddd2ee09387a2fd8f374f83361f410a8b6/async_gaussdb-0.30.4-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:73bbb85f3df126b43dea270df2c404e3d1aa15d080895abe3038e1457d972535", size = 3375732, upload-time = "2025-12-11T04:29:57.687Z" },
+    { url = "https://files.pythonhosted.org/packages/41/af/0ed04b7a99302ac1564d7183ed3c35c0b18924a302eb9299e45c4dd4c7f3/async_gaussdb-0.30.4-cp313-cp313-win32.whl", hash = "sha256:56f1b582fa75803a8006b79fbcf0b7f79b58b30068eae73d684cdbc84d97f01b", size = 501187, upload-time = "2025-12-11T04:30:00.768Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/26/317ad59f952b72fe800feed6d3e4759ad1adec1dbb61d55e33622c191aa7/async_gaussdb-0.30.4-cp313-cp313-win_amd64.whl", hash = "sha256:3c1f5dfc0aed0ea7f0e13aff966b5e9d8256ef25794da3ffc0170b5717a97605", size = 567024, upload-time = "2025-12-11T04:30:01.791Z" },
+]
+
+[[package]]
 name = "asyncpg"
 version = "0.31.0"
 source = { registry = "https://pypi.org/simple" }
@@ -763,6 +787,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+gaussdb = [
+    { name = "deerflow-harness", extra = ["gaussdb"] },
+]
 postgres = [
     { name = "deerflow-harness", extra = ["postgres"] },
 ]
@@ -779,6 +806,7 @@ dev = [
 requires-dist = [
     { name = "bcrypt", specifier = ">=4.0.0" },
     { name = "deerflow-harness", editable = "packages/harness" },
+    { name = "deerflow-harness", extras = ["gaussdb"], marker = "extra == 'gaussdb'", editable = "packages/harness" },
     { name = "deerflow-harness", extras = ["postgres"], marker = "extra == 'postgres'", editable = "packages/harness" },
     { name = "dingtalk-stream", specifier = ">=0.24.3" },
     { name = "email-validator", specifier = ">=2.0.0" },
@@ -795,7 +823,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "wecom-aibot-python-sdk", specifier = ">=0.1.6" },
 ]
-provides-extras = ["postgres"]
+provides-extras = ["postgres", "gaussdb"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -845,6 +873,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+gaussdb = [
+    { name = "async-gaussdb" },
+    { name = "gaussdb" },
+    { name = "gaussdb-pool" },
+]
 ollama = [
     { name = "langchain-ollama" },
 ]
@@ -864,12 +897,15 @@ requires-dist = [
     { name = "agent-sandbox", specifier = ">=0.0.19" },
     { name = "aiosqlite", specifier = ">=0.19" },
     { name = "alembic", specifier = ">=1.13" },
+    { name = "async-gaussdb", marker = "extra == 'gaussdb'", specifier = ">=0.30.4" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29" },
     { name = "ddgs", specifier = ">=9.10.0" },
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "duckdb", specifier = ">=1.4.4" },
     { name = "exa-py", specifier = ">=1.0.0" },
     { name = "firecrawl-py", specifier = ">=1.15.0" },
+    { name = "gaussdb", marker = "extra == 'gaussdb'", specifier = ">=1.0.3" },
+    { name = "gaussdb-pool", marker = "extra == 'gaussdb'", specifier = ">=1.0.3" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "kubernetes", specifier = ">=30.0.0" },
     { name = "langchain", specifier = ">=1.2.15" },
@@ -899,7 +935,7 @@ requires-dist = [
     { name = "tavily-python", specifier = ">=0.7.17" },
     { name = "tiktoken", specifier = ">=0.8.0" },
 ]
-provides-extras = ["ollama", "postgres", "pymupdf"]
+provides-extras = ["ollama", "postgres", "gaussdb", "pymupdf"]
 
 [[package]]
 name = "defusedxml"
@@ -1183,6 +1219,29 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/89/76/c615883b7b521ead2944bb3480398cbb07e12b7b4e4d073d3752eb721558/frozenlist-1.8.0-cp314-cp314t-win_amd64.whl", hash = "sha256:06be8f67f39c8b1dc671f5d83aaefd3358ae5cdcf8314552c57e7ed3e6475bdd", size = 49451, upload-time = "2025-10-06T05:37:53.425Z" },
     { url = "https://files.pythonhosted.org/packages/e0/a3/5982da14e113d07b325230f95060e2169f5311b1017ea8af2a29b374c289/frozenlist-1.8.0-cp314-cp314t-win_arm64.whl", hash = "sha256:102e6314ca4da683dca92e3b1355490fed5f313b768500084fbe6371fddfdb79", size = 42507, upload-time = "2025-10-06T05:37:54.513Z" },
     { url = "https://files.pythonhosted.org/packages/9a/9a/e35b4a917281c0b8419d4207f4334c8e8c5dbf4f3f5f9ada73958d937dcc/frozenlist-1.8.0-py3-none-any.whl", hash = "sha256:0c18a16eab41e82c295618a77502e17b195883241c563b00f0aa5106fc4eaa0d", size = 13409, upload-time = "2025-10-06T05:38:16.721Z" },
+]
+
+[[package]]
+name = "gaussdb"
+version = "1.0.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/12/d6cdf57cd39de197a90d506025b2c9ca80bac04d3672419191d9c316bd99/gaussdb-1.0.4-py3-none-any.whl", hash = "sha256:a7c9270a94ec0cf7d63336bbb301e7322d87773c00342c7444c627d7d6afcae4", size = 199807, upload-time = "2025-11-14T09:03:13.14Z" },
+]
+
+[[package]]
+name = "gaussdb-pool"
+version = "1.0.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/8f/15593022793c981f4e71c2df5daf91ecbcccdb28e72f6ed75184f8e6e3b7/gaussdb_pool-1.0.4-py3-none-any.whl", hash = "sha256:6c3379a238ea416e93f5c52bda63534adc3068eee19fed5e845b6ebae28b0555", size = 38193, upload-time = "2025-11-14T09:02:58.052Z" },
 ]
 
 [[package]]

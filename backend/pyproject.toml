@@ -25,6 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["deerflow-harness[postgres]"]
+gaussdb = ["deerflow-harness[gaussdb]"]
 
 [dependency-groups]
 dev = [

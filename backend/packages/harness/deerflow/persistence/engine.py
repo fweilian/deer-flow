@@ -15,6 +15,8 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from deerflow.persistence.dialects.gaussdb import register_gaussdb_async_dialect
+
 
 def _json_serializer(obj: object) -> str:
     """JSON serializer with ensure_ascii=False for Chinese character support."""
@@ -65,7 +67,7 @@ async def init_engine(
     """Create the async engine and session factory, then auto-create tables.
 
     Args:
-        backend: "memory", "sqlite", or "postgres".
+        backend: "memory", "sqlite", "postgres", or "gaussdb".
         url: SQLAlchemy async URL (for sqlite/postgres).
         echo: Echo SQL to log.
         pool_size: Postgres connection pool size.
@@ -82,6 +84,12 @@ async def init_engine(
             import asyncpg  # noqa: F401
         except ImportError:
             raise ImportError("database.backend is set to 'postgres' but asyncpg is not installed.\nInstall it with:\n    uv sync --extra postgres\nOr switch to backend: sqlite in config.yaml for single-node deployment.") from None
+    if backend == "gaussdb":
+        try:
+            import async_gaussdb  # noqa: F401
+        except ImportError:
+            raise ImportError("database.backend is set to 'gaussdb' but async_gaussdb is not installed.\nInstall it with:\n    uv sync --extra gaussdb\nOr switch to backend: sqlite in config.yaml for single-node deployment.") from None
+        register_gaussdb_async_dialect()
 
     if backend == "sqlite":
         import os
@@ -113,6 +121,14 @@ async def init_engine(
             finally:
                 cursor.close()
     elif backend == "postgres":
+        _engine = create_async_engine(
+            url,
+            echo=echo,
+            pool_size=pool_size,
+            pool_pre_ping=True,
+            json_serializer=_json_serializer,
+        )
+    elif backend == "gaussdb":
         _engine = create_async_engine(
             url,
             echo=echo,

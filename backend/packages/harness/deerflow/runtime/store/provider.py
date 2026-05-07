@@ -4,7 +4,7 @@ Provides a **sync singleton** and a **sync context manager** for CLI tools
 and the embedded :class:`~deerflow.client.DeerFlowClient`.
 
 The backend mirrors the configured checkpointer so that both always use the
-same persistence technology.  Supported backends: memory, sqlite, postgres.
+same persistence technology.  Supported backends: memory, sqlite, postgres, gaussdb.
 
 Usage::
 
@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 SQLITE_STORE_INSTALL = "langgraph-checkpoint-sqlite is required for the SQLite store. Install it with: uv add langgraph-checkpoint-sqlite"
 POSTGRES_STORE_INSTALL = "langgraph-checkpoint-postgres is required for the PostgreSQL store. Install it with: uv add langgraph-checkpoint-postgres psycopg[binary] psycopg-pool"
 POSTGRES_CONN_REQUIRED = "checkpointer.connection_string is required for the postgres backend"
+GAUSSDB_STORE_INSTALL = "GaussDB store dependencies are required for the GaussDB store. Install them with: uv sync --extra gaussdb"
+GAUSSDB_CONN_REQUIRED = "checkpointer.connection_string is required for the gaussdb backend"
 
 # ---------------------------------------------------------------------------
 # Sync factory
@@ -89,7 +91,79 @@ def _sync_store_cm(config) -> Iterator[BaseStore]:
             yield store
         return
 
+    if config.type == "gaussdb":
+        try:
+            from deerflow.runtime.store.gaussdb import GaussDBStore
+        except ImportError as exc:
+            raise ImportError(GAUSSDB_STORE_INSTALL) from exc
+
+        if not config.connection_string:
+            raise ValueError(GAUSSDB_CONN_REQUIRED)
+
+        with GaussDBStore.from_conn_string(config.connection_string) as store:
+            store.setup()
+            logger.info("Store: using GaussDBStore")
+            yield store
+        return
+
     raise ValueError(f"Unknown store backend type: {config.type!r}")
+
+
+@contextlib.contextmanager
+def _sync_store_from_database_cm(db_config) -> Iterator[BaseStore]:
+    """Context manager that constructs a sync Store from DatabaseConfig."""
+    if db_config.backend == "memory":
+        from langgraph.store.memory import InMemoryStore
+
+        logger.info("Store: using InMemoryStore (in-process, not persistent)")
+        yield InMemoryStore()
+        return
+
+    if db_config.backend == "sqlite":
+        try:
+            from langgraph.store.sqlite import SqliteStore
+        except ImportError as exc:
+            raise ImportError(SQLITE_STORE_INSTALL) from exc
+
+        conn_str = db_config.checkpointer_sqlite_path
+        ensure_sqlite_parent_dir(conn_str)
+        with SqliteStore.from_conn_string(conn_str) as store:
+            store.setup()
+            logger.info("Store: using SqliteStore (%s)", conn_str)
+            yield store
+        return
+
+    if db_config.backend == "postgres":
+        try:
+            from langgraph.store.postgres import PostgresStore  # type: ignore[import]
+        except ImportError as exc:
+            raise ImportError(POSTGRES_STORE_INSTALL) from exc
+
+        if not db_config.postgres_url:
+            raise ValueError("database.postgres_url is required for the postgres backend")
+
+        with PostgresStore.from_conn_string(db_config.postgres_url) as store:
+            store.setup()
+            logger.info("Store: using PostgresStore")
+            yield store
+        return
+
+    if db_config.backend == "gaussdb":
+        try:
+            from deerflow.runtime.store.gaussdb import GaussDBStore
+        except ImportError as exc:
+            raise ImportError(GAUSSDB_STORE_INSTALL) from exc
+
+        if not db_config.gaussdb_url:
+            raise ValueError("database.gaussdb_url is required for the gaussdb backend")
+
+        with GaussDBStore.from_conn_string(db_config.gaussdb_url) as store:
+            store.setup()
+            logger.info("Store: using GaussDBStore")
+            yield store
+        return
+
+    raise ValueError(f"Unknown database backend: {db_config.backend!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -121,13 +195,20 @@ def get_store() -> BaseStore:
     from deerflow.config.checkpointer_config import get_checkpointer_config
 
     config = get_checkpointer_config()
+    app_config = _app_config
 
-    if config is None and _app_config is None:
+    if config is None and app_config is None:
         try:
-            get_app_config()
+            app_config = get_app_config()
         except FileNotFoundError:
             pass
         config = get_checkpointer_config()
+
+    db_config = getattr(app_config, "database", None) if app_config is not None else None
+    if config is None and db_config is not None and isinstance(getattr(db_config, "backend", None), str) and db_config.backend != "memory":
+        _store_ctx = _sync_store_from_database_cm(db_config)
+        _store = _store_ctx.__enter__()
+        return _store
 
     if config is None:
         from langgraph.store.memory import InMemoryStore
@@ -177,12 +258,18 @@ def store_context() -> Iterator[BaseStore]:
     checkpointer is configured in *config.yaml*.
     """
     config = get_app_config()
-    if config.checkpointer is None:
-        from langgraph.store.memory import InMemoryStore
-
-        logger.warning("No 'checkpointer' section in config.yaml — using InMemoryStore for the store. Thread list will be lost on server restart. Configure a sqlite or postgres backend for persistence.")
-        yield InMemoryStore()
+    if config.checkpointer is not None:
+        with _sync_store_cm(config.checkpointer) as store:
+            yield store
         return
 
-    with _sync_store_cm(config.checkpointer) as store:
-        yield store
+    db_config = getattr(config, "database", None)
+    if db_config is not None and isinstance(getattr(db_config, "backend", None), str) and db_config.backend != "memory":
+        with _sync_store_from_database_cm(db_config) as store:
+            yield store
+        return
+
+    from langgraph.store.memory import InMemoryStore
+
+    logger.warning("No 'checkpointer' section in config.yaml — using InMemoryStore for the store. Thread list will be lost on server restart. Configure a sqlite, postgres, or gaussdb backend for persistence.")
+    yield InMemoryStore()

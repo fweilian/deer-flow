@@ -17,7 +17,7 @@ connection pools with different lifecycles.
 Memory mode: checkpointer uses MemorySaver, app uses in-memory stores.
 No database is initialized.
 
-Sensitive values (postgres_url) should use $VAR syntax in config.yaml
+Sensitive values (postgres_url / gaussdb_url) should use $VAR syntax in config.yaml
 to reference environment variables from .env:
 
     database:
@@ -38,9 +38,15 @@ from pydantic import BaseModel, Field
 
 
 class DatabaseConfig(BaseModel):
-    backend: Literal["memory", "sqlite", "postgres"] = Field(
+    backend: Literal["memory", "sqlite", "postgres", "gaussdb"] = Field(
         default="memory",
-        description=("Storage backend for both checkpointer and application data. 'memory' for development (no persistence across restarts), 'sqlite' for single-node deployment, 'postgres' for production multi-node deployment."),
+        description=(
+            "Storage backend for both checkpointer and application data. "
+            "'memory' for development (no persistence across restarts), "
+            "'sqlite' for single-node deployment, "
+            "'postgres' for PostgreSQL deployments, "
+            "'gaussdb' for GaussDB deployments."
+        ),
     )
     sqlite_dir: str = Field(
         default=".deer-flow/data",
@@ -53,6 +59,12 @@ class DatabaseConfig(BaseModel):
             "Use $DATABASE_URL in config.yaml to reference .env. "
             "Example: postgresql://user:pass@host:5432/deerflow "
             "(the +asyncpg driver suffix is added automatically where needed)."
+        ),
+    )
+    gaussdb_url: str = Field(
+        default="",
+        description=(
+            "GaussDB connection URL, shared by checkpointer and app. Use $GAUSSDB_URL in config.yaml to reference .env. Example: gaussdb://user:pass@host:5432/deerflow (the +async_gaussdb driver suffix is added automatically where needed)."
         ),
     )
     echo_sql: bool = Field(
@@ -98,5 +110,10 @@ class DatabaseConfig(BaseModel):
             url = self.postgres_url
             if url.startswith("postgresql://"):
                 url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            return url
+        if self.backend == "gaussdb":
+            url = self.gaussdb_url
+            if url.startswith("gaussdb://"):
+                url = url.replace("gaussdb://", "gaussdb+async_gaussdb://", 1)
             return url
         raise ValueError(f"No SQLAlchemy URL for backend={self.backend!r}")

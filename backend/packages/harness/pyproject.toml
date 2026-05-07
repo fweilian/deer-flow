@@ -46,6 +46,11 @@ postgres = [
     "psycopg[binary]>=3.3.3",
     "psycopg-pool>=3.3.0",
 ]
+gaussdb = [
+    "async-gaussdb>=0.30.4",
+    "gaussdb>=1.0.3",
+    "gaussdb-pool>=1.0.3",
+]
 pymupdf = ["pymupdf4llm>=0.0.17"]
 
 [build-system]
