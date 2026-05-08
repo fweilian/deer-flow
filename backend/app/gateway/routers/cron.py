@@ -46,7 +46,10 @@ async def create_cron_job(
     repo: CronSchedulerRepository = Depends(get_cron_scheduler_repo),
 ) -> CronJobRecord:
     await _require_thread_access(request, payload.thread_id, require_existing=True)
-    return await repo.create_job(payload)
+    auth = get_auth_context(request)
+    assert auth is not None
+    stamped_payload = payload.model_copy(update={"creator_user_id": str(auth.require_user().id)})
+    return await repo.create_job(stamped_payload)
 
 
 @router.post("/{job_id}/trigger", response_model=CronTriggerResponse)

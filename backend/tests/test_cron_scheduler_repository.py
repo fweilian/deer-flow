@@ -45,6 +45,7 @@ class TestCronSchedulerRepository:
         missing = await repo.create_job(
             CronJobCreate(
                 thread_id="thread-missing",
+                creator_user_id="creator-missing",
                 cron="*/5 * * * *",
                 timezone="Asia/Shanghai",
             ),
@@ -53,21 +54,35 @@ class TestCronSchedulerRepository:
         empty = await repo.create_job(
             CronJobCreate(
                 thread_id="thread-empty",
+                creator_user_id="creator-empty",
                 cron="*/5 * * * *",
                 timezone="Asia/Shanghai",
                 input={},
                 config={},
                 context={},
+                delivery={
+                    "kind": "channel",
+                    "channel_name": "webhook",
+                    "chat_id": "deploy-room",
+                    "thread_ts": "deploy-thread",
+                    "options": {"api_request": {"method": "POST", "path": "/hooks/deploy"}},
+                },
             ),
             now=1_746_500_000,
         )
 
+        assert missing.creator_user_id == "creator-missing"
         assert missing.input is None
         assert missing.config is None
         assert missing.context is None
+        assert missing.delivery is None
+        assert empty.creator_user_id == "creator-empty"
         assert empty.input == {}
         assert empty.config == {}
         assert empty.context == {}
+        assert empty.delivery is not None
+        assert empty.delivery.channel_name == "webhook"
+        assert empty.delivery.options["api_request"]["path"] == "/hooks/deploy"
         await _cleanup()
 
     @pytest.mark.anyio

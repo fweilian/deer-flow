@@ -45,9 +45,18 @@ def compute_next_fire_at(cron: str, timezone: str, *, now: float | datetime | No
     return next_local.astimezone(UTC).timestamp()
 
 
+class CronJobChannelDelivery(BaseModel):
+    kind: Literal["channel"] = "channel"
+    channel_name: str
+    chat_id: str
+    thread_ts: str | None = None
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
 class CronJobCreate(BaseModel):
     thread_id: str
     assistant_id: str | None = None
+    creator_user_id: str = "default"
     cron: str
     timezone: str
     enabled: bool = True
@@ -55,6 +64,7 @@ class CronJobCreate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
+    delivery: CronJobChannelDelivery | None = None
     multitask_strategy: Literal["reject", "interrupt", "rollback", "enqueue"] = "enqueue"
 
     @field_validator("cron")

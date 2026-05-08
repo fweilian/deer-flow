@@ -10,7 +10,8 @@ from langchain.tools import tool
 
 from deerflow.persistence.engine import get_session_factory
 from deerflow.persistence.scheduler.sql import CronSchedulerRepository
-from deerflow.runtime.scheduler import CronJobCreate
+from deerflow.runtime.scheduler import CronJobChannelDelivery, CronJobCreate
+from deerflow.runtime.user_context import get_current_user, get_effective_user_id
 from deerflow.tools.types import Runtime
 
 
@@ -50,6 +51,31 @@ def _resolve_thread_id(runtime: Runtime, thread_id: str | None) -> str:
     raise ValueError("thread_id is required when runtime context does not include one.")
 
 
+def _resolve_creator_user_id(runtime: Runtime) -> str:
+    context = runtime.context or {}
+    runtime_user_id = context.get("user_id")
+    if isinstance(runtime_user_id, str) and runtime_user_id:
+        return runtime_user_id
+
+    current_user = get_current_user()
+    if current_user is not None:
+        return str(current_user.id)
+
+    return get_effective_user_id()
+
+
+def _format_delivery_summary(delivery: CronJobChannelDelivery | None) -> str:
+    if delivery is None:
+        return "default thread reply"
+
+    summary = f"channel:{delivery.channel_name} chat={delivery.chat_id}"
+    if delivery.thread_ts:
+        summary += f" thread={delivery.thread_ts}"
+    if delivery.options:
+        summary += f" options={','.join(sorted(delivery.options))}"
+    return summary
+
+
 @tool("create_schedule", parse_docstring=True)
 async def create_schedule_tool(
     runtime: Runtime,
@@ -57,6 +83,7 @@ async def create_schedule_tool(
     thread_id: str | None = None,
     assistant_id: str | None = None,
     input: dict[str, Any] | None = None,
+    delivery: CronJobChannelDelivery | None = None,
 ) -> str:
     """Create a new cron schedule for the current thread.
 
@@ -65,6 +92,7 @@ async def create_schedule_tool(
         thread_id: Optional thread id. Defaults to the current runtime thread.
         assistant_id: Optional assistant identifier to bind to the schedule.
         input: Optional input payload that will be passed to the scheduled run.
+        delivery: Optional delivery target for scheduled replies.
     """
 
     resolved_thread_id = _resolve_thread_id(runtime, thread_id)
@@ -73,9 +101,11 @@ async def create_schedule_tool(
         CronJobCreate(
             thread_id=resolved_thread_id,
             assistant_id=assistant_id,
+            creator_user_id=_resolve_creator_user_id(runtime),
             cron=cron,
             timezone=_system_timezone(),
             input=input,
+            delivery=delivery,
         )
     )
     return f"Schedule {record.job_id} created for thread {record.thread_id}. Next fire at {record.next_fire_at} ({record.timezone})."
@@ -105,7 +135,7 @@ async def list_schedules_tool(
     lines = [f"Schedules for thread {resolved_thread_id}:"]
     for job in jobs:
         status = "enabled" if job.enabled else "paused"
-        lines.append(f"- {job.job_id}: {job.cron} [{status}] next={job.next_fire_at}")
+        lines.append(f"- {job.job_id}: {job.cron} [{status}] next={job.next_fire_at} delivery={_format_delivery_summary(job.delivery)}")
     return "\n".join(lines)
 
 

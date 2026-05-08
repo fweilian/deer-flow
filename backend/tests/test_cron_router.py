@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 from _router_auth_helpers import make_authed_test_app
 from fastapi.testclient import TestClient
@@ -23,6 +24,7 @@ def test_create_cron_job_route():
             job_id="job-1",
             thread_id="thread-1",
             assistant_id="lead_agent",
+            creator_user_id="router-user-1",
             cron="*/5 * * * *",
             timezone="Asia/Shanghai",
             enabled=True,
@@ -30,6 +32,13 @@ def test_create_cron_job_route():
             metadata={"source": "test"},
             config={"tags": ["nightly"]},
             context={"agent_name": "lead-agent"},
+            delivery={
+                "kind": "channel",
+                "channel_name": "webhook",
+                "chat_id": "alerts-room",
+                "thread_ts": "thread-123",
+                "options": {"api_request": {"method": "POST", "path": "/hooks/nightly"}},
+            },
             multitask_strategy="enqueue",
             next_fire_at=1_746_500_300.0,
             last_fire_at=None,
@@ -46,12 +55,20 @@ def test_create_cron_job_route():
             json={
                 "thread_id": "thread-1",
                 "assistant_id": "lead_agent",
+                "creator_user_id": "client-supplied-should-be-overwritten",
                 "cron": "*/5 * * * *",
                 "timezone": "Asia/Shanghai",
                 "input": {"messages": [{"role": "user", "content": "hi"}]},
                 "metadata": {"source": "test"},
                 "config": {"tags": ["nightly"]},
                 "context": {"agent_name": "lead-agent"},
+                "delivery": {
+                    "kind": "channel",
+                    "channel_name": "webhook",
+                    "chat_id": "alerts-room",
+                    "thread_ts": "thread-123",
+                    "options": {"api_request": {"method": "POST", "path": "/hooks/nightly"}},
+                },
                 "multitask_strategy": "enqueue",
             },
         )
@@ -61,6 +78,7 @@ def test_create_cron_job_route():
         "job_id": "job-1",
         "thread_id": "thread-1",
         "assistant_id": "lead_agent",
+        "creator_user_id": "router-user-1",
         "cron": "*/5 * * * *",
         "timezone": "Asia/Shanghai",
         "enabled": True,
@@ -68,6 +86,13 @@ def test_create_cron_job_route():
         "metadata": {"source": "test"},
         "config": {"tags": ["nightly"]},
         "context": {"agent_name": "lead-agent"},
+        "delivery": {
+            "kind": "channel",
+            "channel_name": "webhook",
+            "chat_id": "alerts-room",
+            "thread_ts": "thread-123",
+            "options": {"api_request": {"method": "POST", "path": "/hooks/nightly"}},
+        },
         "multitask_strategy": "enqueue",
         "next_fire_at": 1_746_500_300.0,
         "last_fire_at": None,
@@ -76,6 +101,68 @@ def test_create_cron_job_route():
         "updated_at": 1_746_500_000.0,
     }
     repo.create_job.assert_awaited_once()
+    submitted = repo.create_job.await_args.args[0]
+    assert submitted.creator_user_id != "client-supplied-should-be-overwritten"
+    assert str(UUID(submitted.creator_user_id)) == submitted.creator_user_id
+    assert submitted.delivery is not None
+    assert submitted.delivery.channel_name == "webhook"
+    assert submitted.delivery.options["api_request"]["path"] == "/hooks/nightly"
+
+
+def test_create_cron_job_route_stamps_authenticated_user_id():
+    from app.gateway.auth.models import User
+
+    def _stable_user() -> User:
+        return User(
+            email="router-test@example.com",
+            password_hash="x",
+            system_role="user",
+            id=UUID("11111111-1111-1111-1111-111111111111"),
+        )
+
+    repo = MagicMock()
+    repo.create_job = AsyncMock(
+        return_value=CronJobRecord(
+            job_id="job-2",
+            thread_id="thread-2",
+            assistant_id=None,
+            creator_user_id="11111111-1111-1111-1111-111111111111",
+            cron="0 * * * *",
+            timezone="UTC",
+            enabled=True,
+            input=None,
+            metadata={},
+            config=None,
+            context=None,
+            delivery=None,
+            multitask_strategy="enqueue",
+            next_fire_at=1_746_500_300.0,
+            last_fire_at=None,
+            last_run_id=None,
+            created_at=1_746_500_000.0,
+            updated_at=1_746_500_000.0,
+        )
+    )
+    app = make_authed_test_app(user_factory=_stable_user)
+    from app.gateway.routers import cron
+
+    app.include_router(cron.router)
+    app.state.cron_scheduler_repo = repo
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/cron/jobs",
+            json={
+                "thread_id": "thread-2",
+                "creator_user_id": "malicious-client-value",
+                "cron": "0 * * * *",
+                "timezone": "UTC",
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    submitted = repo.create_job.await_args.args[0]
+    assert submitted.creator_user_id == "11111111-1111-1111-1111-111111111111"
 
 
 def test_trigger_cron_job_route(monkeypatch):
@@ -85,6 +172,7 @@ def test_trigger_cron_job_route(monkeypatch):
             job_id="job-1",
             thread_id="thread-1",
             assistant_id="lead_agent",
+            creator_user_id="router-user-1",
             cron="*/5 * * * *",
             timezone="Asia/Shanghai",
             enabled=True,
@@ -92,6 +180,7 @@ def test_trigger_cron_job_route(monkeypatch):
             metadata={},
             config=None,
             context=None,
+            delivery=None,
             multitask_strategy="enqueue",
             next_fire_at=1_746_500_300.0,
             last_fire_at=None,
@@ -168,6 +257,7 @@ def test_trigger_cron_job_route_checks_thread_access(monkeypatch):
             job_id="job-1",
             thread_id="thread-1",
             assistant_id="lead_agent",
+            creator_user_id="router-user-1",
             cron="*/5 * * * *",
             timezone="Asia/Shanghai",
             enabled=True,
@@ -175,6 +265,7 @@ def test_trigger_cron_job_route_checks_thread_access(monkeypatch):
             metadata={},
             config=None,
             context=None,
+            delivery=None,
             multitask_strategy="enqueue",
             next_fire_at=1_746_500_300.0,
             last_fire_at=None,
