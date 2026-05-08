@@ -6,7 +6,6 @@ The store and checkpointer share the same ``checkpointer`` section in
 - ``type: memory``   → :class:`langgraph.store.memory.InMemoryStore`
 - ``type: sqlite``   → :class:`langgraph.store.sqlite.aio.AsyncSqliteStore`
 - ``type: postgres`` → :class:`langgraph.store.postgres.aio.AsyncPostgresStore`
-- ``type: gaussdb``  → :class:`deerflow.runtime.store.gaussdb.AsyncGaussDBStore`
 
 Usage (e.g. FastAPI lifespan)::
 
@@ -26,13 +25,10 @@ from langgraph.store.base import BaseStore
 
 from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.runtime.store.provider import (
-    GAUSSDB_CONN_REQUIRED,
-    GAUSSDB_STORE_INSTALL,
     POSTGRES_CONN_REQUIRED,
     POSTGRES_STORE_INSTALL,
     SQLITE_STORE_INSTALL,
     ensure_sqlite_parent_dir,
-    format_gaussdb_store_import_error,
     resolve_sqlite_conn_str,
 )
 
@@ -87,21 +83,6 @@ async def _async_store(config) -> AsyncIterator[BaseStore]:
             yield store
         return
 
-    if config.type == "gaussdb":
-        try:
-            from deerflow.runtime.store.gaussdb import AsyncGaussDBStore
-        except ImportError as exc:
-            raise format_gaussdb_store_import_error(GAUSSDB_STORE_INSTALL, exc) from exc
-
-        if not config.connection_string:
-            raise ValueError(GAUSSDB_CONN_REQUIRED)
-
-        async with AsyncGaussDBStore.from_conn_string(config.connection_string) as store:
-            await store.setup()
-            logger.info("Store: using AsyncGaussDBStore")
-            yield store
-        return
-
     raise ValueError(f"Unknown store backend type: {config.type!r}")
 
 
@@ -145,18 +126,10 @@ async def _async_store_from_database(db_config) -> AsyncIterator[BaseStore]:
         return
 
     if db_config.backend == "gaussdb":
-        try:
-            from deerflow.runtime.store.gaussdb import AsyncGaussDBStore
-        except ImportError as exc:
-            raise format_gaussdb_store_import_error(GAUSSDB_STORE_INSTALL, exc) from exc
+        from langgraph.store.memory import InMemoryStore
 
-        if not db_config.gaussdb_url:
-            raise ValueError("database.gaussdb_url is required for the gaussdb backend")
-
-        async with AsyncGaussDBStore.from_conn_string(db_config.gaussdb_conninfo) as store:
-            await store.setup()
-            logger.info("Store: using AsyncGaussDBStore")
-            yield store
+        logger.warning("Store: database.backend=gaussdb only enables ORM persistence. GaussDB-backed LangGraph store persistence is disabled; falling back to InMemoryStore.")
+        yield InMemoryStore()
         return
 
     raise ValueError(f"Unknown database backend: {db_config.backend!r}")
@@ -198,5 +171,5 @@ async def make_store(app_config: AppConfig | None = None) -> AsyncIterator[BaseS
 
     from langgraph.store.memory import InMemoryStore
 
-    logger.warning("No 'checkpointer' section in config.yaml — using InMemoryStore for the store. Thread list will be lost on server restart. Configure a sqlite, postgres, or gaussdb backend for persistence.")
+    logger.warning("No 'checkpointer' section in config.yaml — using InMemoryStore for the store. Thread list will be lost on server restart. Configure a sqlite or postgres backend for persistence.")
     yield InMemoryStore()

@@ -36,8 +36,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from deerflow.utils.gaussdb import gaussdb_url_to_conninfo
-
 
 class DatabaseConfig(BaseModel):
     backend: Literal["memory", "sqlite", "postgres", "gaussdb"] = Field(
@@ -47,7 +45,7 @@ class DatabaseConfig(BaseModel):
             "'memory' for development (no persistence across restarts), "
             "'sqlite' for single-node deployment, "
             "'postgres' for PostgreSQL deployments, "
-            "'gaussdb' for GaussDB deployments."
+            "'gaussdb' for GaussDB-backed ORM deployments."
         ),
     )
     sqlite_dir: str = Field(
@@ -66,7 +64,11 @@ class DatabaseConfig(BaseModel):
     gaussdb_url: str = Field(
         default="",
         description=(
-            "GaussDB connection URL, shared by checkpointer and app. Use $GAUSSDB_URL in config.yaml to reference .env. Example: gaussdb://user:pass@host:5432/deerflow (the +async_gaussdb driver suffix is added automatically where needed)."
+            "GaussDB connection URL for the application ORM engine. "
+            "Use $GAUSSDB_URL in config.yaml to reference .env. "
+            "Example: gaussdb://user:pass@host:5432/deerflow "
+            "(the +async_gaussdb driver suffix is added automatically where needed). "
+            "LangGraph checkpointer/store persistence does not use this backend."
         ),
     )
     echo_sql: bool = Field(
@@ -119,8 +121,3 @@ class DatabaseConfig(BaseModel):
                 url = url.replace("gaussdb://", "gaussdb+async_gaussdb://", 1)
             return url
         raise ValueError(f"No SQLAlchemy URL for backend={self.backend!r}")
-
-    @property
-    def gaussdb_conninfo(self) -> str:
-        """GaussDB conninfo string for psycopg-compatible checkpointer/store code."""
-        return gaussdb_url_to_conninfo(self.gaussdb_url)

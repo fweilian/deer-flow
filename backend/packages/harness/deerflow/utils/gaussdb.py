@@ -1,13 +1,8 @@
-"""GaussDB connection string helpers."""
+"""GaussDB connection string helpers for async ORM usage."""
 
 from __future__ import annotations
 
 from urllib.parse import parse_qsl, unquote
-
-
-def _quote_conninfo_value(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
-    return f"'{escaped}'"
 
 
 def _split_gaussdb_url(raw: str) -> tuple[str, str, str]:
@@ -67,38 +62,50 @@ def _split_hosts(hosts: str) -> tuple[str | None, str | None]:
     return host_value, port_value
 
 
-def gaussdb_url_to_conninfo(raw: str) -> str:
-    """Convert a GaussDB URL into libpq/psycopg-style conninfo."""
+def _normalize_host_port_values(host: str | None, port: str | None) -> tuple[object | None, object | None]:
+    if host is None:
+        return None, None
+
+    host_items = [item for item in host.split(",") if item]
+    port_items = [item for item in (port.split(",") if port else []) if item]
+
+    if len(host_items) <= 1:
+        return host_items[0], int(port_items[0]) if port_items else None
+
+    normalized_ports: list[int | None] = []
+    for idx in range(len(host_items)):
+        if idx < len(port_items):
+            normalized_ports.append(int(port_items[idx]))
+        else:
+            normalized_ports.append(None)
+
+    return host_items, normalized_ports
+
+
+def gaussdb_url_to_async_connect_kwargs(raw: str) -> dict[str, object]:
+    """Convert a GaussDB URL into ``async_gaussdb.connect()`` keyword args."""
     if not raw:
-        return raw
-
-    if "://" not in raw and "=" in raw:
-        return raw
-
-    scheme = raw.split("://", 1)[0]
-    if scheme not in {"gaussdb", "gaussdb+async_gaussdb"}:
-        return raw
+        return {}
 
     userinfo, hosts, path_and_query = _split_gaussdb_url(raw)
     user, password = _split_userinfo(userinfo)
     host, port = _split_hosts(hosts)
+    normalized_host, normalized_port = _normalize_host_port_values(host, port)
     dbname, _, query = path_and_query.partition("?")
 
-    parts: list[str] = []
-
-    if host:
-        parts.append(f"host={_quote_conninfo_value(host)}")
-    if port:
-        parts.append(f"port={_quote_conninfo_value(port)}")
+    kwargs: dict[str, object] = {}
     if user:
-        parts.append(f"user={_quote_conninfo_value(user)}")
+        kwargs["user"] = user
     if password is not None:
-        parts.append(f"password={_quote_conninfo_value(password)}")
-
+        kwargs["password"] = password
+    if normalized_host is not None:
+        kwargs["host"] = normalized_host
+    if normalized_port is not None:
+        kwargs["port"] = normalized_port
     if dbname:
-        parts.append(f"dbname={_quote_conninfo_value(unquote(dbname))}")
+        kwargs["database"] = unquote(dbname)
 
     for key, value in parse_qsl(query, keep_blank_values=True):
-        parts.append(f"{key}={_quote_conninfo_value(value)}")
+        kwargs[key] = value
 
-    return " ".join(parts)
+    return kwargs

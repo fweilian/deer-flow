@@ -1,13 +1,14 @@
 """Unit tests for the Store provider."""
 
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import deerflow.config.app_config as app_config_module
 from deerflow.config.checkpointer_config import load_checkpointer_config_from_dict, set_checkpointer_config
-from deerflow.runtime.store import get_store, make_store, reset_store
+from deerflow.config.database_config import DatabaseConfig
+from deerflow.runtime.store import get_store, reset_store
 
 
 @pytest.fixture(autouse=True)
@@ -21,39 +22,31 @@ def reset_state():
     reset_store()
 
 
-def test_gaussdb_store_requires_compat_package():
-    load_checkpointer_config_from_dict({"type": "gaussdb", "connection_string": "gaussdb://localhost/db"})
-    with patch.dict(sys.modules, {"deerflow.runtime.store.gaussdb": None}):
-        reset_store()
-        with pytest.raises(ImportError, match="gaussdb"):
-            get_store()
+def test_returns_in_memory_store_when_not_configured():
+    from langgraph.store.memory import InMemoryStore
+
+    with patch("deerflow.runtime.store.provider.get_app_config", side_effect=FileNotFoundError):
+        store = get_store()
+
+    assert isinstance(store, InMemoryStore)
 
 
-def test_gaussdb_store_import_error_keeps_original_reason():
-    from deerflow.runtime.store.provider import format_gaussdb_store_import_error
+def test_database_gaussdb_falls_back_to_in_memory_store():
+    from langgraph.store.memory import InMemoryStore
 
-    err = format_gaussdb_store_import_error(
-        "GaussDB store dependencies are required",
-        ImportError("No module named 'gaussdb_pool'"),
+    from deerflow.runtime.store.provider import _sync_store_from_database_cm
+
+    db_config = DatabaseConfig(
+        backend="gaussdb",
+        gaussdb_url="gaussdb://root:1234@localhost:30100/db",
     )
 
-    assert "GaussDB store dependencies are required" in str(err)
-    assert "manually" in str(err)
-    assert "gaussdb_pool" in str(err)
+    with _sync_store_from_database_cm(db_config) as store:
+        assert isinstance(store, InMemoryStore)
 
 
-def test_gaussdb_store_requires_connection_string():
-    load_checkpointer_config_from_dict({"type": "gaussdb"})
-    mock_module = MagicMock()
-    mock_module.GaussDBStore = MagicMock()
-    with patch.dict(sys.modules, {"deerflow.runtime.store.gaussdb": mock_module}):
-        reset_store()
-        with pytest.raises(ValueError, match="connection_string is required"):
-            get_store()
-
-
-def test_gaussdb_store_is_created():
-    load_checkpointer_config_from_dict({"type": "gaussdb", "connection_string": "gaussdb://localhost/db"})
+def test_postgres_store_is_created():
+    load_checkpointer_config_from_dict({"type": "postgres", "connection_string": "postgresql://localhost/db"})
 
     mock_store_instance = MagicMock()
     mock_cm = MagicMock()
@@ -64,39 +57,12 @@ def test_gaussdb_store_is_created():
     mock_store_cls.from_conn_string = MagicMock(return_value=mock_cm)
 
     mock_module = MagicMock()
-    mock_module.GaussDBStore = mock_store_cls
+    mock_module.PostgresStore = mock_store_cls
 
-    with patch.dict(sys.modules, {"deerflow.runtime.store.gaussdb": mock_module}):
+    with patch.dict(sys.modules, {"langgraph.store.postgres": mock_module}):
         reset_store()
         store = get_store()
 
     assert store is mock_store_instance
-    mock_store_cls.from_conn_string.assert_called_once_with("gaussdb://localhost/db")
+    mock_store_cls.from_conn_string.assert_called_once_with("postgresql://localhost/db")
     mock_store_instance.setup.assert_called_once()
-
-
-@pytest.mark.anyio
-async def test_async_gaussdb_store_is_created():
-    mock_config = MagicMock()
-    mock_config.checkpointer = MagicMock(type="gaussdb", connection_string="gaussdb://localhost/db")
-
-    mock_store = AsyncMock()
-    mock_cm = AsyncMock()
-    mock_cm.__aenter__.return_value = mock_store
-    mock_cm.__aexit__.return_value = False
-
-    mock_store_cls = MagicMock()
-    mock_store_cls.from_conn_string.return_value = mock_cm
-
-    mock_module = MagicMock()
-    mock_module.AsyncGaussDBStore = mock_store_cls
-
-    with (
-        patch("deerflow.runtime.store.async_provider.get_app_config", return_value=mock_config),
-        patch.dict(sys.modules, {"deerflow.runtime.store.gaussdb": mock_module}),
-    ):
-        async with make_store() as store:
-            assert store is mock_store
-
-    mock_store_cls.from_conn_string.assert_called_once_with("gaussdb://localhost/db")
-    mock_store.setup.assert_awaited_once()

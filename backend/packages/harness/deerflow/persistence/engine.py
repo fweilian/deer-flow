@@ -16,6 +16,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from deerflow.persistence.dialects.gaussdb import register_gaussdb_async_dialect
+from deerflow.utils.gaussdb import gaussdb_url_to_async_connect_kwargs
 
 
 def _json_serializer(obj: object) -> str:
@@ -27,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+def _gaussdb_sqlalchemy_bootstrap_url() -> str:
+    """Return a placeholder URL for SQLAlchemy when async_creator handles connect."""
+    return "gaussdb+async_gaussdb://"
 
 
 async def _auto_create_postgres_db(url: str) -> None:
@@ -129,12 +135,20 @@ async def init_engine(
             json_serializer=_json_serializer,
         )
     elif backend == "gaussdb":
+        import async_gaussdb
+
+        connect_kwargs = gaussdb_url_to_async_connect_kwargs(url)
+
+        async def _async_connect():
+            return await async_gaussdb.connect(**connect_kwargs)
+
         _engine = create_async_engine(
-            url,
+            _gaussdb_sqlalchemy_bootstrap_url(),
             echo=echo,
             pool_size=pool_size,
             pool_pre_ping=True,
             json_serializer=_json_serializer,
+            async_creator=_async_connect,
         )
     else:
         raise ValueError(f"Unknown persistence backend: {backend!r}")

@@ -62,7 +62,6 @@ async def langgraph_runtime(app: FastAPI) -> AsyncGenerator[None, None]:
         # Initialize persistence engine BEFORE checkpointer so that
         # auto-create-database logic runs first (postgres backend).
         await init_engine_from_config(config.database)
-
         app.state.checkpointer = await stack.enter_async_context(make_checkpointer(config))
         app.state.store = await stack.enter_async_context(make_store(config))
 

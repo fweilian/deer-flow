@@ -3,7 +3,7 @@
 Provides a **sync singleton** and a **sync context manager** for LangGraph
 graph compilation and CLI tools.
 
-Supported backends: memory, sqlite, postgres, gaussdb.
+Supported backends: memory, sqlite, postgres.
 
 Usage::
 
@@ -38,19 +38,6 @@ logger = logging.getLogger(__name__)
 SQLITE_INSTALL = "langgraph-checkpoint-sqlite is required for the SQLite checkpointer. Install it with: uv add langgraph-checkpoint-sqlite"
 POSTGRES_INSTALL = "langgraph-checkpoint-postgres is required for the PostgreSQL checkpointer. Install it with: uv add langgraph-checkpoint-postgres psycopg[binary] psycopg-pool"
 POSTGRES_CONN_REQUIRED = "checkpointer.connection_string is required for the postgres backend"
-GAUSSDB_INSTALL = "GaussDB checkpointer dependencies are required for the GaussDB checkpointer. Install them with: uv sync --extra gaussdb"
-GAUSSDB_CONN_REQUIRED = "checkpointer.connection_string is required for the gaussdb backend"
-
-
-def format_gaussdb_import_error(message: str, exc: ImportError) -> ImportError:
-    """Return a more actionable ImportError for GaussDB optional deps.
-
-    This keeps the high-level install guidance while preserving the original
-    import failure details, which is especially important when users install
-    wheels manually instead of via ``uv sync --extra gaussdb``.
-    """
-    detail = str(exc).strip() or repr(exc)
-    return ImportError(f"{message}\nIf you installed the GaussDB wheels manually, verify that the current Python environment can import `async_gaussdb`, `gaussdb`, and `gaussdb_pool` directly.\nOriginal import error: {detail}")
 
 
 # ---------------------------------------------------------------------------
@@ -103,21 +90,6 @@ def _sync_checkpointer_cm(config: CheckpointerConfig) -> Iterator[Checkpointer]:
             yield saver
         return
 
-    if config.type == "gaussdb":
-        try:
-            from deerflow.runtime.checkpointer.gaussdb import GaussDBSaver
-        except ImportError as exc:
-            raise format_gaussdb_import_error(GAUSSDB_INSTALL, exc) from exc
-
-        if not config.connection_string:
-            raise ValueError(GAUSSDB_CONN_REQUIRED)
-
-        with GaussDBSaver.from_conn_string(config.connection_string) as saver:
-            saver.setup()
-            logger.info("Checkpointer: using GaussDBSaver")
-            yield saver
-        return
-
     raise ValueError(f"Unknown checkpointer type: {config.type!r}")
 
 
@@ -161,18 +133,10 @@ def _sync_checkpointer_from_database_cm(db_config) -> Iterator[Checkpointer]:
         return
 
     if db_config.backend == "gaussdb":
-        try:
-            from deerflow.runtime.checkpointer.gaussdb import GaussDBSaver
-        except ImportError as exc:
-            raise format_gaussdb_import_error(GAUSSDB_INSTALL, exc) from exc
+        from langgraph.checkpoint.memory import InMemorySaver
 
-        if not db_config.gaussdb_url:
-            raise ValueError("database.gaussdb_url is required for the gaussdb backend")
-
-        with GaussDBSaver.from_conn_string(db_config.gaussdb_conninfo) as saver:
-            saver.setup()
-            logger.info("Checkpointer: using GaussDBSaver")
-            yield saver
+        logger.warning("Checkpointer: database.backend=gaussdb only enables ORM persistence. GaussDB-backed LangGraph checkpoint persistence is disabled; falling back to InMemorySaver.")
+        yield InMemorySaver()
         return
 
     raise ValueError(f"Unknown database backend: {db_config.backend!r}")

@@ -1,1 +1,0 @@
-"""GaussDB type compatibility namespace."""

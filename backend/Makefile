@@ -2,10 +2,10 @@ install:
 	uv sync
 
 dev:
-	PYTHONPATH=. DEERFLOW_GATEWAY_RELOAD=1 uv run python run_gateway.py
+	PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --reload
 
 gateway:
-	PYTHONPATH=. uv run python run_gateway.py
+	PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001
 
 test:
 	PYTHONPATH=. uv run pytest tests/ -v

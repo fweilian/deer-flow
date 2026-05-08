@@ -54,13 +54,6 @@ class TestCheckpointerConfig:
         assert config.type == "postgres"
         assert config.connection_string == "postgresql://localhost/db"
 
-    def test_load_gaussdb_config(self):
-        load_checkpointer_config_from_dict({"type": "gaussdb", "connection_string": "gaussdb://localhost/db"})
-        config = get_checkpointer_config()
-        assert config is not None
-        assert config.type == "gaussdb"
-        assert config.connection_string == "gaussdb://localhost/db"
-
     def test_default_connection_string_is_none(self):
         config = CheckpointerConfig(type="memory")
         assert config.connection_string is None
@@ -81,18 +74,6 @@ class TestCheckpointerConfig:
 
 
 class TestGetCheckpointer:
-    def test_gaussdb_import_error_keeps_original_reason(self):
-        from deerflow.runtime.checkpointer.provider import format_gaussdb_import_error
-
-        err = format_gaussdb_import_error(
-            "GaussDB checkpointer dependencies are required",
-            ImportError("No module named 'gaussdb_pool'"),
-        )
-
-        assert "GaussDB checkpointer dependencies are required" in str(err)
-        assert "manually" in str(err)
-        assert "gaussdb_pool" in str(err)
-
     def test_returns_in_memory_saver_when_not_configured(self):
         """get_checkpointer should return InMemorySaver when not configured."""
         from langgraph.checkpoint.memory import InMemorySaver
@@ -142,23 +123,6 @@ class TestGetCheckpointer:
         mock_module = MagicMock()
         mock_module.PostgresSaver = mock_saver
         with patch.dict(sys.modules, {"langgraph.checkpoint.postgres": mock_module}):
-            reset_checkpointer()
-            with pytest.raises(ValueError, match="connection_string is required"):
-                get_checkpointer()
-
-    def test_gaussdb_raises_when_package_missing(self):
-        load_checkpointer_config_from_dict({"type": "gaussdb", "connection_string": "gaussdb://localhost/db"})
-        with patch.dict(sys.modules, {"deerflow.runtime.checkpointer.gaussdb": None}):
-            reset_checkpointer()
-            with pytest.raises(ImportError, match="gaussdb"):
-                get_checkpointer()
-
-    def test_gaussdb_raises_when_connection_string_missing(self):
-        load_checkpointer_config_from_dict({"type": "gaussdb"})
-        mock_saver = MagicMock()
-        mock_module = MagicMock()
-        mock_module.GaussDBSaver = mock_saver
-        with patch.dict(sys.modules, {"deerflow.runtime.checkpointer.gaussdb": mock_module}):
             reset_checkpointer()
             with pytest.raises(ValueError, match="connection_string is required"):
                 get_checkpointer()
@@ -282,30 +246,9 @@ class TestGetCheckpointer:
         mock_saver_cls.from_conn_string.assert_called_once_with("postgresql://localhost/db")
         mock_saver_instance.setup.assert_called_once()
 
-    def test_gaussdb_creates_saver(self):
-        """GaussDB checkpointer is created when compatibility layer is available."""
-        load_checkpointer_config_from_dict({"type": "gaussdb", "connection_string": "gaussdb://localhost/db"})
+    def test_database_gaussdb_falls_back_to_in_memory_saver(self):
+        from langgraph.checkpoint.memory import InMemorySaver
 
-        mock_saver_instance = MagicMock()
-        mock_cm = MagicMock()
-        mock_cm.__enter__ = MagicMock(return_value=mock_saver_instance)
-        mock_cm.__exit__ = MagicMock(return_value=False)
-
-        mock_saver_cls = MagicMock()
-        mock_saver_cls.from_conn_string = MagicMock(return_value=mock_cm)
-
-        mock_module = MagicMock()
-        mock_module.GaussDBSaver = mock_saver_cls
-
-        with patch.dict(sys.modules, {"deerflow.runtime.checkpointer.gaussdb": mock_module}):
-            reset_checkpointer()
-            cp = get_checkpointer()
-
-        assert cp is mock_saver_instance
-        mock_saver_cls.from_conn_string.assert_called_once_with("gaussdb://localhost/db")
-        mock_saver_instance.setup.assert_called_once()
-
-    def test_database_gaussdb_uses_conninfo_for_sync_checkpointer(self):
         from deerflow.config.database_config import DatabaseConfig
         from deerflow.runtime.checkpointer.provider import _sync_checkpointer_from_database_cm
 
@@ -314,22 +257,8 @@ class TestGetCheckpointer:
             gaussdb_url="gaussdb://root:1234@localhost:30100/db",
         )
 
-        mock_saver_instance = MagicMock()
-        mock_cm = MagicMock()
-        mock_cm.__enter__ = MagicMock(return_value=mock_saver_instance)
-        mock_cm.__exit__ = MagicMock(return_value=False)
-
-        mock_saver_cls = MagicMock()
-        mock_saver_cls.from_conn_string = MagicMock(return_value=mock_cm)
-
-        mock_module = MagicMock()
-        mock_module.GaussDBSaver = mock_saver_cls
-
-        with patch.dict(sys.modules, {"deerflow.runtime.checkpointer.gaussdb": mock_module}):
-            with _sync_checkpointer_from_database_cm(db_config) as saver:
-                assert saver is mock_saver_instance
-
-        mock_saver_cls.from_conn_string.assert_called_once_with("host='localhost' port='30100' user='root' password='1234' dbname='db'")
+        with _sync_checkpointer_from_database_cm(db_config) as saver:
+            assert isinstance(saver, InMemorySaver)
 
 
 class TestAsyncCheckpointer:

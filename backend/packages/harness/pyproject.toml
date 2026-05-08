@@ -49,8 +49,6 @@ postgres = [
 ]
 gaussdb = [
     "async-gaussdb>=0.30.4; python_full_version < '3.14'",
-    "gaussdb>=1.0.3; python_full_version < '3.14'",
-    "gaussdb-pool>=1.0.3; python_full_version < '3.14'",
 ]
 pymupdf = ["pymupdf4llm>=0.0.17"]
 

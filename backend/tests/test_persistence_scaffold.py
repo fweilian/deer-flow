@@ -79,29 +79,19 @@ class TestDatabaseConfig:
         )
         assert c.gaussdb_url == "gaussdb://u:p@h:5432/db"
 
-    def test_gaussdb_conninfo_is_derived_from_url(self):
-        c = DatabaseConfig(
-            backend="gaussdb",
-            gaussdb_url="gaussdb://u:p%402@h:5432/db?sslmode=disable",
-        )
+    def test_gaussdb_async_connect_kwargs_support_multi_node_hosts(self):
+        from deerflow.utils.gaussdb import gaussdb_url_to_async_connect_kwargs
 
-        assert c.gaussdb_conninfo == "host='h' port='5432' user='u' password='p@2' dbname='db' sslmode='disable'"
+        kwargs = gaussdb_url_to_async_connect_kwargs("gaussdb://u:pa#ss@wo:rd@host1:30100,host2:30101,host3:30102/db?sslmode=disable")
 
-    def test_gaussdb_conninfo_supports_multi_node_hosts(self):
-        c = DatabaseConfig(
-            backend="gaussdb",
-            gaussdb_url="gaussdb://u:p@host1:5432,host2:5433/db",
-        )
-
-        assert c.gaussdb_conninfo == "host='host1,host2' port='5432,5433' user='u' password='p' dbname='db'"
-
-    def test_gaussdb_conninfo_supports_unescaped_special_chars_in_password(self):
-        c = DatabaseConfig(
-            backend="gaussdb",
-            gaussdb_url="gaussdb://u:pa#ss@wo:rd@host1:5432,host2:5433/db",
-        )
-
-        assert c.gaussdb_conninfo == "host='host1,host2' port='5432,5433' user='u' password='pa#ss@wo:rd' dbname='db'"
+        assert kwargs == {
+            "user": "u",
+            "password": "pa#ss@wo:rd",
+            "host": ["host1", "host2", "host3"],
+            "port": [30100, 30101, 30102],
+            "database": "db",
+            "sslmode": "disable",
+        }
 
     def test_gaussdb_dialect_parses_gaussdb_version_string(self):
         from deerflow.persistence.dialects.gaussdb import PGDialect_async_gaussdb
@@ -307,3 +297,65 @@ class TestEngineLifecycle:
             pass  # noqa: S110 — intentionally ignored
         with pytest.raises(ImportError, match="uv sync --extra gaussdb"):
             await init_engine("gaussdb", url="gaussdb+async_gaussdb://x:x@localhost/x")
+
+    @pytest.mark.anyio
+    async def test_gaussdb_engine_uses_async_creator_for_multi_node_url(self, monkeypatch):
+        from deerflow.persistence import engine as engine_module
+
+        created = {}
+
+        class _DummyEngine:
+            def begin(self):
+                class _Ctx:
+                    async def __aenter__(self_inner):
+                        class _Conn:
+                            async def run_sync(self_conn, fn):
+                                return None
+
+                        return _Conn()
+
+                    async def __aexit__(self_inner, exc_type, exc, tb):
+                        return False
+
+                return _Ctx()
+
+            async def dispose(self):
+                return None
+
+        class _DummySessionFactory:
+            def __call__(self, *args, **kwargs):
+                return None
+
+        async def _fake_connect(**kwargs):
+            created["connect_kwargs"] = kwargs
+            return object()
+
+        def _fake_create_async_engine(url, **kwargs):
+            created["url"] = url
+            created["engine_kwargs"] = kwargs
+            return _DummyEngine()
+
+        monkeypatch.setattr(engine_module, "create_async_engine", _fake_create_async_engine)
+        monkeypatch.setattr(engine_module, "async_sessionmaker", lambda *a, **k: _DummySessionFactory())
+        monkeypatch.setattr(engine_module, "register_gaussdb_async_dialect", lambda: None)
+
+        import types
+
+        monkeypatch.setitem(__import__("sys").modules, "async_gaussdb", types.SimpleNamespace(connect=_fake_connect))
+
+        await engine_module.init_engine(
+            "gaussdb",
+            url="gaussdb+async_gaussdb://root:1234@host1:30100,host2:30101,host3:30102/db",
+        )
+
+        assert created["url"] == "gaussdb+async_gaussdb://"
+        async_creator = created["engine_kwargs"]["async_creator"]
+        await async_creator()
+        assert created["connect_kwargs"] == {
+            "user": "root",
+            "password": "1234",
+            "host": ["host1", "host2", "host3"],
+            "port": [30100, 30101, 30102],
+            "database": "db",
+        }
+        await engine_module.close_engine()

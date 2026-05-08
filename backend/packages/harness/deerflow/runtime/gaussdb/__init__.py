@@ -1,1 +1,0 @@
-"""GaussDB runtime compatibility implementations."""
