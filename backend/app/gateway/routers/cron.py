@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from uuid import uuid4
-
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.gateway.authz import AuthContext, get_auth_context, require_permission
-from app.gateway.cron_scheduler import get_cron_scheduler_repo
+from app.gateway.cron_scheduler import (
+    get_cron_scheduler_repo,
+    get_gateway_cron_job,
+    trigger_gateway_cron_job,
+)
 from app.gateway.deps import get_thread_store
-from app.gateway.services import start_cron_run
 from deerflow.persistence.scheduler.sql import CronSchedulerRepository
-from deerflow.runtime.scheduler import CronJobCreate, CronJobFireRecord, CronJobRecord
+from deerflow.runtime.scheduler import CronJobCreate, CronJobRecord
 
 router = APIRouter(prefix="/api/cron/jobs", tags=["cron"])
 
@@ -56,17 +56,7 @@ async def trigger_cron_job(
     request: Request,
     repo: CronSchedulerRepository = Depends(get_cron_scheduler_repo),
 ) -> CronTriggerResponse:
-    job = await repo.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Cron job {job_id} not found")
-
+    job = await get_gateway_cron_job(job_id, repo)
     await _require_thread_access(request, job.thread_id, require_existing=True)
-
-    fire = CronJobFireRecord(
-        fire_id=f"manual-{uuid4().hex}",
-        job_id=job.job_id,
-        scheduled_fire_at=datetime.now(UTC).timestamp(),
-        status="manual",
-    )
-    run = await start_cron_run(job, fire, request)
+    run = await trigger_gateway_cron_job(job, request)
     return CronTriggerResponse(job_id=job.job_id, run_id=run.run_id)

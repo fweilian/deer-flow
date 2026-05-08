@@ -97,3 +97,23 @@ async def _run_lifespan_with_cron_hooks() -> None:
 
 def test_lifespan_starts_and_stops_cron_scheduler():
     asyncio.run(_run_lifespan_with_cron_hooks())
+
+
+async def _run_stop_gateway_cron_scheduler_clears_state() -> None:
+    from app.gateway.cron_scheduler import stop_gateway_cron_scheduler
+
+    app = FastAPI()
+    task = asyncio.create_task(asyncio.sleep(3600))
+    app.state.cron_scheduler_task = task
+    app.state.cron_scheduler_service = object()
+    app.state.cron_scheduler_repo = object()
+
+    await stop_gateway_cron_scheduler(app)
+
+    assert app.state.cron_scheduler_task is None
+    assert app.state.cron_scheduler_service is None
+    assert app.state.cron_scheduler_repo is None
+
+
+def test_stop_gateway_cron_scheduler_clears_scheduler_state():
+    asyncio.run(_run_stop_gateway_cron_scheduler_clears_state())
