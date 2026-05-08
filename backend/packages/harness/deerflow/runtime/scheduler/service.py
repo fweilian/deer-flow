@@ -72,13 +72,14 @@ class CronSchedulerService:
                 continue
 
             run = await self._run_launcher(job, fire)
-            await self._repo.mark_fire_dispatched(
+            dispatched = await self._repo.mark_fire_dispatched(
                 job.job_id,
                 fire.fire_id,
                 claim_token=fire.claim_token,
                 run_id=run.run_id,
                 fired_at=job.next_fire_at,
             )
-            launched.append(run.run_id)
+            if dispatched:
+                launched.append(run.run_id)
 
         return launched

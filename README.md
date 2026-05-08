@@ -71,6 +71,7 @@ DeerFlow has newly integrated the intelligent search and crawling toolset indepe
     - [Sandbox \& File System](#sandbox--file-system)
     - [Context Engineering](#context-engineering)
     - [Long-Term Memory](#long-term-memory)
+    - [Built-In Cron Scheduler](#built-in-cron-scheduler)
   - [Recommended Models](#recommended-models)
   - [Embedded Python Client](#embedded-python-client)
   - [Documentation](#documentation)
@@ -675,6 +676,16 @@ Most agents forget everything the moment a conversation ends. DeerFlow remembers
 Across sessions, DeerFlow builds a persistent memory of your profile, preferences, and accumulated knowledge. The more you use it, the better it knows you — your writing style, your technical stack, your recurring workflows. Memory is stored locally and stays under your control.
 
 Memory updates now skip duplicate fact entries at apply time, so repeated preferences and context do not accumulate endlessly across sessions.
+
+### Built-In Cron Scheduler
+
+DeerFlow includes a SQL-backed cron scheduler for recurring thread work.
+
+- `POST /api/cron/jobs` creates a schedule that dispatches through the existing run lifecycle.
+- `POST /api/cron/jobs/{job_id}/trigger` launches a manual run without advancing the recurring wall-clock schedule.
+- Multi-instance deployments suppress duplicates through SQL fire claiming plus cron run idempotency keys.
+- Agent sessions can manage schedules directly with the built-in tools `create_schedule`, `list_schedules`, `pause_schedule`, `resume_schedule`, and `delete_schedule`.
+- Postgres is the intended production backend for multi-instance scheduling. Redis is an optional future acceleration layer, not a current requirement.
 
 ## Recommended Models
 

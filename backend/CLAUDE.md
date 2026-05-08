@@ -42,7 +42,7 @@ deer-flow/
 │   │           │   ├── builtins/      # general-purpose, bash agents
 │   │           │   ├── executor.py    # Background execution engine
 │   │           │   └── registry.py    # Agent registry
-│   │           ├── tools/builtins/    # Built-in tools (present_files, ask_clarification, view_image)
+│   │           ├── tools/builtins/    # Built-in tools (present_files, ask_clarification, schedules, view_image)
 │   │           ├── mcp/               # MCP integration (tools, cache, client)
 │   │           ├── models/            # Model factory with thinking/vision support
 │   │           ├── skills/            # Skills discovery, loading, parsing
@@ -222,8 +222,17 @@ FastAPI application on port 8001 with health check at `GET /health`. Set `GATEWA
 | **Thread Runs** (`/api/threads/{id}/runs`) | `POST /` - create background run; `POST /stream` - create + SSE stream; `POST /wait` - create + block; `GET /` - list runs; `GET /{rid}` - run details; `POST /{rid}/cancel` - cancel; `GET /{rid}/join` - join SSE; `GET /{rid}/messages` - paginated messages `{data, has_more}`; `GET /{rid}/events` - full event stream; `GET /../messages` - thread messages with feedback; `GET /../token-usage` - aggregate tokens |
 | **Feedback** (`/api/threads/{id}/runs/{rid}/feedback`) | `PUT /` - upsert feedback; `DELETE /` - delete user feedback; `POST /` - create feedback; `GET /` - list feedback; `GET /stats` - aggregate stats; `DELETE /{fid}` - delete specific |
 | **Runs** (`/api/runs`) | `POST /stream` - stateless run + SSE; `POST /wait` - stateless run + block; `GET /{rid}/messages` - paginated messages by run_id `{data, has_more}` (cursor: `after_seq`/`before_seq`); `GET /{rid}/feedback` - list feedback by run_id |
+| **Cron** (`/api/cron/jobs`) | `POST /` - create cron job; `POST /{job_id}/trigger` - manual trigger without advancing the recurring schedule |
 
 Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → Gateway.
+
+### Cron Scheduler
+
+- Scheduler persistence lives in `packages/harness/deerflow/persistence/scheduler/` with SQL-backed `cron_jobs` and `cron_job_fires`.
+- Every Gateway instance may run the scheduler loop; duplicate suppression relies on SQL fire claiming plus cron run idempotency.
+- Gateway startup/shutdown wiring lives in `app/gateway/cron_scheduler.py`.
+- Agent-facing schedule management lives in `packages/harness/deerflow/tools/builtins/schedule_tool.py` and exposes `create_schedule`, `list_schedules`, `pause_schedule`, `resume_schedule`, and `delete_schedule`.
+- Production multi-instance deployments should use Postgres-backed persistence. Redis is an optional future accelerator, not part of the current correctness model.
 
 ### Sandbox System (`packages/harness/deerflow/sandbox/`)
 

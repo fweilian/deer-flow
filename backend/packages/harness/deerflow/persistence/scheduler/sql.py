@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
 from uuid import uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -131,6 +131,89 @@ class CronSchedulerRepository:
             if row is None:
                 return None
             return self._row_to_record(row)
+
+    async def list_jobs(
+        self,
+        *,
+        thread_id: str,
+        enabled: bool | None = None,
+        limit: int = 100,
+    ) -> list[CronJobRecord]:
+        stmt = select(CronJobRow).where(CronJobRow.thread_id == thread_id).order_by(CronJobRow.created_at.asc()).limit(limit)
+        if enabled is not None:
+            stmt = stmt.where(CronJobRow.enabled.is_(enabled))
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            return [self._row_to_record(row) for row in result.scalars()]
+
+    async def pause_job(self, job_id: str, *, thread_id: str) -> CronJobRecord | None:
+        async with self._sf() as session:
+            row = (
+                await session.execute(
+                    select(CronJobRow).where(
+                        CronJobRow.job_id == job_id,
+                        CronJobRow.thread_id == thread_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            row.enabled = False
+            row.next_fire_at = None
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+            await session.refresh(row)
+            return self._row_to_record(row)
+
+    async def resume_job(
+        self,
+        job_id: str,
+        *,
+        thread_id: str,
+        now: float | datetime | None = None,
+    ) -> CronJobRecord | None:
+        resumed_at = _coerce_datetime(now)
+        async with self._sf() as session:
+            row = (
+                await session.execute(
+                    select(CronJobRow).where(
+                        CronJobRow.job_id == job_id,
+                        CronJobRow.thread_id == thread_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            if row.enabled and row.next_fire_at is not None:
+                return self._row_to_record(row)
+            row.enabled = True
+            row.next_fire_at = _coerce_datetime(compute_next_fire_at(row.cron_expr, row.timezone, now=resumed_at))
+            row.updated_at = resumed_at
+            await session.commit()
+            await session.refresh(row)
+            return self._row_to_record(row)
+
+    async def delete_job(self, job_id: str, *, thread_id: str) -> CronJobRecord | None:
+        async with self._sf() as session:
+            row = (
+                await session.execute(
+                    select(CronJobRow).where(
+                        CronJobRow.job_id == job_id,
+                        CronJobRow.thread_id == thread_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            record = self._row_to_record(row)
+            await session.execute(
+                delete(CronJobRow).where(
+                    CronJobRow.job_id == job_id,
+                    CronJobRow.thread_id == thread_id,
+                )
+            )
+            await session.commit()
+            return record
 
     async def claim_fire(
         self,
