@@ -34,27 +34,26 @@ def _get_scheduler_repo() -> CronSchedulerRepository:
     return CronSchedulerRepository(session_factory)
 
 
-def _resolve_thread_id(runtime: Runtime | None, thread_id: str | None) -> str:
+def _resolve_thread_id(runtime: Runtime, thread_id: str | None) -> str:
     if thread_id:
         return thread_id
 
-    if runtime is not None:
-        context = runtime.context or {}
-        runtime_thread_id = context.get("thread_id")
-        if isinstance(runtime_thread_id, str) and runtime_thread_id:
-            return runtime_thread_id
+    context = runtime.context or {}
+    runtime_thread_id = context.get("thread_id")
+    if isinstance(runtime_thread_id, str) and runtime_thread_id:
+        return runtime_thread_id
 
-        configured_thread_id = runtime.config.get("configurable", {}).get("thread_id")
-        if isinstance(configured_thread_id, str) and configured_thread_id:
-            return configured_thread_id
+    configured_thread_id = runtime.config.get("configurable", {}).get("thread_id")
+    if isinstance(configured_thread_id, str) and configured_thread_id:
+        return configured_thread_id
 
     raise ValueError("thread_id is required when runtime context does not include one.")
 
 
 @tool("create_schedule", parse_docstring=True)
 async def create_schedule_tool(
+    runtime: Runtime,
     cron: str,
-    runtime: Runtime | None = None,
     thread_id: str | None = None,
     assistant_id: str | None = None,
     input: dict[str, Any] | None = None,
@@ -84,7 +83,7 @@ async def create_schedule_tool(
 
 @tool("list_schedules", parse_docstring=True)
 async def list_schedules_tool(
-    runtime: Runtime | None = None,
+    runtime: Runtime,
     thread_id: str | None = None,
     enabled: bool | None = None,
     limit: int = 20,
@@ -112,8 +111,8 @@ async def list_schedules_tool(
 
 @tool("pause_schedule", parse_docstring=True)
 async def pause_schedule_tool(
+    runtime: Runtime,
     job_id: str,
-    runtime: Runtime | None = None,
     thread_id: str | None = None,
 ) -> str:
     """Pause an existing schedule by job id.
@@ -133,8 +132,8 @@ async def pause_schedule_tool(
 
 @tool("resume_schedule", parse_docstring=True)
 async def resume_schedule_tool(
+    runtime: Runtime,
     job_id: str,
-    runtime: Runtime | None = None,
     thread_id: str | None = None,
 ) -> str:
     """Resume a paused schedule by job id.
@@ -154,8 +153,8 @@ async def resume_schedule_tool(
 
 @tool("delete_schedule", parse_docstring=True)
 async def delete_schedule_tool(
+    runtime: Runtime,
     job_id: str,
-    runtime: Runtime | None = None,
     thread_id: str | None = None,
 ) -> str:
     """Delete an existing schedule by job id.

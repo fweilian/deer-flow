@@ -17,6 +17,7 @@ import warnings
 
 import pytest
 from langchain.tools import ToolRuntime
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from deerflow.sandbox.tools import (
     bash_tool,
@@ -28,6 +29,13 @@ from deerflow.sandbox.tools import (
     write_file_tool,
 )
 from deerflow.tools.builtins.present_file_tool import present_file_tool
+from deerflow.tools.builtins.schedule_tool import (
+    create_schedule_tool,
+    delete_schedule_tool,
+    list_schedules_tool,
+    pause_schedule_tool,
+    resume_schedule_tool,
+)
 from deerflow.tools.builtins.setup_agent_tool import setup_agent
 from deerflow.tools.builtins.task_tool import task_tool
 from deerflow.tools.builtins.update_agent_tool import update_agent
@@ -56,6 +64,11 @@ _TOOL_CASES = [
     (write_file_tool, {"description": "write", "path": "/tmp/x", "content": "hi"}),
     (str_replace_tool, {"description": "replace", "path": "/tmp/x", "old_str": "a", "new_str": "b"}),
     (present_file_tool, {"filepaths": ["/tmp/x"], "tool_call_id": "call-1"}),
+    (create_schedule_tool, {"cron": "*/5 * * * *"}),
+    (list_schedules_tool, {}),
+    (pause_schedule_tool, {"job_id": "job-1"}),
+    (resume_schedule_tool, {"job_id": "job-1"}),
+    (delete_schedule_tool, {"job_id": "job-1"}),
     (view_image_tool, {"image_path": "/tmp/img.png", "tool_call_id": "call-1"}),
     (task_tool, {"description": "do", "prompt": "go", "subagent_type": "general-purpose", "tool_call_id": "call-1"}),
     (skill_manage_tool, {"action": "list", "name": "demo"}),
@@ -89,3 +102,22 @@ def test_tool_args_schema_does_not_emit_pydantic_context_warning(tool_obj, extra
 
     pydantic_warnings = [w for w in caught if "PydanticSerializationUnexpectedValue" in str(w.message)]
     assert not pydantic_warnings, f"{tool_obj.name} args_schema.model_dump() emitted Pydantic context serialization warnings: {[str(w.message) for w in pydantic_warnings]}"
+
+
+@pytest.mark.parametrize(
+    "tool_obj",
+    [
+        create_schedule_tool,
+        list_schedules_tool,
+        pause_schedule_tool,
+        resume_schedule_tool,
+        delete_schedule_tool,
+    ],
+    ids=lambda tool_obj: tool_obj.name,
+)
+def test_schedule_tools_convert_to_openai_tool_schema(tool_obj) -> None:
+    converted = convert_to_openai_tool(tool_obj)
+
+    assert converted["type"] == "function"
+    assert converted["function"]["name"] == tool_obj.name
+    assert "runtime" not in converted["function"]["parameters"].get("properties", {})
