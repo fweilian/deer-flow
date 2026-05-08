@@ -125,6 +125,13 @@ class CronSchedulerRepository:
             result = await session.execute(stmt)
             return [self._row_to_record(row) for row in result.scalars()]
 
+    async def get_job(self, job_id: str) -> CronJobRecord | None:
+        async with self._sf() as session:
+            row = (await session.execute(select(CronJobRow).where(CronJobRow.job_id == job_id))).scalar_one_or_none()
+            if row is None:
+                return None
+            return self._row_to_record(row)
+
     async def claim_fire(
         self,
         job_id: str,

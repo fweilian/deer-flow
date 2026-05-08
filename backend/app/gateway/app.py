@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.gateway.auth_middleware import AuthMiddleware
 from app.gateway.config import get_gateway_config
+from app.gateway.cron_scheduler import start_gateway_cron_scheduler, stop_gateway_cron_scheduler
 from app.gateway.csrf_middleware import CSRFMiddleware
 from app.gateway.deps import langgraph_runtime
 from app.gateway.routers import (
@@ -17,6 +18,7 @@ from app.gateway.routers import (
     assistants_compat,
     auth,
     channels,
+    cron,
     feedback,
     mcp,
     memory,
@@ -191,7 +193,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("No IM channels configured or channel service failed to start")
 
+        await start_gateway_cron_scheduler(app)
+
         yield
+
+        try:
+            await asyncio.wait_for(
+                stop_gateway_cron_scheduler(app),
+                timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Cron scheduler shutdown exceeded %.1fs; proceeding with worker exit.",
+                _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            logger.exception("Failed to stop cron scheduler")
 
         # Stop channel service on shutdown (bounded to prevent worker hang)
         try:
@@ -287,6 +304,10 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
                 "description": "Manage IM channel integrations (Feishu, Slack, Telegram)",
             },
             {
+                "name": "cron",
+                "description": "Manage cron jobs and trigger scheduled runs",
+            },
+            {
                 "name": "assistants-compat",
                 "description": "LangGraph Platform-compatible assistants API (stub)",
             },
@@ -357,6 +378,9 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
 
     # Channels API is mounted at /api/channels
     app.include_router(channels.router)
+
+    # Cron scheduler API is mounted at /api/cron/jobs
+    app.include_router(cron.router)
 
     # Assistants compatibility API (LangGraph Platform stub)
     app.include_router(assistants_compat.router)

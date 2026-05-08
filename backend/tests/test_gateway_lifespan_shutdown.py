@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
 
@@ -66,3 +66,34 @@ def test_shutdown_is_bounded_when_channel_stop_hangs():
     assert elapsed < _SHUTDOWN_HOOK_TIMEOUT_SECONDS + 2.0, f"Lifespan shutdown took {elapsed:.2f}s; expected <= {_SHUTDOWN_HOOK_TIMEOUT_SECONDS + 2.0:.1f}s"
     # Lower bound: the wait_for should actually have waited.
     assert elapsed >= _SHUTDOWN_HOOK_TIMEOUT_SECONDS - 0.5, f"Lifespan exited too quickly ({elapsed:.2f}s); wait_for may not have been invoked."
+
+
+async def _run_lifespan_with_cron_hooks() -> None:
+    from app.gateway.app import lifespan
+
+    app = FastAPI()
+
+    fake_service = MagicMock()
+    fake_service.get_status = MagicMock(return_value={})
+
+    async def fake_start_channel():
+        return fake_service
+
+    with (
+        patch("app.gateway.app.get_app_config"),
+        patch("app.gateway.app.get_gateway_config", return_value=MagicMock(host="x", port=0)),
+        patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
+        patch("app.channels.service.start_channel_service", side_effect=fake_start_channel),
+        patch("app.channels.service.stop_channel_service", new=AsyncMock()),
+        patch("app.gateway.app.start_gateway_cron_scheduler", new=AsyncMock()) as start_cron,
+        patch("app.gateway.app.stop_gateway_cron_scheduler", new=AsyncMock()) as stop_cron,
+    ):
+        async with lifespan(app):
+            pass
+
+    start_cron.assert_awaited_once_with(app)
+    stop_cron.assert_awaited_once_with(app)
+
+
+def test_lifespan_starts_and_stops_cron_scheduler():
+    asyncio.run(_run_lifespan_with_cron_hooks())
