@@ -521,9 +521,22 @@ async def test_start_cron_run_with_deps_injects_scheduler_metadata(monkeypatch):
     cron_request = launch_run.await_args.args[0]
 
     assert cron_request.metadata["source"] == "test"
-    assert cron_request.metadata["scheduler"] == {
+    assert cron_request.metadata["scheduler"]["job_id"] == "job-1"
+    assert cron_request.metadata["scheduler"]["fire_id"] == "fire-1"
+    assert cron_request.metadata["scheduler"]["scheduled_fire_at"] == 1746500000
+    assert cron_request.metadata["scheduler"]["idempotency_key"] == "cron:job-1:1746500000"
+    assert cron_request.metadata["scheduler"]["job"] == {
         "job_id": "job-1",
+        "thread_id": "thread-1",
+        "assistant_id": "lead_agent",
+        "cron_expr": "*/5 * * * *",
+        "timezone": "Asia/Shanghai",
+        "creator_user_id": "default",
+        "input": {"messages": [{"role": "user", "content": "hello"}]},
+    }
+    assert cron_request.metadata["scheduler"]["delivery"] is None
+    assert cron_request.metadata["scheduler"]["fire"] == {
         "fire_id": "fire-1",
+        "job_id": "job-1",
         "scheduled_fire_at": 1746500000,
-        "idempotency_key": "cron:job-1:1746500000",
     }

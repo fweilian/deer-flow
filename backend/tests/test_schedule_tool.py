@@ -15,8 +15,10 @@ from deerflow.tools.builtins.schedule_tool import (
 )
 
 
-def _make_runtime(*, thread_id: str | None = None) -> ToolRuntime:
+def _make_runtime(*, thread_id: str | None = None, extra_context: dict | None = None) -> ToolRuntime:
     context = {"thread_id": thread_id} if thread_id is not None else {}
+    if extra_context:
+        context.update(extra_context)
     configurable = {"thread_id": thread_id} if thread_id is not None else {}
     return ToolRuntime(
         state={"thread_data": {}, "sandbox": {}},
@@ -51,6 +53,7 @@ async def test_create_schedule_then_pause_schedule(scheduler_repo, monkeypatch):
             "assistant_id": "lead_agent",
             "delivery": {
                 "kind": "channel",
+                "target_mode": "explicit",
                 "channel_name": "webhook",
                 "chat_id": "ops-room",
                 "thread_ts": "ops-thread",
@@ -95,7 +98,7 @@ async def test_create_schedule_uses_runtime_thread_by_default(scheduler_repo, mo
 
     listed = await list_schedules_tool.ainvoke({"runtime": _make_runtime(thread_id="thread-from-runtime")})
     assert "thread-from-runtime" in listed
-    assert "delivery=default thread reply" in listed
+    assert "delivery=none" in listed
 
 
 @pytest.mark.anyio
@@ -188,3 +191,55 @@ async def test_create_schedule_uses_current_user_context_for_creator_user_id(sch
     jobs = await scheduler_repo.list_jobs(thread_id="thread-user-stamped")
     assert len(jobs) == 1
     assert jobs[0].creator_user_id == "schedule-user-42"
+
+
+@pytest.mark.anyio
+async def test_create_schedule_origin_delivery_uses_runtime_source_context(scheduler_repo, monkeypatch):
+    monkeypatch.setattr("deerflow.tools.builtins.schedule_tool._get_scheduler_repo", lambda: scheduler_repo)
+    monkeypatch.setattr("deerflow.tools.builtins.schedule_tool._system_timezone", lambda: "UTC")
+
+    await create_schedule_tool.ainvoke(
+        {
+            "runtime": _make_runtime(
+                thread_id="thread-origin",
+                extra_context={
+                    "source_channel_name": "feishu",
+                    "source_chat_id": "chat-origin",
+                    "source_thread_ts": "msg-origin",
+                },
+            ),
+            "cron": "0 * * * *",
+            "delivery": {
+                "kind": "channel",
+                "target_mode": "origin",
+            },
+        }
+    )
+
+    jobs = await scheduler_repo.list_jobs(thread_id="thread-origin")
+    assert len(jobs) == 1
+    assert jobs[0].delivery is not None
+    assert jobs[0].delivery.target_mode == "origin"
+    assert jobs[0].delivery.origin is not None
+    assert jobs[0].delivery.origin.channel_name == "feishu"
+    assert jobs[0].delivery.origin.chat_id == "chat-origin"
+    assert jobs[0].delivery.origin.thread_ts == "msg-origin"
+    assert jobs[0].delivery.origin.deerflow_thread_id == "thread-origin"
+
+
+@pytest.mark.anyio
+async def test_create_schedule_origin_delivery_requires_source_context(scheduler_repo, monkeypatch):
+    monkeypatch.setattr("deerflow.tools.builtins.schedule_tool._get_scheduler_repo", lambda: scheduler_repo)
+    monkeypatch.setattr("deerflow.tools.builtins.schedule_tool._system_timezone", lambda: "UTC")
+
+    with pytest.raises(ValueError, match="Origin delivery requires a channel conversation context"):
+        await create_schedule_tool.ainvoke(
+            {
+                "runtime": _make_runtime(thread_id="thread-origin-missing"),
+                "cron": "0 * * * *",
+                "delivery": {
+                    "kind": "channel",
+                    "target_mode": "origin",
+                },
+            }
+        )

@@ -7,7 +7,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 
 def _coerce_now(now: float | datetime | None) -> datetime:
@@ -45,12 +45,105 @@ def compute_next_fire_at(cron: str, timezone: str, *, now: float | datetime | No
     return next_local.astimezone(UTC).timestamp()
 
 
-class CronJobChannelDelivery(BaseModel):
-    kind: Literal["channel"] = "channel"
+class CronJobChannelTarget(BaseModel):
     channel_name: str
     chat_id: str
     thread_ts: str | None = None
+    deerflow_thread_id: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)
+
+
+class CronJobChannelDelivery(BaseModel):
+    kind: Literal["channel"] = "channel"
+    target_mode: Literal["local", "origin", "explicit"] = "explicit"
+    channel_name: str | None = None
+    chat_id: str | None = None
+    thread_ts: str | None = None
+    origin: CronJobChannelTarget | None = None
+    options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("chat_id")
+    @classmethod
+    def _normalize_chat_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("channel_name")
+    @classmethod
+    def _normalize_channel_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("thread_ts")
+    @classmethod
+    def _normalize_thread_ts(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("options")
+    @classmethod
+    def _ensure_options(cls, value: dict[str, Any] | None) -> dict[str, Any]:
+        return value or {}
+
+    @field_validator("chat_id", mode="after")
+    @classmethod
+    def _validate_explicit_requirements(cls, value: str | None, info) -> str | None:
+        mode = info.data.get("target_mode", "explicit")
+        channel_name = info.data.get("channel_name")
+        if mode == "explicit":
+            if not channel_name:
+                raise ValueError("Explicit delivery requires channel_name.")
+            if not value:
+                raise ValueError("Explicit delivery requires chat_id.")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_explicit_target(self) -> CronJobChannelDelivery:
+        if self.target_mode == "explicit":
+            if not self.channel_name:
+                raise ValueError("Explicit delivery requires channel_name.")
+            if not self.chat_id:
+                raise ValueError("Explicit delivery requires chat_id.")
+        return self
+
+
+class CronApiRequestAuth(BaseModel):
+    type: Literal["bearer", "header"] = Field(validation_alias=AliasChoices("type", "kind"))
+    token: str | None = None
+    name: str | None = None
+    value: str | None = None
+
+    @field_validator("token")
+    @classmethod
+    def _validate_bearer_token(cls, value: str | None, info) -> str | None:
+        if info.data.get("type") == "bearer" and not value:
+            raise ValueError("Bearer auth requires token.")
+        return value
+
+    @field_validator("value")
+    @classmethod
+    def _validate_header_auth(cls, value: str | None, info) -> str | None:
+        if info.data.get("type") == "header":
+            if not info.data.get("name"):
+                raise ValueError("Header auth requires name.")
+            if not value:
+                raise ValueError("Header auth requires value.")
+        return value
+
+
+class CronApiRequest(BaseModel):
+    method: Literal["POST", "PUT", "PATCH"] = "POST"
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: float = 10.0
+    body_template: dict[str, Any] | list[Any] | str | None = None
+    auth: CronApiRequestAuth | None = None
 
 
 class CronJobCreate(BaseModel):
@@ -97,3 +190,6 @@ class CronJobFireRecord(BaseModel):
     lease_until: float | None = None
     run_id: str | None = None
     error: str | None = None
+    delivery_status: Literal["pending", "sent", "failed"] | None = None
+    delivery_error: str | None = None
+    delivery_attempted_at: float | None = None

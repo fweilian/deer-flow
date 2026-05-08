@@ -34,6 +34,7 @@ def test_create_cron_job_route():
             context={"agent_name": "lead-agent"},
             delivery={
                 "kind": "channel",
+                "target_mode": "explicit",
                 "channel_name": "webhook",
                 "chat_id": "alerts-room",
                 "thread_ts": "thread-123",
@@ -64,6 +65,7 @@ def test_create_cron_job_route():
                 "context": {"agent_name": "lead-agent"},
                 "delivery": {
                     "kind": "channel",
+                    "target_mode": "explicit",
                     "channel_name": "webhook",
                     "chat_id": "alerts-room",
                     "thread_ts": "thread-123",
@@ -88,9 +90,11 @@ def test_create_cron_job_route():
         "context": {"agent_name": "lead-agent"},
         "delivery": {
             "kind": "channel",
+            "target_mode": "explicit",
             "channel_name": "webhook",
             "chat_id": "alerts-room",
             "thread_ts": "thread-123",
+            "origin": None,
             "options": {"api_request": {"method": "POST", "path": "/hooks/nightly"}},
         },
         "multitask_strategy": "enqueue",

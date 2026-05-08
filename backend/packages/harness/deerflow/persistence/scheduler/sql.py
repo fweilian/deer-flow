@@ -75,6 +75,9 @@ class CronSchedulerRepository:
             lease_until=_datetime_to_timestamp(row.lease_until),
             run_id=row.run_id,
             error=row.error,
+            delivery_status=cast(Literal["pending", "sent", "failed"] | None, row.delivery_status),
+            delivery_error=row.delivery_error,
+            delivery_attempted_at=_datetime_to_timestamp(row.delivery_attempted_at),
         )
 
     async def create_job(
@@ -325,5 +328,34 @@ class CronSchedulerRepository:
             job.next_fire_at = _coerce_datetime(compute_next_fire_at(job.cron_expr, job.timezone, now=fired_time))
             job.updated_at = datetime.now(UTC)
 
+            await session.commit()
+            return True
+
+    async def mark_fire_delivery(
+        self,
+        job_id: str,
+        fire_id: str,
+        *,
+        delivery_status: Literal["pending", "sent", "failed"],
+        delivery_error: str | None = None,
+        attempted_at: float | datetime | None = None,
+    ) -> bool:
+        delivery_time = _coerce_datetime(attempted_at)
+        async with self._sf() as session:
+            fire = (
+                await session.execute(
+                    select(CronJobFireRow).where(
+                        CronJobFireRow.job_id == job_id,
+                        CronJobFireRow.fire_id == fire_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if fire is None:
+                await session.rollback()
+                return False
+
+            fire.delivery_status = delivery_status
+            fire.delivery_error = delivery_error
+            fire.delivery_attempted_at = delivery_time
             await session.commit()
             return True

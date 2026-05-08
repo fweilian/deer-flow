@@ -26,6 +26,9 @@ def get_cron_scheduler_repo(request: Request) -> CronSchedulerRepository:
 
 
 def build_gateway_run_context(app: FastAPI) -> RunContext:
+    from app.channels.service import get_channel_service
+
+    channel_service = get_channel_service()
     return RunContext(
         checkpointer=app.state.checkpointer,
         store=getattr(app.state, "store", None),
@@ -33,6 +36,8 @@ def build_gateway_run_context(app: FastAPI) -> RunContext:
         run_events_config=getattr(app.state.config, "run_events", None),
         thread_store=app.state.thread_store,
         app_config=app.state.config,
+        outbound_publisher=channel_service.bus.publish_outbound if channel_service is not None else None,
+        cron_scheduler_repo=getattr(app.state, "cron_scheduler_repo", None),
     )
 
 

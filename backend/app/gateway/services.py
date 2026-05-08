@@ -223,6 +223,30 @@ def build_run_config(
     return config
 
 
+def _build_cron_scheduler_metadata(job: Any, fire: Any, *, idempotency_key: str) -> dict[str, Any]:
+    return {
+        "job_id": job.job_id,
+        "fire_id": fire.fire_id,
+        "scheduled_fire_at": fire.scheduled_fire_at,
+        "idempotency_key": idempotency_key,
+        "job": {
+            "job_id": job.job_id,
+            "thread_id": job.thread_id,
+            "assistant_id": job.assistant_id,
+            "cron_expr": job.cron,
+            "timezone": job.timezone,
+            "creator_user_id": getattr(job, "creator_user_id", "default"),
+            "input": job.input,
+        },
+        "delivery": job.delivery.model_dump() if getattr(job, "delivery", None) is not None else None,
+        "fire": {
+            "fire_id": fire.fire_id,
+            "job_id": fire.job_id,
+            "scheduled_fire_at": fire.scheduled_fire_at,
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Run lifecycle
 # ---------------------------------------------------------------------------
@@ -288,12 +312,7 @@ async def start_cron_run_with_deps(
 ) -> RunRecord:
     idempotency_key = f"cron:{job.job_id}:{int(fire.scheduled_fire_at)}"
     metadata = dict(job.metadata or {})
-    metadata["scheduler"] = {
-        "job_id": job.job_id,
-        "fire_id": fire.fire_id,
-        "scheduled_fire_at": fire.scheduled_fire_at,
-        "idempotency_key": idempotency_key,
-    }
+    metadata["scheduler"] = _build_cron_scheduler_metadata(job, fire, idempotency_key=idempotency_key)
     cron_request = SimpleNamespace(
         assistant_id=job.assistant_id,
         input=job.input,

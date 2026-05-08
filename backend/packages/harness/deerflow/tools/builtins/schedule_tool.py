@@ -10,7 +10,7 @@ from langchain.tools import tool
 
 from deerflow.persistence.engine import get_session_factory
 from deerflow.persistence.scheduler.sql import CronSchedulerRepository
-from deerflow.runtime.scheduler import CronJobChannelDelivery, CronJobCreate
+from deerflow.runtime.scheduler import CronJobChannelDelivery, CronJobChannelTarget, CronJobCreate
 from deerflow.runtime.user_context import get_current_user, get_effective_user_id
 from deerflow.tools.types import Runtime
 
@@ -64,11 +64,55 @@ def _resolve_creator_user_id(runtime: Runtime) -> str:
     return get_effective_user_id()
 
 
+def _resolve_origin_target(runtime: Runtime, deerflow_thread_id: str) -> CronJobChannelTarget | None:
+    context = runtime.context or {}
+    channel_name = context.get("source_channel_name")
+    chat_id = context.get("source_chat_id")
+    if not isinstance(channel_name, str) or not channel_name.strip():
+        return None
+    if not isinstance(chat_id, str) or not chat_id.strip():
+        return None
+    thread_ts = context.get("source_thread_ts")
+    return CronJobChannelTarget(
+        channel_name=channel_name.strip(),
+        chat_id=chat_id.strip(),
+        thread_ts=thread_ts.strip() if isinstance(thread_ts, str) and thread_ts.strip() else None,
+        deerflow_thread_id=deerflow_thread_id,
+        options=context.get("source_delivery_options") if isinstance(context.get("source_delivery_options"), dict) else {},
+    )
+
+
+def _resolve_delivery(runtime: Runtime, delivery: CronJobChannelDelivery | None, deerflow_thread_id: str) -> CronJobChannelDelivery | None:
+    if delivery is None:
+        return None
+    if delivery.target_mode != "origin":
+        return delivery
+    if delivery.origin is not None:
+        return delivery
+
+    origin = _resolve_origin_target(runtime, deerflow_thread_id)
+    if origin is None:
+        raise ValueError("Origin delivery requires a channel conversation context with source_channel_name and source_chat_id.")
+    return delivery.model_copy(update={"origin": origin})
+
+
 def _format_delivery_summary(delivery: CronJobChannelDelivery | None) -> str:
     if delivery is None:
-        return "default thread reply"
+        return "none"
+    if delivery.target_mode == "local":
+        return "local"
+    if delivery.target_mode == "origin":
+        origin = delivery.origin
+        if origin is None:
+            return "origin:unresolved"
+        summary = f"origin:{origin.channel_name} chat={origin.chat_id}"
+        if origin.thread_ts:
+            summary += f" thread={origin.thread_ts}"
+        if origin.deerflow_thread_id:
+            summary += f" deerflow_thread={origin.deerflow_thread_id}"
+        return summary
 
-    summary = f"channel:{delivery.channel_name} chat={delivery.chat_id}"
+    summary = f"explicit:{delivery.channel_name} chat={delivery.chat_id}"
     if delivery.thread_ts:
         summary += f" thread={delivery.thread_ts}"
     if delivery.options:
@@ -93,9 +137,26 @@ async def create_schedule_tool(
         assistant_id: Optional assistant identifier to bind to the schedule.
         input: Optional input payload that will be passed to the scheduled run.
         delivery: Optional delivery target for scheduled replies.
+            - If omitted, the scheduled run will still execute, but no outbound
+              success notification will be sent to any channel.
+            - If `target_mode="local"`, the scheduled run will execute and no
+              outbound delivery will be attempted.
+            - If `target_mode="origin"`, the schedule will reply back to the
+              channel conversation that created it. This requires channel-origin
+              runtime context and will capture the source channel target plus the
+              DeerFlow thread id used at creation time.
+            - If `target_mode="explicit"`, the delivery config must include a
+              concrete target such as `channel_name` and `chat_id`.
+            - For `channel_name="webhook"` or an origin target of `webhook`,
+              real outbound delivery requires `delivery.options.api_request` or
+              `delivery.origin.options.api_request`, including at least the
+              third-party API `url`.
+            - Without that API request block, webhook delivery falls back to
+              logging only and will not call an external API.
     """
 
     resolved_thread_id = _resolve_thread_id(runtime, thread_id)
+    resolved_delivery = _resolve_delivery(runtime, delivery, resolved_thread_id)
     repo = _get_scheduler_repo()
     record = await repo.create_job(
         CronJobCreate(
@@ -105,7 +166,7 @@ async def create_schedule_tool(
             cron=cron,
             timezone=_system_timezone(),
             input=input,
-            delivery=delivery,
+            delivery=resolved_delivery,
         )
     )
     return f"Schedule {record.job_id} created for thread {record.thread_id}. Next fire at {record.next_fire_at} ({record.timezone})."

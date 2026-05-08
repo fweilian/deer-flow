@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import parse_qsl, quote_plus, unquote_plus
 
+import httpx
+
 from app.channels.base import Channel
 from app.channels.message_bus import InboundMessage, MessageBus, OutboundMessage
 
@@ -22,6 +24,7 @@ _INSECURE_NO_AUTH = "INSECURE_NO_AUTH"
 _DEFAULT_MAX_BODY_BYTES = 1_048_576
 _DEFAULT_RATE_LIMIT_PER_MINUTE = 30
 _DEFAULT_IDEMPOTENCY_TTL_SECONDS = 3600
+_CRON_TEMPLATE_PATTERN = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}|\{([a-zA-Z0-9_.]+)\}")
 
 
 class WebhookChannel(Channel):
@@ -71,6 +74,11 @@ class WebhookChannel(Channel):
         logger.info("Webhook channel stopped")
 
     async def send(self, msg: OutboundMessage) -> None:
+        cron_delivery = msg.metadata.get("cron_delivery") if isinstance(msg.metadata, Mapping) else None
+        api_request = self._extract_api_request(cron_delivery)
+        if isinstance(api_request, Mapping):
+            await self._send_cron_api_request(api_request, cron_delivery)
+            return
         logger.info(
             "[Webhook] response chat_id=%s thread_id=%s text=%s",
             msg.chat_id,
@@ -215,6 +223,81 @@ class WebhookChannel(Channel):
                 normalized[str(key)] = dict(value)
         return normalized
 
+    @staticmethod
+    def _extract_api_request(cron_delivery: Any) -> Mapping[str, Any] | None:
+        if not isinstance(cron_delivery, Mapping):
+            return None
+        delivery = cron_delivery.get("delivery")
+        if not isinstance(delivery, Mapping):
+            return None
+        options = delivery.get("options")
+        if not isinstance(options, Mapping):
+            return None
+        api_request = options.get("api_request")
+        return api_request if isinstance(api_request, Mapping) else None
+
+    async def _send_cron_api_request(self, api_request: Mapping[str, Any], cron_delivery: Any) -> None:
+        method = str(api_request.get("method") or "POST").upper()
+        url = str(api_request.get("url") or "").strip()
+        if method not in {"POST", "PUT", "PATCH"}:
+            raise RuntimeError(f"Unsupported cron webhook method: {method}")
+        if not url:
+            raise RuntimeError("Cron webhook delivery requires api_request.url")
+
+        headers = {key: str(value) for key, value in (api_request.get("headers") or {}).items() if isinstance(key, str) and isinstance(value, (str, int, float))}
+        auth = api_request.get("auth")
+        if isinstance(auth, Mapping):
+            auth_type = str(auth.get("type") or auth.get("kind") or "").strip().lower()
+            if auth_type == "bearer":
+                token = str(auth.get("token") or "").strip()
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+            elif auth_type == "header":
+                name = str(auth.get("name") or "").strip()
+                value = str(auth.get("value") or "").strip()
+                if name and value:
+                    headers[name] = value
+        headers.setdefault("Content-Type", "application/json")
+
+        timeout_seconds = float(api_request.get("timeout_seconds") or 10.0)
+        body_template = api_request.get("body_template")
+        json_payload = self._render_cron_template(body_template, cron_delivery) if body_template is not None else cron_delivery
+
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            response = await client.request(method, url, headers=headers, json=json_payload)
+        if response.status_code < 200 or response.status_code >= 300:
+            raise RuntimeError(f"Cron webhook API request failed with status {response.status_code}: {response.text}")
+
+    def _render_cron_template(self, template: Any, payload: Any) -> Any:
+        if isinstance(template, str):
+            return self._render_cron_template_string(template, payload)
+        if isinstance(template, list):
+            return [self._render_cron_template(item, payload) for item in template]
+        if isinstance(template, Mapping):
+            return {str(key): self._render_cron_template(value, payload) for key, value in template.items()}
+        return template
+
+    def _render_cron_template_string(self, template: str, payload: Any) -> str:
+        def replace(match: re.Match[str]) -> str:
+            path = match.group(1) or match.group(2) or ""
+            value = self._resolve_template_value(payload, path)
+            if value is None:
+                return ""
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, ensure_ascii=False)
+            return str(value)
+
+        return _CRON_TEMPLATE_PATTERN.sub(replace, template)
+
+    @staticmethod
+    def _resolve_template_value(payload: Any, path: str) -> Any:
+        current = payload
+        for key in path.split("."):
+            if not isinstance(current, Mapping):
+                return None
+            current = current.get(key)
+        return current
+
     def _validate_routes(self, routes: dict[str, dict[str, Any]]) -> None:
         for route_name, route in routes.items():
             secret = str(route.get("secret") or "").strip()
@@ -226,9 +309,7 @@ class WebhookChannel(Channel):
                 deliver_extra = route.get("deliver_extra") if isinstance(route.get("deliver_extra"), Mapping) else {}
                 target_chat_id = str(deliver_extra.get("chat_id") or "").strip()
                 if deliver != "log" and not target_chat_id:
-                    raise ValueError(
-                        f"[webhook] route '{route_name}' has deliver_only=true but missing deliver_extra.chat_id"
-                    )
+                    raise ValueError(f"[webhook] route '{route_name}' has deliver_only=true but missing deliver_extra.chat_id")
 
     def _take_rate_limit_token(self, route_name: str) -> bool:
         now = time.time()
@@ -263,22 +344,11 @@ class WebhookChannel(Channel):
 
     @staticmethod
     def _resolve_event_type(headers: Mapping[str, str], payload: Mapping[str, Any]) -> str:
-        return (
-            str(headers.get("x-github-event") or "").strip()
-            or str(headers.get("x-gitee-event") or "").strip()
-            or str(payload.get("event_type") or "").strip()
-            or str(payload.get("hook_name") or "").strip()
-            or "unknown"
-        )
+        return str(headers.get("x-github-event") or "").strip() or str(headers.get("x-gitee-event") or "").strip() or str(payload.get("event_type") or "").strip() or str(payload.get("hook_name") or "").strip() or "unknown"
 
     @staticmethod
     def _resolve_delivery_id(headers: Mapping[str, str]) -> str:
-        return (
-            str(headers.get("x-github-delivery") or "").strip()
-            or str(headers.get("x-gitee-delivery") or "").strip()
-            or str(headers.get("x-request-id") or "").strip()
-            or str(int(time.time() * 1000))
-        )
+        return str(headers.get("x-github-delivery") or "").strip() or str(headers.get("x-gitee-delivery") or "").strip() or str(headers.get("x-request-id") or "").strip() or str(int(time.time() * 1000))
 
     def _validate_signature(
         self,

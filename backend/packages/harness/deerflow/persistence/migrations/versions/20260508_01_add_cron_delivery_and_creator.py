@@ -21,9 +21,17 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("creator_user_id", sa.String(length=64), nullable=False, server_default="default"))
         batch_op.add_column(sa.Column("delivery_json", sa.JSON(), nullable=True))
         batch_op.create_index(batch_op.f("ix_cron_jobs_creator_user_id"), ["creator_user_id"], unique=False)
+    with op.batch_alter_table("cron_job_fires") as batch_op:
+        batch_op.add_column(sa.Column("delivery_status", sa.String(length=16), nullable=True))
+        batch_op.add_column(sa.Column("delivery_error", sa.Text(), nullable=True))
+        batch_op.add_column(sa.Column("delivery_attempted_at", sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:
+    with op.batch_alter_table("cron_job_fires") as batch_op:
+        batch_op.drop_column("delivery_attempted_at")
+        batch_op.drop_column("delivery_error")
+        batch_op.drop_column("delivery_status")
     with op.batch_alter_table("cron_jobs") as batch_op:
         batch_op.drop_index(batch_op.f("ix_cron_jobs_creator_user_id"))
         batch_op.drop_column("delivery_json")

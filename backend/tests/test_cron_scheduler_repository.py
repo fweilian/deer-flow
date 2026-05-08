@@ -62,6 +62,7 @@ class TestCronSchedulerRepository:
                 context={},
                 delivery={
                     "kind": "channel",
+                    "target_mode": "explicit",
                     "channel_name": "webhook",
                     "chat_id": "deploy-room",
                     "thread_ts": "deploy-thread",

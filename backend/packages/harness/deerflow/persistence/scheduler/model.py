@@ -47,3 +47,6 @@ class CronJobFireRow(Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     run_id: Mapped[str | None] = mapped_column(String(64))
     error: Mapped[str | None] = mapped_column(Text)
+    delivery_status: Mapped[str | None] = mapped_column(String(16))
+    delivery_error: Mapped[str | None] = mapped_column(Text)
+    delivery_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

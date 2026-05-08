@@ -141,6 +141,9 @@ def get_run_context(request: Request) -> RunContext:
     Returns a *base* context with infrastructure dependencies.
     """
     config = get_config(request)
+    from app.channels.service import get_channel_service
+
+    channel_service = get_channel_service()
     return RunContext(
         checkpointer=get_checkpointer(request),
         store=get_store(request),
@@ -148,6 +151,8 @@ def get_run_context(request: Request) -> RunContext:
         run_events_config=getattr(config, "run_events", None),
         thread_store=get_thread_store(request),
         app_config=config,
+        outbound_publisher=channel_service.bus.publish_outbound if channel_service is not None else None,
+        cron_scheduler_repo=getattr(request.app.state, "cron_scheduler_repo", None),
     )
 
 

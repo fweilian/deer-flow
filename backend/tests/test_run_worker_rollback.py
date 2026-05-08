@@ -6,6 +6,7 @@ import pytest
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.memory import InMemorySaver
 
+from app.channels.message_bus import OutboundMessage
 from deerflow.runtime.runs.manager import RunManager
 from deerflow.runtime.runs.schemas import RunStatus
 from deerflow.runtime.runs.worker import RunContext, _agent_factory_supports_app_config, _build_runtime_context, _install_runtime_context, _rollback_to_pre_run_checkpoint, run_agent
@@ -91,6 +92,270 @@ async def test_run_agent_threads_explicit_app_config_into_config_only_factory():
     assert run_manager.get(record.run_id).status == RunStatus.success
     bridge.publish_end.assert_awaited_once_with(record.run_id)
     bridge.cleanup.assert_awaited_once_with(record.run_id, delay=60)
+
+
+@pytest.mark.anyio
+async def test_run_agent_success_sends_cron_delivery_and_records_success():
+    run_manager = RunManager()
+    record = await run_manager.create(
+        "thread-1",
+        assistant_id="lead_agent",
+        metadata={
+            "scheduler": {
+                "job": {
+                    "job_id": "job-1",
+                    "thread_id": "thread-1",
+                    "assistant_id": "lead_agent",
+                    "cron": "*/5 * * * *",
+                    "timezone": "Asia/Shanghai",
+                },
+                "delivery": {
+                    "kind": "channel",
+                    "target_mode": "explicit",
+                    "channel_name": "webhook",
+                    "chat_id": "cron-webhook",
+                    "thread_ts": "thread-ts-1",
+                    "text": "Cron run completed",
+                },
+                "fire": {
+                    "fire_id": "fire-1",
+                    "job_id": "job-1",
+                    "scheduled_fire_at": 1746500000,
+                },
+            }
+        },
+    )
+    bridge = SimpleNamespace(
+        publish=AsyncMock(),
+        publish_end=AsyncMock(),
+        cleanup=AsyncMock(),
+    )
+    outbound_publisher = AsyncMock()
+    cron_repo = SimpleNamespace(mark_fire_delivery=AsyncMock())
+
+    class DummyAgent:
+        async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
+            yield {"messages": []}
+
+    await run_agent(
+        bridge,
+        run_manager,
+        record,
+        ctx=RunContext(
+            checkpointer=None,
+            outbound_publisher=outbound_publisher,
+            cron_scheduler_repo=cron_repo,
+        ),
+        agent_factory=lambda *, config: DummyAgent(),
+        graph_input={},
+        config={},
+    )
+    await asyncio.sleep(0)
+
+    sent = outbound_publisher.await_args.args[0]
+    assert isinstance(sent, OutboundMessage)
+    assert sent.channel_name == "webhook"
+    assert sent.chat_id == "cron-webhook"
+    assert sent.thread_ts == "thread-ts-1"
+    assert sent.text == "Cron run completed"
+    assert sent.metadata["cron_delivery"]["job"]["job_id"] == "job-1"
+    assert sent.metadata["cron_delivery"]["fire"]["fire_id"] == "fire-1"
+    assert sent.metadata["cron_delivery"]["run"]["run_id"] == record.run_id
+    assert sent.metadata["cron_delivery"]["result"]["status"] == "success"
+    assert cron_repo.mark_fire_delivery.await_args_list[0] == call(
+        "job-1",
+        "fire-1",
+        delivery_status="pending",
+        delivery_error=None,
+    )
+    assert cron_repo.mark_fire_delivery.await_args_list[1] == call(
+        "job-1",
+        "fire-1",
+        delivery_status="sent",
+        delivery_error=None,
+    )
+    assert run_manager.get(record.run_id).status == RunStatus.success
+
+
+@pytest.mark.anyio
+async def test_run_agent_delivery_failure_does_not_flip_run_success():
+    run_manager = RunManager()
+    record = await run_manager.create(
+        "thread-1",
+        metadata={
+            "scheduler": {
+                "job": {
+                    "job_id": "job-1",
+                    "thread_id": "thread-1",
+                    "cron": "*/5 * * * *",
+                    "timezone": "Asia/Shanghai",
+                },
+                "delivery": {
+                    "kind": "channel",
+                    "target_mode": "explicit",
+                    "channel_name": "webhook",
+                    "chat_id": "cron-webhook",
+                    "text": "Cron run completed",
+                },
+                "fire": {
+                    "fire_id": "fire-1",
+                    "job_id": "job-1",
+                    "scheduled_fire_at": 1746500000,
+                },
+            }
+        },
+    )
+    bridge = SimpleNamespace(
+        publish=AsyncMock(),
+        publish_end=AsyncMock(),
+        cleanup=AsyncMock(),
+    )
+    outbound_publisher = AsyncMock(side_effect=RuntimeError("delivery boom"))
+    cron_repo = SimpleNamespace(mark_fire_delivery=AsyncMock())
+
+    class DummyAgent:
+        async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
+            yield {"messages": []}
+
+    await run_agent(
+        bridge,
+        run_manager,
+        record,
+        ctx=RunContext(
+            checkpointer=None,
+            outbound_publisher=outbound_publisher,
+            cron_scheduler_repo=cron_repo,
+        ),
+        agent_factory=lambda *, config: DummyAgent(),
+        graph_input={},
+        config={},
+    )
+    await asyncio.sleep(0)
+
+    assert cron_repo.mark_fire_delivery.await_args_list[0] == call(
+        "job-1",
+        "fire-1",
+        delivery_status="pending",
+        delivery_error=None,
+    )
+    assert cron_repo.mark_fire_delivery.await_args_list[1].kwargs["delivery_status"] == "failed"
+    assert "delivery boom" in cron_repo.mark_fire_delivery.await_args_list[1].kwargs["delivery_error"]
+    assert run_manager.get(record.run_id).status == RunStatus.success
+
+
+@pytest.mark.anyio
+async def test_run_agent_origin_delivery_uses_origin_target():
+    run_manager = RunManager()
+    record = await run_manager.create(
+        "thread-origin",
+        metadata={
+            "scheduler": {
+                "job": {
+                    "job_id": "job-origin",
+                    "thread_id": "thread-origin",
+                    "cron": "0 * * * *",
+                    "timezone": "Asia/Shanghai",
+                },
+                "delivery": {
+                    "kind": "channel",
+                    "target_mode": "origin",
+                    "origin": {
+                        "channel_name": "feishu",
+                        "chat_id": "chat-origin",
+                        "thread_ts": "msg-origin",
+                        "deerflow_thread_id": "thread-origin",
+                    },
+                },
+                "fire": {
+                    "fire_id": "fire-origin",
+                    "job_id": "job-origin",
+                    "scheduled_fire_at": 1746500000,
+                },
+            }
+        },
+    )
+    bridge = SimpleNamespace(publish=AsyncMock(), publish_end=AsyncMock(), cleanup=AsyncMock())
+    outbound_publisher = AsyncMock()
+    cron_repo = SimpleNamespace(mark_fire_delivery=AsyncMock())
+
+    class DummyAgent:
+        async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
+            yield {"messages": []}
+
+    await run_agent(
+        bridge,
+        run_manager,
+        record,
+        ctx=RunContext(checkpointer=None, outbound_publisher=outbound_publisher, cron_scheduler_repo=cron_repo),
+        agent_factory=lambda *, config: DummyAgent(),
+        graph_input={},
+        config={},
+    )
+
+    sent = outbound_publisher.await_args.args[0]
+    assert sent.channel_name == "feishu"
+    assert sent.chat_id == "chat-origin"
+    assert sent.thread_ts == "msg-origin"
+    assert sent.metadata["cron_delivery"]["delivery"]["target_mode"] == "origin"
+    assert sent.metadata["cron_delivery"]["delivery"]["deerflow_thread_id"] == "thread-origin"
+
+
+@pytest.mark.anyio
+async def test_run_agent_local_delivery_skips_outbound_publish():
+    run_manager = RunManager()
+    record = await run_manager.create(
+        "thread-local",
+        metadata={
+            "scheduler": {
+                "job": {
+                    "job_id": "job-local",
+                    "thread_id": "thread-local",
+                    "cron": "0 * * * *",
+                    "timezone": "Asia/Shanghai",
+                },
+                "delivery": {
+                    "kind": "channel",
+                    "target_mode": "local",
+                },
+                "fire": {
+                    "fire_id": "fire-local",
+                    "job_id": "job-local",
+                    "scheduled_fire_at": 1746500000,
+                },
+            }
+        },
+    )
+    bridge = SimpleNamespace(publish=AsyncMock(), publish_end=AsyncMock(), cleanup=AsyncMock())
+    outbound_publisher = AsyncMock()
+    cron_repo = SimpleNamespace(mark_fire_delivery=AsyncMock())
+
+    class DummyAgent:
+        async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
+            yield {"messages": []}
+
+    await run_agent(
+        bridge,
+        run_manager,
+        record,
+        ctx=RunContext(checkpointer=None, outbound_publisher=outbound_publisher, cron_scheduler_repo=cron_repo),
+        agent_factory=lambda *, config: DummyAgent(),
+        graph_input={},
+        config={},
+    )
+
+    outbound_publisher.assert_not_awaited()
+    assert cron_repo.mark_fire_delivery.await_args_list[0] == call(
+        "job-local",
+        "fire-local",
+        delivery_status="pending",
+        delivery_error=None,
+    )
+    assert cron_repo.mark_fire_delivery.await_args_list[1] == call(
+        "job-local",
+        "fire-local",
+        delivery_status="sent",
+        delivery_error=None,
+    )
 
 
 @pytest.mark.anyio

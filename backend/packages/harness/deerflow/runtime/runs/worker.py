@@ -83,6 +83,8 @@ class RunContext:
     run_events_config: Any | None = field(default=None)
     thread_store: Any | None = field(default=None)
     app_config: AppConfig | None = field(default=None)
+    outbound_publisher: Any | None = field(default=None)
+    cron_scheduler_repo: Any | None = field(default=None)
 
 
 def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> None:
@@ -146,6 +148,8 @@ async def run_agent(
     pre_run_checkpoint_id: str | None = None
     pre_run_snapshot: dict[str, Any] | None = None
     snapshot_capture_failed = False
+    completion_data: dict[str, Any] = {}
+    last_values_snapshot: Any = None
 
     journal = None
 
@@ -276,6 +280,8 @@ async def run_agent(
                 if record.abort_event.is_set():
                     logger.info("Run %s abort requested — stopping", run_id)
                     break
+                if single_mode == "values":
+                    last_values_snapshot = chunk
                 sse_event = _lg_mode_to_sse_event(single_mode)
                 await bridge.publish(run_id, sse_event, serialize(chunk, mode=single_mode))
         else:
@@ -294,6 +300,8 @@ async def run_agent(
                 if mode is None:
                     continue
 
+                if mode == "values":
+                    last_values_snapshot = chunk
                 sse_event = _lg_mode_to_sse_event(mode)
                 await bridge.publish(run_id, sse_event, serialize(chunk, mode=mode))
 
@@ -318,6 +326,14 @@ async def run_agent(
                 await run_manager.set_status(run_id, RunStatus.interrupted)
         else:
             await run_manager.set_status(run_id, RunStatus.success)
+            await _deliver_cron_success_notification(
+                record=record,
+                run_id=run_id,
+                thread_id=thread_id,
+                result=last_values_snapshot,
+                outbound_publisher=ctx.outbound_publisher,
+                cron_scheduler_repo=ctx.cron_scheduler_repo,
+            )
 
     except asyncio.CancelledError:
         action = record.abort_action
@@ -362,8 +378,8 @@ async def run_agent(
 
             try:
                 # Persist token usage + convenience fields to RunStore
-                completion = journal.get_completion_data()
-                await run_manager.update_run_completion(run_id, status=record.status.value, **completion)
+                completion_data = journal.get_completion_data()
+                await run_manager.update_run_completion(run_id, status=record.status.value, **completion_data)
             except Exception:
                 logger.warning("Failed to persist run completion for %s (non-fatal)", run_id, exc_info=True)
 
@@ -516,6 +532,245 @@ def _lg_mode_to_sse_event(mode: str) -> str:
     """
     # All LG modes map 1:1 to SSE event names — "messages" stays "messages"
     return mode
+
+
+def _resolve_outbound_publisher(explicit_publisher: Any | None) -> Any | None:
+    if explicit_publisher is not None:
+        return explicit_publisher
+    from app.channels.service import get_channel_service
+
+    channel_service = get_channel_service()
+    if channel_service is None:
+        return None
+    return channel_service.bus.publish_outbound
+
+
+async def _deliver_cron_success_notification(
+    *,
+    record: RunRecord,
+    run_id: str,
+    thread_id: str,
+    result: Any,
+    outbound_publisher: Any | None,
+    cron_scheduler_repo: Any | None,
+) -> None:
+    scheduler = record.metadata.get("scheduler")
+    if not isinstance(scheduler, dict):
+        return
+
+    delivery = scheduler.get("delivery")
+    if not isinstance(delivery, dict):
+        return
+    if delivery.get("kind") != "channel":
+        return
+
+    job = scheduler.get("job")
+    fire = scheduler.get("fire")
+    if not isinstance(job, dict) or not isinstance(fire, dict):
+        return
+
+    job_id = job.get("job_id")
+    fire_id = fire.get("fire_id")
+    repo = cron_scheduler_repo
+    if repo is not None and isinstance(job_id, str) and isinstance(fire_id, str):
+        try:
+            await repo.mark_fire_delivery(job_id, fire_id, delivery_status="pending", delivery_error=None)
+        except Exception:
+            logger.warning("Failed to mark cron fire delivery pending for run %s", run_id, exc_info=True)
+
+    resolved_delivery = _resolve_cron_delivery_target(delivery, thread_id)
+    if resolved_delivery is None:
+        if repo is not None and isinstance(job_id, str) and isinstance(fire_id, str):
+            try:
+                await repo.mark_fire_delivery(job_id, fire_id, delivery_status="sent", delivery_error=None)
+            except Exception:
+                logger.warning("Failed to mark cron fire local delivery sent for run %s", run_id, exc_info=True)
+        return
+
+    if isinstance(resolved_delivery.get("error"), str):
+        if repo is not None and isinstance(job_id, str) and isinstance(fire_id, str):
+            try:
+                await repo.mark_fire_delivery(
+                    job_id,
+                    fire_id,
+                    delivery_status="failed",
+                    delivery_error=cast(str, resolved_delivery.get("error")),
+                )
+            except Exception:
+                logger.warning("Failed to persist cron delivery target resolution failure for run %s", run_id, exc_info=True)
+        return
+
+    payload = _build_cron_delivery_payload(
+        record=record,
+        run_id=run_id,
+        thread_id=thread_id,
+        scheduler=scheduler,
+        resolved_delivery=cast(dict[str, Any], resolved_delivery),
+        result=result,
+    )
+    publisher = _resolve_outbound_publisher(outbound_publisher)
+    if publisher is None:
+        if repo is not None and isinstance(job_id, str) and isinstance(fire_id, str):
+            try:
+                await repo.mark_fire_delivery(
+                    job_id,
+                    fire_id,
+                    delivery_status="failed",
+                    delivery_error="No outbound publisher available for cron delivery.",
+                )
+            except Exception:
+                logger.warning("Failed to mark cron fire delivery failure for run %s", run_id, exc_info=True)
+        return
+
+    from app.channels.message_bus import OutboundMessage
+
+    outbound = OutboundMessage(
+        channel_name=str(resolved_delivery.get("channel_name") or ""),
+        chat_id=str(resolved_delivery.get("chat_id") or ""),
+        thread_id=thread_id,
+        text=str(delivery.get("text") or _format_cron_delivery_text(payload)),
+        thread_ts=cast(str | None, resolved_delivery.get("thread_ts")),
+        metadata={"cron_delivery": payload},
+    )
+    try:
+        await publisher(outbound)
+    except Exception as exc:
+        logger.warning("Cron delivery publish failed for run %s", run_id, exc_info=True)
+        if repo is not None and isinstance(job_id, str) and isinstance(fire_id, str):
+            try:
+                await repo.mark_fire_delivery(
+                    job_id,
+                    fire_id,
+                    delivery_status="failed",
+                    delivery_error=str(exc),
+                )
+            except Exception:
+                logger.warning("Failed to persist cron delivery failure for run %s", run_id, exc_info=True)
+        return
+
+    if repo is not None and isinstance(job_id, str) and isinstance(fire_id, str):
+        try:
+            await repo.mark_fire_delivery(job_id, fire_id, delivery_status="sent", delivery_error=None)
+        except Exception:
+            logger.warning("Failed to mark cron fire delivery sent for run %s", run_id, exc_info=True)
+
+
+def _build_cron_delivery_payload(
+    *,
+    record: RunRecord,
+    run_id: str,
+    thread_id: str,
+    scheduler: dict[str, Any],
+    resolved_delivery: dict[str, Any],
+    result: Any,
+) -> dict[str, Any]:
+    from app.channels.manager import _extract_artifacts, _extract_response_text
+
+    job = cast(dict[str, Any], scheduler.get("job") or {})
+    delivery = cast(dict[str, Any], scheduler.get("delivery") or {})
+    fire = cast(dict[str, Any], scheduler.get("fire") or {})
+    response_text = _extract_response_text(result) if isinstance(result, (dict, list)) else ""
+    artifacts = _extract_artifacts(result) if isinstance(result, (dict, list)) else []
+    return {
+        "event": "cron.run.completed",
+        "job": {
+            "job_id": job.get("job_id"),
+            "thread_id": job.get("thread_id", thread_id),
+            "assistant_id": job.get("assistant_id"),
+            "cron_expr": job.get("cron_expr") or job.get("cron"),
+            "timezone": job.get("timezone"),
+            "creator_user_id": job.get("creator_user_id", "default"),
+            "input": job.get("input"),
+        },
+        "delivery": resolved_delivery,
+        "requested_delivery": {
+            "kind": delivery.get("kind", "channel"),
+            "target_mode": delivery.get("target_mode", "explicit"),
+            "channel_name": delivery.get("channel_name"),
+            "chat_id": delivery.get("chat_id"),
+            "thread_ts": delivery.get("thread_ts"),
+            "origin": delivery.get("origin"),
+            "text": delivery.get("text"),
+            "options": delivery.get("options") or {},
+        },
+        "fire": {
+            "fire_id": fire.get("fire_id"),
+            "job_id": fire.get("job_id"),
+            "scheduled_fire_at": fire.get("scheduled_fire_at"),
+            "completed_at": record.updated_at,
+        },
+        "run": {
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "assistant_id": record.assistant_id,
+            "status": record.status.value,
+        },
+        "result": {
+            "status": record.status.value,
+            "text": response_text,
+            "artifacts": artifacts,
+        },
+    }
+
+
+def _format_cron_delivery_text(payload: dict[str, Any]) -> str:
+    job = cast(dict[str, Any], payload.get("job") or {})
+    delivery = cast(dict[str, Any], payload.get("delivery") or {})
+    run = cast(dict[str, Any], payload.get("run") or {})
+    fire = cast(dict[str, Any], payload.get("fire") or {})
+    result = cast(dict[str, Any], payload.get("result") or {})
+    summary = [
+        f"Cron {job.get('cron_expr') or ''} completed.",
+        f"creator_user_id={job.get('creator_user_id')}",
+        f"target={delivery.get('channel_name')}:{delivery.get('chat_id')}",
+        f"run_id={run.get('run_id')}",
+        f"completed_at={fire.get('completed_at')}",
+    ]
+    text = result.get("text")
+    if isinstance(text, str) and text:
+        summary.append(text)
+    return "\n".join(summary)
+
+
+def _resolve_cron_delivery_target(delivery: dict[str, Any], deerflow_thread_id: str) -> dict[str, Any] | None:
+    target_mode = delivery.get("target_mode", "explicit")
+    if target_mode == "local":
+        return None
+    if target_mode == "origin":
+        origin = delivery.get("origin")
+        if not isinstance(origin, dict):
+            return {"error": "Origin delivery requires origin target details."}
+        channel_name = origin.get("channel_name")
+        chat_id = origin.get("chat_id")
+        if not isinstance(channel_name, str) or not channel_name:
+            return {"error": "Origin delivery requires origin.channel_name."}
+        if not isinstance(chat_id, str) or not chat_id:
+            return {"error": "Origin delivery requires origin.chat_id."}
+        return {
+            "kind": "channel",
+            "target_mode": "origin",
+            "channel_name": channel_name,
+            "chat_id": chat_id,
+            "thread_ts": origin.get("thread_ts"),
+            "deerflow_thread_id": origin.get("deerflow_thread_id") or deerflow_thread_id,
+            "options": origin.get("options") or {},
+        }
+
+    channel_name = delivery.get("channel_name")
+    chat_id = delivery.get("chat_id")
+    if not isinstance(channel_name, str) or not channel_name:
+        return {"error": "Explicit delivery requires channel_name."}
+    if not isinstance(chat_id, str) or not chat_id:
+        return {"error": "Explicit delivery requires chat_id."}
+    return {
+        "kind": "channel",
+        "target_mode": "explicit",
+        "channel_name": channel_name,
+        "chat_id": chat_id,
+        "thread_ts": delivery.get("thread_ts"),
+        "deerflow_thread_id": deerflow_thread_id,
+        "options": delivery.get("options") or {},
+    }
 
 
 def _extract_human_message(graph_input: dict) -> HumanMessage | None:

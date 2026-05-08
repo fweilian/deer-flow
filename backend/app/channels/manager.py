@@ -620,8 +620,18 @@ class ChannelManager:
             self._default_session.get("context"),
             channel_layer.get("context"),
             user_layer.get("context"),
-            {"thread_id": thread_id},
+            {
+                "thread_id": thread_id,
+                "source_channel_name": msg.channel_name,
+                "source_chat_id": msg.chat_id,
+                "source_thread_ts": msg.thread_ts,
+            },
         )
+        reply_target = msg.metadata.get("reply_target")
+        if isinstance(reply_target, Mapping):
+            reply_options = reply_target.get("options")
+            if isinstance(reply_options, dict):
+                run_context.setdefault("source_delivery_options", dict(reply_options))
 
         # Custom agents are implemented as lead_agent + agent_name context.
         # Keep backward compatibility for channel configs that set

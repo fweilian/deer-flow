@@ -7,6 +7,10 @@ import hashlib
 import hmac
 import json
 
+import httpx
+import pytest
+
+from app.channels import webhook as webhook_module
 from app.channels.message_bus import MessageBus, OutboundMessage
 from app.channels.webhook import WebhookChannel
 
@@ -265,6 +269,157 @@ class TestWebhookChannel:
             assert bus.inbound_queue.empty()
 
             await channel.stop()
+
+        _run(go())
+
+    def test_send_keeps_logging_only_when_cron_delivery_has_no_api_request(self, monkeypatch):
+        async def go():
+            bus = MessageBus()
+            channel = WebhookChannel(bus=bus, config={})
+
+            class FailIfUsedClient:
+                def __init__(self, *args, **kwargs):
+                    raise AssertionError("http client should not be constructed")
+
+            monkeypatch.setattr(webhook_module.httpx, "AsyncClient", FailIfUsedClient)
+
+            await channel.send(
+                OutboundMessage(
+                    channel_name="webhook",
+                    chat_id="cron-webhook",
+                    thread_id="thread-1",
+                    text="Cron run completed",
+                    metadata={
+                        "cron_delivery": {
+                            "job": {"job_id": "job-1"},
+                            "delivery": {"kind": "channel", "channel_name": "webhook"},
+                            "fire": {"fire_id": "fire-1"},
+                            "run": {"run_id": "run-1"},
+                            "result": {"status": "success"},
+                        }
+                    },
+                )
+            )
+
+        _run(go())
+
+    def test_send_cron_delivery_api_request_uses_rendered_payload(self, monkeypatch):
+        async def go():
+            bus = MessageBus()
+            channel = WebhookChannel(bus=bus, config={})
+            captured: dict[str, object] = {}
+
+            class FakeClient:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    return False
+
+                async def request(self, method, url, *, headers=None, json=None, content=None):
+                    captured["method"] = method
+                    captured["url"] = url
+                    captured["headers"] = headers
+                    captured["json"] = json
+                    captured["content"] = content
+                    return httpx.Response(202, request=httpx.Request(method, url))
+
+            monkeypatch.setattr(webhook_module.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+
+            await channel.send(
+                OutboundMessage(
+                    channel_name="webhook",
+                    chat_id="cron-webhook",
+                    thread_id="thread-1",
+                    text="Cron run completed",
+                    metadata={
+                        "cron_delivery": {
+                            "job": {"job_id": "job-1"},
+                            "delivery": {
+                                "kind": "channel",
+                                "channel_name": "webhook",
+                                "options": {
+                                    "api_request": {
+                                        "method": "PATCH",
+                                        "url": "https://example.test/hooks/cron",
+                                        "headers": {"X-Cron-Test": "1"},
+                                        "timeout_seconds": 12,
+                                        "body_template": {
+                                            "job_id": "{job.job_id}",
+                                            "fire_id": "{fire.fire_id}",
+                                            "run_id": "{run.run_id}",
+                                            "status": "{result.status}",
+                                        },
+                                        "auth": {"kind": "bearer", "token": "secret-token"},
+                                    }
+                                },
+                            },
+                            "fire": {"fire_id": "fire-1"},
+                            "run": {"run_id": "run-1"},
+                            "result": {"status": "success"},
+                        }
+                    },
+                )
+            )
+
+            assert captured["method"] == "PATCH"
+            assert captured["url"] == "https://example.test/hooks/cron"
+            assert captured["headers"]["X-Cron-Test"] == "1"
+            assert captured["headers"]["Authorization"] == "Bearer secret-token"
+            assert captured["json"] == {
+                "job_id": "job-1",
+                "fire_id": "fire-1",
+                "run_id": "run-1",
+                "status": "success",
+            }
+            assert captured["content"] is None
+
+        _run(go())
+
+    def test_send_cron_delivery_api_request_raises_on_non_2xx(self, monkeypatch):
+        async def go():
+            bus = MessageBus()
+            channel = WebhookChannel(bus=bus, config={})
+
+            class FakeClient:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    return False
+
+                async def request(self, method, url, *, headers=None, json=None, content=None):
+                    return httpx.Response(500, request=httpx.Request(method, url), text="boom")
+
+            monkeypatch.setattr(webhook_module.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+
+            with pytest.raises(RuntimeError, match="500"):
+                await channel.send(
+                    OutboundMessage(
+                        channel_name="webhook",
+                        chat_id="cron-webhook",
+                        thread_id="thread-1",
+                        text="Cron run completed",
+                        metadata={
+                            "cron_delivery": {
+                                "job": {"job_id": "job-1"},
+                                "delivery": {
+                                    "kind": "channel",
+                                    "channel_name": "webhook",
+                                    "options": {
+                                        "api_request": {
+                                            "method": "POST",
+                                            "url": "https://example.test/hooks/cron",
+                                        }
+                                    },
+                                },
+                                "fire": {"fire_id": "fire-1"},
+                                "run": {"run_id": "run-1"},
+                                "result": {"status": "success"},
+                            }
+                        },
+                    )
+                )
 
         _run(go())
 
