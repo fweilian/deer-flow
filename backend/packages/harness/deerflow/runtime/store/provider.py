@@ -41,6 +41,13 @@ POSTGRES_CONN_REQUIRED = "checkpointer.connection_string is required for the pos
 GAUSSDB_STORE_INSTALL = "GaussDB store dependencies are required for the GaussDB store. Install them with: uv sync --extra gaussdb"
 GAUSSDB_CONN_REQUIRED = "checkpointer.connection_string is required for the gaussdb backend"
 
+
+def format_gaussdb_store_import_error(message: str, exc: ImportError) -> ImportError:
+    """Return a more actionable ImportError for GaussDB store optional deps."""
+    detail = str(exc).strip() or repr(exc)
+    return ImportError(f"{message}\nIf you installed the GaussDB wheels manually, verify that the current Python environment can import `async_gaussdb`, `gaussdb`, and `gaussdb_pool` directly.\nOriginal import error: {detail}")
+
+
 # ---------------------------------------------------------------------------
 # Sync factory
 # ---------------------------------------------------------------------------
@@ -95,7 +102,7 @@ def _sync_store_cm(config) -> Iterator[BaseStore]:
         try:
             from deerflow.runtime.store.gaussdb import GaussDBStore
         except ImportError as exc:
-            raise ImportError(GAUSSDB_STORE_INSTALL) from exc
+            raise format_gaussdb_store_import_error(GAUSSDB_STORE_INSTALL, exc) from exc
 
         if not config.connection_string:
             raise ValueError(GAUSSDB_CONN_REQUIRED)
@@ -152,12 +159,12 @@ def _sync_store_from_database_cm(db_config) -> Iterator[BaseStore]:
         try:
             from deerflow.runtime.store.gaussdb import GaussDBStore
         except ImportError as exc:
-            raise ImportError(GAUSSDB_STORE_INSTALL) from exc
+            raise format_gaussdb_store_import_error(GAUSSDB_STORE_INSTALL, exc) from exc
 
         if not db_config.gaussdb_url:
             raise ValueError("database.gaussdb_url is required for the gaussdb backend")
 
-        with GaussDBStore.from_conn_string(db_config.gaussdb_url) as store:
+        with GaussDBStore.from_conn_string(db_config.gaussdb_conninfo) as store:
             store.setup()
             logger.info("Store: using GaussDBStore")
             yield store

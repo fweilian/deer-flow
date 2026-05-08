@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "agent-client-protocol>=0.4.0",
     "agent-sandbox>=0.0.19",
+    "croniter>=6.2.2",
     "dotenv>=0.9.9",
     "exa-py>=1.0.0",
     "httpx>=0.28.0",
@@ -47,9 +48,9 @@ postgres = [
     "psycopg-pool>=3.3.0",
 ]
 gaussdb = [
-    "async-gaussdb>=0.30.4",
-    "gaussdb>=1.0.3",
-    "gaussdb-pool>=1.0.3",
+    "async-gaussdb>=0.30.4; python_full_version < '3.14'",
+    "gaussdb>=1.0.3; python_full_version < '3.14'",
+    "gaussdb-pool>=1.0.3; python_full_version < '3.14'",
 ]
 pymupdf = ["pymupdf4llm>=0.0.17"]
 

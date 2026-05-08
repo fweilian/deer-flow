@@ -31,6 +31,7 @@ from deerflow.runtime.checkpointer.provider import (
     POSTGRES_CONN_REQUIRED,
     POSTGRES_INSTALL,
     SQLITE_INSTALL,
+    format_gaussdb_import_error,
 )
 from deerflow.runtime.store._sqlite_utils import ensure_sqlite_parent_dir, resolve_sqlite_conn_str
 
@@ -81,7 +82,7 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
         try:
             from deerflow.runtime.checkpointer.gaussdb import AsyncGaussDBSaver
         except ImportError as exc:
-            raise ImportError(GAUSSDB_INSTALL) from exc
+            raise format_gaussdb_import_error(GAUSSDB_INSTALL, exc) from exc
 
         if not config.connection_string:
             raise ValueError(GAUSSDB_CONN_REQUIRED)
@@ -139,12 +140,12 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
         try:
             from deerflow.runtime.checkpointer.gaussdb import AsyncGaussDBSaver
         except ImportError as exc:
-            raise ImportError(GAUSSDB_INSTALL) from exc
+            raise format_gaussdb_import_error(GAUSSDB_INSTALL, exc) from exc
 
         if not db_config.gaussdb_url:
             raise ValueError("database.gaussdb_url is required for the gaussdb backend")
 
-        async with AsyncGaussDBSaver.from_conn_string(db_config.gaussdb_url) as saver:
+        async with AsyncGaussDBSaver.from_conn_string(db_config.gaussdb_conninfo) as saver:
             await saver.setup()
             yield saver
         return

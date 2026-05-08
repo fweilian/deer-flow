@@ -79,6 +79,44 @@ class TestDatabaseConfig:
         )
         assert c.gaussdb_url == "gaussdb://u:p@h:5432/db"
 
+    def test_gaussdb_conninfo_is_derived_from_url(self):
+        c = DatabaseConfig(
+            backend="gaussdb",
+            gaussdb_url="gaussdb://u:p%402@h:5432/db?sslmode=disable",
+        )
+
+        assert c.gaussdb_conninfo == "host='h' port='5432' user='u' password='p@2' dbname='db' sslmode='disable'"
+
+    def test_gaussdb_conninfo_supports_multi_node_hosts(self):
+        c = DatabaseConfig(
+            backend="gaussdb",
+            gaussdb_url="gaussdb://u:p@host1:5432,host2:5433/db",
+        )
+
+        assert c.gaussdb_conninfo == "host='host1,host2' port='5432,5433' user='u' password='p' dbname='db'"
+
+    def test_gaussdb_conninfo_supports_unescaped_special_chars_in_password(self):
+        c = DatabaseConfig(
+            backend="gaussdb",
+            gaussdb_url="gaussdb://u:pa#ss@wo:rd@host1:5432,host2:5433/db",
+        )
+
+        assert c.gaussdb_conninfo == "host='host1,host2' port='5432,5433' user='u' password='pa#ss@wo:rd' dbname='db'"
+
+    def test_gaussdb_dialect_parses_gaussdb_version_string(self):
+        from deerflow.persistence.dialects.gaussdb import PGDialect_async_gaussdb
+
+        version = "gaussdb (GaussDB Kernel 505.2.1.SPC0800 build 01df718e) compiled at 2025-07-03 01:16:00 commit 10558 last mr 24271 release"
+
+        assert PGDialect_async_gaussdb._parse_server_version_info(version) == (505, 2, 1)
+
+    def test_gaussdb_dialect_still_parses_postgres_version_string(self):
+        from deerflow.persistence.dialects.gaussdb import PGDialect_async_gaussdb
+
+        version = "PostgreSQL 16.4 on x86_64-pc-linux-gnu, compiled by gcc, 64-bit"
+
+        assert PGDialect_async_gaussdb._parse_server_version_info(version) == (16, 4)
+
     def test_memory_has_no_url(self):
         c = DatabaseConfig(backend="memory")
         with pytest.raises(ValueError, match="No SQLAlchemy URL"):

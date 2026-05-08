@@ -29,6 +29,19 @@ def test_gaussdb_store_requires_compat_package():
             get_store()
 
 
+def test_gaussdb_store_import_error_keeps_original_reason():
+    from deerflow.runtime.store.provider import format_gaussdb_store_import_error
+
+    err = format_gaussdb_store_import_error(
+        "GaussDB store dependencies are required",
+        ImportError("No module named 'gaussdb_pool'"),
+    )
+
+    assert "GaussDB store dependencies are required" in str(err)
+    assert "manually" in str(err)
+    assert "gaussdb_pool" in str(err)
+
+
 def test_gaussdb_store_requires_connection_string():
     load_checkpointer_config_from_dict({"type": "gaussdb"})
     mock_module = MagicMock()

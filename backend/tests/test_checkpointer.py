@@ -81,6 +81,18 @@ class TestCheckpointerConfig:
 
 
 class TestGetCheckpointer:
+    def test_gaussdb_import_error_keeps_original_reason(self):
+        from deerflow.runtime.checkpointer.provider import format_gaussdb_import_error
+
+        err = format_gaussdb_import_error(
+            "GaussDB checkpointer dependencies are required",
+            ImportError("No module named 'gaussdb_pool'"),
+        )
+
+        assert "GaussDB checkpointer dependencies are required" in str(err)
+        assert "manually" in str(err)
+        assert "gaussdb_pool" in str(err)
+
     def test_returns_in_memory_saver_when_not_configured(self):
         """get_checkpointer should return InMemorySaver when not configured."""
         from langgraph.checkpoint.memory import InMemorySaver
@@ -292,6 +304,32 @@ class TestGetCheckpointer:
         assert cp is mock_saver_instance
         mock_saver_cls.from_conn_string.assert_called_once_with("gaussdb://localhost/db")
         mock_saver_instance.setup.assert_called_once()
+
+    def test_database_gaussdb_uses_conninfo_for_sync_checkpointer(self):
+        from deerflow.config.database_config import DatabaseConfig
+        from deerflow.runtime.checkpointer.provider import _sync_checkpointer_from_database_cm
+
+        db_config = DatabaseConfig(
+            backend="gaussdb",
+            gaussdb_url="gaussdb://root:1234@localhost:30100/db",
+        )
+
+        mock_saver_instance = MagicMock()
+        mock_cm = MagicMock()
+        mock_cm.__enter__ = MagicMock(return_value=mock_saver_instance)
+        mock_cm.__exit__ = MagicMock(return_value=False)
+
+        mock_saver_cls = MagicMock()
+        mock_saver_cls.from_conn_string = MagicMock(return_value=mock_cm)
+
+        mock_module = MagicMock()
+        mock_module.GaussDBSaver = mock_saver_cls
+
+        with patch.dict(sys.modules, {"deerflow.runtime.checkpointer.gaussdb": mock_module}):
+            with _sync_checkpointer_from_database_cm(db_config) as saver:
+                assert saver is mock_saver_instance
+
+        mock_saver_cls.from_conn_string.assert_called_once_with("host='localhost' port='30100' user='root' password='1234' dbname='db'")
 
 
 class TestAsyncCheckpointer:

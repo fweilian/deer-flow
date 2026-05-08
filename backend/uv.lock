@@ -842,6 +842,7 @@ dependencies = [
     { name = "agent-sandbox" },
     { name = "aiosqlite" },
     { name = "alembic" },
+    { name = "croniter" },
     { name = "ddgs" },
     { name = "dotenv" },
     { name = "duckdb" },
@@ -874,9 +875,9 @@ dependencies = [
 
 [package.optional-dependencies]
 gaussdb = [
-    { name = "async-gaussdb" },
-    { name = "gaussdb" },
-    { name = "gaussdb-pool" },
+    { name = "async-gaussdb", marker = "python_full_version < '3.14'" },
+    { name = "gaussdb", marker = "python_full_version < '3.14'" },
+    { name = "gaussdb-pool", marker = "python_full_version < '3.14'" },
 ]
 ollama = [
     { name = "langchain-ollama" },
@@ -897,15 +898,16 @@ requires-dist = [
     { name = "agent-sandbox", specifier = ">=0.0.19" },
     { name = "aiosqlite", specifier = ">=0.19" },
     { name = "alembic", specifier = ">=1.13" },
-    { name = "async-gaussdb", marker = "extra == 'gaussdb'", specifier = ">=0.30.4" },
+    { name = "async-gaussdb", marker = "python_full_version < '3.14' and extra == 'gaussdb'", specifier = ">=0.30.4" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29" },
+    { name = "croniter", specifier = ">=6.2.2" },
     { name = "ddgs", specifier = ">=9.10.0" },
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "duckdb", specifier = ">=1.4.4" },
     { name = "exa-py", specifier = ">=1.0.0" },
     { name = "firecrawl-py", specifier = ">=1.15.0" },
-    { name = "gaussdb", marker = "extra == 'gaussdb'", specifier = ">=1.0.3" },
-    { name = "gaussdb-pool", marker = "extra == 'gaussdb'", specifier = ">=1.0.3" },
+    { name = "gaussdb", marker = "python_full_version < '3.14' and extra == 'gaussdb'", specifier = ">=1.0.3" },
+    { name = "gaussdb-pool", marker = "python_full_version < '3.14' and extra == 'gaussdb'", specifier = ">=1.0.3" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "kubernetes", specifier = ">=30.0.0" },
     { name = "langchain", specifier = ">=1.2.15" },
@@ -1227,7 +1229,7 @@ version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
-    { name = "tzdata", marker = "sys_platform == 'win32'" },
+    { name = "tzdata", marker = "python_full_version < '3.14' and sys_platform == 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/30/12/d6cdf57cd39de197a90d506025b2c9ca80bac04d3672419191d9c316bd99/gaussdb-1.0.4-py3-none-any.whl", hash = "sha256:a7c9270a94ec0cf7d63336bbb301e7322d87773c00342c7444c627d7d6afcae4", size = 199807, upload-time = "2025-11-14T09:03:13.14Z" },
@@ -1238,7 +1240,7 @@ name = "gaussdb-pool"
 version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.14'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a8/8f/15593022793c981f4e71c2df5daf91ecbcccdb28e72f6ed75184f8e6e3b7/gaussdb_pool-1.0.4-py3-none-any.whl", hash = "sha256:6c3379a238ea416e93f5c52bda63534adc3068eee19fed5e845b6ebae28b0555", size = 38193, upload-time = "2025-11-14T09:02:58.052Z" },

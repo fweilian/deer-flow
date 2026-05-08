@@ -32,6 +32,7 @@ from deerflow.runtime.store.provider import (
     POSTGRES_STORE_INSTALL,
     SQLITE_STORE_INSTALL,
     ensure_sqlite_parent_dir,
+    format_gaussdb_store_import_error,
     resolve_sqlite_conn_str,
 )
 
@@ -90,7 +91,7 @@ async def _async_store(config) -> AsyncIterator[BaseStore]:
         try:
             from deerflow.runtime.store.gaussdb import AsyncGaussDBStore
         except ImportError as exc:
-            raise ImportError(GAUSSDB_STORE_INSTALL) from exc
+            raise format_gaussdb_store_import_error(GAUSSDB_STORE_INSTALL, exc) from exc
 
         if not config.connection_string:
             raise ValueError(GAUSSDB_CONN_REQUIRED)
@@ -147,12 +148,12 @@ async def _async_store_from_database(db_config) -> AsyncIterator[BaseStore]:
         try:
             from deerflow.runtime.store.gaussdb import AsyncGaussDBStore
         except ImportError as exc:
-            raise ImportError(GAUSSDB_STORE_INSTALL) from exc
+            raise format_gaussdb_store_import_error(GAUSSDB_STORE_INSTALL, exc) from exc
 
         if not db_config.gaussdb_url:
             raise ValueError("database.gaussdb_url is required for the gaussdb backend")
 
-        async with AsyncGaussDBStore.from_conn_string(db_config.gaussdb_url) as store:
+        async with AsyncGaussDBStore.from_conn_string(db_config.gaussdb_conninfo) as store:
             await store.setup()
             logger.info("Store: using AsyncGaussDBStore")
             yield store

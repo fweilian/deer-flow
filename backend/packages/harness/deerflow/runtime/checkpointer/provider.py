@@ -41,6 +41,18 @@ POSTGRES_CONN_REQUIRED = "checkpointer.connection_string is required for the pos
 GAUSSDB_INSTALL = "GaussDB checkpointer dependencies are required for the GaussDB checkpointer. Install them with: uv sync --extra gaussdb"
 GAUSSDB_CONN_REQUIRED = "checkpointer.connection_string is required for the gaussdb backend"
 
+
+def format_gaussdb_import_error(message: str, exc: ImportError) -> ImportError:
+    """Return a more actionable ImportError for GaussDB optional deps.
+
+    This keeps the high-level install guidance while preserving the original
+    import failure details, which is especially important when users install
+    wheels manually instead of via ``uv sync --extra gaussdb``.
+    """
+    detail = str(exc).strip() or repr(exc)
+    return ImportError(f"{message}\nIf you installed the GaussDB wheels manually, verify that the current Python environment can import `async_gaussdb`, `gaussdb`, and `gaussdb_pool` directly.\nOriginal import error: {detail}")
+
+
 # ---------------------------------------------------------------------------
 # Sync factory
 # ---------------------------------------------------------------------------
@@ -95,7 +107,7 @@ def _sync_checkpointer_cm(config: CheckpointerConfig) -> Iterator[Checkpointer]:
         try:
             from deerflow.runtime.checkpointer.gaussdb import GaussDBSaver
         except ImportError as exc:
-            raise ImportError(GAUSSDB_INSTALL) from exc
+            raise format_gaussdb_import_error(GAUSSDB_INSTALL, exc) from exc
 
         if not config.connection_string:
             raise ValueError(GAUSSDB_CONN_REQUIRED)
@@ -152,12 +164,12 @@ def _sync_checkpointer_from_database_cm(db_config) -> Iterator[Checkpointer]:
         try:
             from deerflow.runtime.checkpointer.gaussdb import GaussDBSaver
         except ImportError as exc:
-            raise ImportError(GAUSSDB_INSTALL) from exc
+            raise format_gaussdb_import_error(GAUSSDB_INSTALL, exc) from exc
 
         if not db_config.gaussdb_url:
             raise ValueError("database.gaussdb_url is required for the gaussdb backend")
 
-        with GaussDBSaver.from_conn_string(db_config.gaussdb_url) as saver:
+        with GaussDBSaver.from_conn_string(db_config.gaussdb_conninfo) as saver:
             saver.setup()
             logger.info("Checkpointer: using GaussDBSaver")
             yield saver

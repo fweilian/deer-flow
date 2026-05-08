@@ -36,6 +36,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from deerflow.utils.gaussdb import gaussdb_url_to_conninfo
+
 
 class DatabaseConfig(BaseModel):
     backend: Literal["memory", "sqlite", "postgres", "gaussdb"] = Field(
@@ -117,3 +119,8 @@ class DatabaseConfig(BaseModel):
                 url = url.replace("gaussdb://", "gaussdb+async_gaussdb://", 1)
             return url
         raise ValueError(f"No SQLAlchemy URL for backend={self.backend!r}")
+
+    @property
+    def gaussdb_conninfo(self) -> str:
+        """GaussDB conninfo string for psycopg-compatible checkpointer/store code."""
+        return gaussdb_url_to_conninfo(self.gaussdb_url)
