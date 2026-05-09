@@ -36,7 +36,7 @@ def upgrade() -> None:
         sa.Column("metadata_json", sa.JSON(), nullable=False),
         sa.Column("config_json", sa.JSON(), nullable=False),
         sa.Column("context_json", sa.JSON(), nullable=False),
-        sa.Column("multitask_strategy", sa.String(length=20), nullable=False, server_default="enqueue"),
+        sa.Column("multitask_strategy", sa.String(length=20), nullable=False, server_default="reject"),
         sa.Column("next_fire_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_fire_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_run_id", sa.String(length=64), nullable=True),

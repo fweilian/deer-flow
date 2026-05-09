@@ -10,10 +10,13 @@ signal-reentrancy deadlock described in
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
+from pytest import LogCaptureFixture
 
 
 @asynccontextmanager
@@ -117,3 +120,43 @@ async def _run_stop_gateway_cron_scheduler_clears_state() -> None:
 
 def test_stop_gateway_cron_scheduler_clears_scheduler_state():
     asyncio.run(_run_stop_gateway_cron_scheduler_clears_state())
+
+
+async def _run_start_gateway_cron_scheduler_logs_started(caplog: LogCaptureFixture) -> None:
+    from app.gateway.cron_scheduler import start_gateway_cron_scheduler
+
+    app = FastAPI()
+    app.state.stream_bridge = object()
+    app.state.run_manager = object()
+    app.state.checkpointer = object()
+    app.state.run_event_store = object()
+    app.state.thread_store = object()
+    app.state.config = SimpleNamespace(run_events=None)
+
+    fake_bus = SimpleNamespace(publish_outbound=AsyncMock())
+    fake_channel_service = SimpleNamespace(bus=fake_bus)
+    fake_session_factory = object()
+    created_tasks: list[object] = []
+
+    def _capture_task(coro):
+        created_tasks.append(coro)
+        coro.close()
+        return SimpleNamespace(cancel=lambda: None)
+
+    with (
+        patch("app.gateway.cron_scheduler.get_session_factory", return_value=fake_session_factory),
+        patch("app.gateway.cron_scheduler.CronSchedulerRepository") as repo_cls,
+        patch("app.gateway.cron_scheduler.asyncio.create_task", side_effect=_capture_task) as create_task,
+        patch("app.channels.service.get_channel_service", return_value=fake_channel_service),
+        caplog.at_level(logging.INFO, logger="app.gateway.cron_scheduler"),
+    ):
+        repo_cls.return_value = SimpleNamespace()
+        await start_gateway_cron_scheduler(app)
+
+    create_task.assert_called_once()
+    assert len(created_tasks) == 1
+    assert any("Gateway cron scheduler started:" in record.message and "instance_id=gateway-" in record.message and "poll_interval=10.0s" in record.message and "lease_seconds=30s" in record.message for record in caplog.records)
+
+
+def test_start_gateway_cron_scheduler_logs_started(caplog: LogCaptureFixture):
+    asyncio.run(_run_start_gateway_cron_scheduler_logs_started(caplog))

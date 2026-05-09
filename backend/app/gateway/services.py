@@ -33,6 +33,7 @@ from deerflow.runtime import (
     run_agent,
 )
 from deerflow.runtime.runs.store.base import RunStore
+from deerflow.runtime.user_context import AUTO
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,7 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
 
 
 _DEFAULT_ASSISTANT_ID = "lead_agent"
+_DEFAULT_CRON_MULTITASK_STRATEGY = "reject"
 
 
 # Whitelist of run-context keys that the langgraph-compat layer forwards from
@@ -136,6 +138,44 @@ def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, An
                 configurable.setdefault(key, context[key])
             if isinstance(runtime_context, dict):
                 runtime_context.setdefault(key, context[key])
+
+
+def normalize_cron_multitask_strategy(strategy: str | None) -> str:
+    """Map cron concurrency defaults to currently supported run-manager values.
+
+    Existing cron jobs may still carry ``enqueue`` from earlier scheduler
+    defaults, but RunManager currently supports only ``reject``,
+    ``interrupt``, and ``rollback``. Degrade legacy ``enqueue`` jobs to
+    ``reject`` so scheduled runs still execute instead of failing every
+    dispatch attempt with HTTP 501.
+    """
+
+    normalized = (strategy or "").strip() or _DEFAULT_CRON_MULTITASK_STRATEGY
+    if normalized == "enqueue":
+        logger.warning(
+            "Cron multitask_strategy 'enqueue' is not supported by RunManager; degrading to '%s'.",
+            _DEFAULT_CRON_MULTITASK_STRATEGY,
+        )
+        return _DEFAULT_CRON_MULTITASK_STRATEGY
+    return normalized
+
+
+def resolve_run_owner_id(metadata: Mapping[str, Any] | None) -> str | None | object:
+    """Resolve the owner id for a run that may execute after request scope ends.
+
+    Cron runs execute from a background scheduler without request-auth context, so
+    they must carry an explicit owner id. Normal request-driven runs can keep using
+    ``AUTO`` and rely on the request middleware to set the contextvar.
+    """
+
+    scheduler_meta = (metadata or {}).get("scheduler") or {}
+    job_meta = scheduler_meta.get("job") or {}
+    creator_user_id = job_meta.get("creator_user_id")
+    if isinstance(creator_user_id, str):
+        normalized = creator_user_id.strip()
+        if normalized:
+            return normalized
+    return AUTO
 
 
 def resolve_agent_factory(assistant_id: str | None):
@@ -232,6 +272,7 @@ def _build_cron_scheduler_metadata(job: Any, fire: Any, *, idempotency_key: str)
         "job": {
             "job_id": job.job_id,
             "thread_id": job.thread_id,
+            "execution_thread_id": getattr(job, "execution_thread_id", job.thread_id),
             "assistant_id": job.assistant_id,
             "cron_expr": job.cron,
             "timezone": job.timezone,
@@ -282,8 +323,9 @@ async def find_existing_cron_run(run_store: RunStore, thread_id: str, idempotenc
 
 async def start_cron_run(job: Any, fire: Any, request: Request) -> RunRecord | SimpleNamespace:
     run_store = get_run_store(request)
+    execution_thread_id = getattr(job, "execution_thread_id", None) or job.thread_id
     idempotency_key = f"cron:{job.job_id}:{int(fire.scheduled_fire_at)}"
-    existing = await find_existing_cron_run(run_store, job.thread_id, idempotency_key)
+    existing = await find_existing_cron_run(run_store, execution_thread_id, idempotency_key)
     if existing is not None:
         return SimpleNamespace(run_id=existing["run_id"])
 
@@ -294,7 +336,7 @@ async def start_cron_run(job: Any, fire: Any, request: Request) -> RunRecord | S
     return await start_cron_run_with_deps(
         job,
         fire,
-        thread_id=job.thread_id,
+        thread_id=execution_thread_id,
         bridge=bridge,
         run_mgr=run_mgr,
         run_ctx=run_ctx,
@@ -313,6 +355,7 @@ async def start_cron_run_with_deps(
     idempotency_key = f"cron:{job.job_id}:{int(fire.scheduled_fire_at)}"
     metadata = dict(job.metadata or {})
     metadata["scheduler"] = _build_cron_scheduler_metadata(job, fire, idempotency_key=idempotency_key)
+    multitask_strategy = normalize_cron_multitask_strategy(getattr(job, "multitask_strategy", None))
     cron_request = SimpleNamespace(
         assistant_id=job.assistant_id,
         input=job.input,
@@ -320,7 +363,7 @@ async def start_cron_run_with_deps(
         config=job.config,
         context=job.context,
         on_disconnect="continue",
-        multitask_strategy=job.multitask_strategy,
+        multitask_strategy=multitask_strategy,
         stream_mode=None,
         stream_subgraphs=False,
         interrupt_before=None,
@@ -338,6 +381,7 @@ async def _launch_run(
     run_ctx: Any,
 ) -> RunRecord:
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
+    owner_user_id = resolve_run_owner_id(body.metadata or {})
 
     try:
         record = await run_mgr.create_or_reject(
@@ -346,6 +390,7 @@ async def _launch_run(
             on_disconnect=disconnect,
             metadata=body.metadata or {},
             kwargs={"input": body.input, "config": body.config},
+            user_id=owner_user_id,
             multitask_strategy=body.multitask_strategy,
         )
     except ConflictError as exc:
@@ -357,15 +402,16 @@ async def _launch_run(
     # even for threads that were never explicitly created via POST /threads
     # (e.g. stateless runs).
     try:
-        existing = await run_ctx.thread_store.get(thread_id)
+        existing = await run_ctx.thread_store.get(thread_id, user_id=owner_user_id)
         if existing is None:
             await run_ctx.thread_store.create(
                 thread_id,
                 assistant_id=body.assistant_id,
+                user_id=owner_user_id,
                 metadata=body.metadata,
             )
         else:
-            await run_ctx.thread_store.update_status(thread_id, "running")
+            await run_ctx.thread_store.update_status(thread_id, "running", user_id=owner_user_id)
     except Exception:
         logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
 

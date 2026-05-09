@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from langchain.tools import tool
 
@@ -161,6 +162,7 @@ async def create_schedule_tool(
     record = await repo.create_job(
         CronJobCreate(
             thread_id=resolved_thread_id,
+            execution_thread_id=str(uuid4()),
             assistant_id=assistant_id,
             creator_user_id=_resolve_creator_user_id(runtime),
             cron=cron,
@@ -169,7 +171,7 @@ async def create_schedule_tool(
             delivery=resolved_delivery,
         )
     )
-    return f"Schedule {record.job_id} created for thread {record.thread_id}. Next fire at {record.next_fire_at} ({record.timezone})."
+    return f"Schedule {record.job_id} created for thread {record.thread_id}. It will execute on dedicated thread {record.execution_thread_id}. Next fire at {record.next_fire_at} ({record.timezone})."
 
 
 @tool("list_schedules", parse_docstring=True)
@@ -196,7 +198,7 @@ async def list_schedules_tool(
     lines = [f"Schedules for thread {resolved_thread_id}:"]
     for job in jobs:
         status = "enabled" if job.enabled else "paused"
-        lines.append(f"- {job.job_id}: {job.cron} [{status}] next={job.next_fire_at} delivery={_format_delivery_summary(job.delivery)}")
+        lines.append(f"- {job.job_id}: {job.cron} [{status}] next={job.next_fire_at} exec_thread={job.execution_thread_id} delivery={_format_delivery_summary(job.delivery)}")
     return "\n".join(lines)
 
 

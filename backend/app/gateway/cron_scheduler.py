@@ -93,7 +93,7 @@ async def start_gateway_cron_scheduler(app: FastAPI) -> None:
         run_launcher=lambda job, fire: start_cron_run_with_deps(
             job,
             fire,
-            thread_id=job.thread_id,
+            thread_id=getattr(job, "execution_thread_id", None) or job.thread_id,
             bridge=app.state.stream_bridge,
             run_mgr=app.state.run_manager,
             run_ctx=build_gateway_run_context(app),
@@ -102,6 +102,12 @@ async def start_gateway_cron_scheduler(app: FastAPI) -> None:
     )
     app.state.cron_scheduler_service = service
     app.state.cron_scheduler_task = asyncio.create_task(_scheduler_loop(service))
+    logger.info(
+        "Gateway cron scheduler started: instance_id=%s poll_interval=%.1fs lease_seconds=%ss",
+        service.instance_id,
+        service.poll_interval,
+        service.lease_seconds,
+    )
 
 
 async def stop_gateway_cron_scheduler(app: FastAPI) -> None:

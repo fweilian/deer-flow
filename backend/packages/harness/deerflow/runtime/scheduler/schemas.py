@@ -148,6 +148,7 @@ class CronApiRequest(BaseModel):
 
 class CronJobCreate(BaseModel):
     thread_id: str
+    execution_thread_id: str | None = None
     assistant_id: str | None = None
     creator_user_id: str = "default"
     cron: str
@@ -158,7 +159,7 @@ class CronJobCreate(BaseModel):
     config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     delivery: CronJobChannelDelivery | None = None
-    multitask_strategy: Literal["reject", "interrupt", "rollback", "enqueue"] = "enqueue"
+    multitask_strategy: Literal["reject", "interrupt", "rollback", "enqueue"] = "reject"
 
     @field_validator("cron")
     @classmethod

@@ -1,10 +1,11 @@
 """Tests for RunManager."""
 
 import re
+from unittest.mock import AsyncMock
 
 import pytest
 
-from deerflow.runtime import RunManager, RunStatus
+from deerflow.runtime import ConflictError, RunManager, RunStatus
 
 ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 
@@ -128,6 +129,14 @@ async def test_set_status_with_error(manager: RunManager):
 
 
 @pytest.mark.anyio
+async def test_create_or_reject_conflict_lists_active_run_ids(manager: RunManager):
+    first = await manager.create_or_reject("thread-1", multitask_strategy="reject")
+
+    with pytest.raises(ConflictError, match=rf"Thread thread-1 already has active run\(s\): {first.run_id}:pending"):
+        await manager.create_or_reject("thread-1", multitask_strategy="reject")
+
+
+@pytest.mark.anyio
 async def test_get_nonexistent(manager: RunManager):
     """Getting a nonexistent run should return None."""
     assert manager.get("does-not-exist") is None
@@ -141,3 +150,23 @@ async def test_create_defaults(manager: RunManager):
     assert record.kwargs == {}
     assert record.multitask_strategy == "reject"
     assert record.assistant_id is None
+
+
+@pytest.mark.anyio
+async def test_create_or_reject_persists_explicit_user_id():
+    class _Store:
+        def __init__(self) -> None:
+            self.put = AsyncMock()
+
+        async def update_status(self, *args, **kwargs):  # pragma: no cover - not used here
+            return None
+
+        async def update_run_completion(self, *args, **kwargs):  # pragma: no cover - not used here
+            return None
+
+    store = _Store()
+    manager = RunManager(store=store)
+
+    await manager.create_or_reject("thread-1", user_id="cron-owner", multitask_strategy="reject")
+
+    assert store.put.await_args.kwargs["user_id"] == "cron-owner"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
@@ -10,6 +11,9 @@ from deerflow.runtime.scheduler.schemas import CronJobFireRecord, CronJobRecord
 
 if TYPE_CHECKING:
     from deerflow.persistence.scheduler.sql import CronSchedulerRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class RunLaunchResult(Protocol):
@@ -71,7 +75,18 @@ class CronSchedulerService:
             if fire is None:
                 continue
 
-            run = await self._run_launcher(job, fire)
+            try:
+                run = await self._run_launcher(job, fire)
+            except Exception:
+                logger.exception(
+                    "Cron run launch failed: job_id=%s thread_id=%s fire_id=%s scheduled_fire_at=%s strategy=%s",
+                    job.job_id,
+                    job.thread_id,
+                    fire.fire_id,
+                    fire.scheduled_fire_at,
+                    job.multitask_strategy,
+                )
+                raise
             dispatched = await self._repo.mark_fire_dispatched(
                 job.job_id,
                 fire.fire_id,

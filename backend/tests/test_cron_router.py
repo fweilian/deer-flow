@@ -23,6 +23,7 @@ def test_create_cron_job_route():
         return_value=CronJobRecord(
             job_id="job-1",
             thread_id="thread-1",
+            execution_thread_id="thread-exec-1",
             assistant_id="lead_agent",
             creator_user_id="router-user-1",
             cron="*/5 * * * *",
@@ -79,6 +80,7 @@ def test_create_cron_job_route():
     assert response.json() == {
         "job_id": "job-1",
         "thread_id": "thread-1",
+        "execution_thread_id": "thread-exec-1",
         "assistant_id": "lead_agent",
         "creator_user_id": "router-user-1",
         "cron": "*/5 * * * *",
@@ -129,6 +131,7 @@ def test_create_cron_job_route_stamps_authenticated_user_id():
         return_value=CronJobRecord(
             job_id="job-2",
             thread_id="thread-2",
+            execution_thread_id="thread-exec-2",
             assistant_id=None,
             creator_user_id="11111111-1111-1111-1111-111111111111",
             cron="0 * * * *",
@@ -175,6 +178,7 @@ def test_trigger_cron_job_route(monkeypatch):
         return_value=CronJobRecord(
             job_id="job-1",
             thread_id="thread-1",
+            execution_thread_id="thread-exec-1",
             assistant_id="lead_agent",
             creator_user_id="router-user-1",
             cron="*/5 * * * *",
@@ -260,6 +264,7 @@ def test_trigger_cron_job_route_checks_thread_access(monkeypatch):
         return_value=CronJobRecord(
             job_id="job-1",
             thread_id="thread-1",
+            execution_thread_id="thread-exec-1",
             assistant_id="lead_agent",
             creator_user_id="router-user-1",
             cron="*/5 * * * *",

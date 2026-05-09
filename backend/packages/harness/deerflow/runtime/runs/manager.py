@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from deerflow.runtime.user_context import AUTO, _AutoSentinel
 from deerflow.utils.time import now_iso as _now_iso
 
 from .schemas import DisconnectMode, RunStatus
@@ -25,6 +26,7 @@ class RunRecord:
     run_id: str
     thread_id: str
     assistant_id: str | None
+    user_id: str | None | _AutoSentinel
     status: RunStatus
     on_disconnect: DisconnectMode
     multitask_strategy: str = "reject"
@@ -60,6 +62,7 @@ class RunManager:
                 record.run_id,
                 thread_id=record.thread_id,
                 assistant_id=record.assistant_id,
+                user_id=record.user_id,
                 status=record.status.value,
                 multitask_strategy=record.multitask_strategy,
                 metadata=record.metadata or {},
@@ -85,6 +88,7 @@ class RunManager:
         on_disconnect: DisconnectMode = DisconnectMode.cancel,
         metadata: dict | None = None,
         kwargs: dict | None = None,
+        user_id: str | None | _AutoSentinel = AUTO,
         multitask_strategy: str = "reject",
     ) -> RunRecord:
         """Create a new pending run and register it."""
@@ -94,6 +98,7 @@ class RunManager:
             run_id=run_id,
             thread_id=thread_id,
             assistant_id=assistant_id,
+            user_id=user_id,
             status=RunStatus.pending,
             on_disconnect=on_disconnect,
             multitask_strategy=multitask_strategy,
@@ -170,6 +175,7 @@ class RunManager:
         on_disconnect: DisconnectMode = DisconnectMode.cancel,
         metadata: dict | None = None,
         kwargs: dict | None = None,
+        user_id: str | None | _AutoSentinel = AUTO,
         multitask_strategy: str = "reject",
     ) -> RunRecord:
         """Atomically check for inflight runs and create a new one.
@@ -193,7 +199,8 @@ class RunManager:
             inflight = [r for r in self._runs.values() if r.thread_id == thread_id and r.status in (RunStatus.pending, RunStatus.running)]
 
             if multitask_strategy == "reject" and inflight:
-                raise ConflictError(f"Thread {thread_id} already has an active run")
+                active_runs = ", ".join(f"{r.run_id}:{r.status.value}" for r in inflight)
+                raise ConflictError(f"Thread {thread_id} already has active run(s): {active_runs}")
 
             if multitask_strategy in ("interrupt", "rollback") and inflight:
                 for r in inflight:
@@ -214,6 +221,7 @@ class RunManager:
                 run_id=run_id,
                 thread_id=thread_id,
                 assistant_id=assistant_id,
+                user_id=user_id,
                 status=RunStatus.pending,
                 on_disconnect=on_disconnect,
                 multitask_strategy=multitask_strategy,

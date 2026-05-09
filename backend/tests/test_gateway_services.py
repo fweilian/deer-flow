@@ -401,6 +401,22 @@ def test_build_run_config_context_plus_configurable_warns(caplog):
     assert any("both 'context' and 'configurable'" in r.message for r in caplog.records)
 
 
+def test_resolve_run_owner_id_uses_cron_creator_user_id():
+    from app.gateway.services import resolve_run_owner_id
+
+    owner = resolve_run_owner_id(
+        {
+            "scheduler": {
+                "job": {
+                    "creator_user_id": "cron-user-1",
+                }
+            }
+        }
+    )
+
+    assert owner == "cron-user-1"
+
+
 def test_build_run_config_context_passthrough_other_keys():
     """Non-conflicting keys from request_config are still passed through when context is used."""
     from app.gateway.services import build_run_config
@@ -443,6 +459,7 @@ async def test_start_cron_run_reuses_existing_record(monkeypatch):
     job = CronJobRecord(
         job_id="job-1",
         thread_id="thread-1",
+        execution_thread_id="thread-exec-1",
         assistant_id="lead_agent",
         cron="*/5 * * * *",
         timezone="Asia/Shanghai",
@@ -470,7 +487,7 @@ async def test_start_cron_run_reuses_existing_record(monkeypatch):
     reused = await start_cron_run(job, fire, request)
 
     assert reused.run_id == "run-1"
-    find_existing.assert_awaited_once_with(app.state.run_store, "thread-1", "cron:job-1:1746500000")
+    find_existing.assert_awaited_once_with(app.state.run_store, "thread-exec-1", "cron:job-1:1746500000")
     launch_run.assert_not_awaited()
 
 
@@ -485,6 +502,7 @@ async def test_start_cron_run_with_deps_injects_scheduler_metadata(monkeypatch):
     job = CronJobRecord(
         job_id="job-1",
         thread_id="thread-1",
+        execution_thread_id="thread-exec-1",
         assistant_id="lead_agent",
         cron="*/5 * * * *",
         timezone="Asia/Shanghai",
@@ -528,6 +546,7 @@ async def test_start_cron_run_with_deps_injects_scheduler_metadata(monkeypatch):
     assert cron_request.metadata["scheduler"]["job"] == {
         "job_id": "job-1",
         "thread_id": "thread-1",
+        "execution_thread_id": "thread-exec-1",
         "assistant_id": "lead_agent",
         "cron_expr": "*/5 * * * *",
         "timezone": "Asia/Shanghai",
@@ -540,3 +559,55 @@ async def test_start_cron_run_with_deps_injects_scheduler_metadata(monkeypatch):
         "job_id": "job-1",
         "scheduled_fire_at": 1746500000,
     }
+    assert cron_request.multitask_strategy == "reject"
+
+
+@pytest.mark.anyio
+async def test_start_cron_run_with_deps_degrades_enqueue_strategy(monkeypatch, caplog):
+    from app.gateway.services import start_cron_run_with_deps
+    from deerflow.runtime.scheduler.schemas import CronJobFireRecord, CronJobRecord
+
+    launch_run = AsyncMock(return_value=SimpleNamespace(run_id="run-3"))
+    monkeypatch.setattr("app.gateway.services._launch_run", launch_run)
+
+    job = CronJobRecord(
+        job_id="job-legacy",
+        thread_id="thread-1",
+        execution_thread_id="thread-exec-legacy",
+        assistant_id="lead_agent",
+        cron="*/5 * * * *",
+        timezone="Asia/Shanghai",
+        input={"messages": [{"role": "user", "content": "hello"}]},
+        metadata={},
+        config=None,
+        context=None,
+        multitask_strategy="enqueue",
+        enabled=True,
+        next_fire_at=1746500000,
+        last_fire_at=None,
+        last_run_id=None,
+        created_at=1746400000,
+        updated_at=1746400000,
+    )
+    fire = CronJobFireRecord(
+        fire_id="fire-legacy",
+        job_id="job-legacy",
+        scheduled_fire_at=1746500000,
+        status="claimed",
+        claim_owner="worker-a",
+        claim_token="token-legacy",
+    )
+
+    with caplog.at_level("WARNING", logger="app.gateway.services"):
+        await start_cron_run_with_deps(
+            job,
+            fire,
+            thread_id="thread-1",
+            bridge=object(),
+            run_mgr=object(),
+            run_ctx=object(),
+        )
+
+    cron_request = launch_run.await_args.args[0]
+    assert cron_request.multitask_strategy == "reject"
+    assert "degrading to 'reject'" in caplog.text

@@ -14,6 +14,32 @@ from deerflow.persistence.scheduler.model import CronJobFireRow, CronJobRow
 from deerflow.runtime.scheduler.schemas import CronJobCreate, CronJobFireRecord, CronJobRecord, compute_next_fire_at
 
 CronMultitaskStrategy = Literal["reject", "interrupt", "rollback", "enqueue"]
+_CRON_INTERNAL_METADATA_KEY = "_cron"
+
+
+def _extract_execution_thread_id(metadata: dict | None, fallback_thread_id: str) -> str:
+    internal = metadata.get(_CRON_INTERNAL_METADATA_KEY) if isinstance(metadata, dict) else None
+    if isinstance(internal, dict):
+        execution_thread_id = internal.get("execution_thread_id")
+        if isinstance(execution_thread_id, str) and execution_thread_id.strip():
+            return execution_thread_id.strip()
+    return fallback_thread_id
+
+
+def _strip_internal_metadata(metadata: dict | None) -> dict:
+    if not isinstance(metadata, dict):
+        return {}
+    clean = dict(metadata)
+    clean.pop(_CRON_INTERNAL_METADATA_KEY, None)
+    return clean
+
+
+def _inject_execution_thread_id(metadata: dict | None, execution_thread_id: str) -> dict:
+    enriched = dict(metadata or {})
+    internal = dict(enriched.get(_CRON_INTERNAL_METADATA_KEY) or {})
+    internal["execution_thread_id"] = execution_thread_id
+    enriched[_CRON_INTERNAL_METADATA_KEY] = internal
+    return enriched
 
 
 def _coerce_datetime(value: float | datetime | None) -> datetime:
@@ -45,13 +71,14 @@ class CronSchedulerRepository:
         return CronJobRecord(
             job_id=row.job_id,
             thread_id=row.thread_id,
+            execution_thread_id=_extract_execution_thread_id(row.metadata_json, row.thread_id),
             assistant_id=row.assistant_id,
             creator_user_id=row.creator_user_id,
             cron=row.cron_expr,
             timezone=row.timezone,
             enabled=row.enabled,
             input=row.input_json,
-            metadata=row.metadata_json or {},
+            metadata=_strip_internal_metadata(row.metadata_json),
             config=row.config_json,
             context=row.context_json,
             delivery=row.delivery_json,
@@ -87,6 +114,7 @@ class CronSchedulerRepository:
         now: float | datetime | None = None,
     ) -> CronJobRecord:
         created_at = _coerce_datetime(now)
+        execution_thread_id = (payload.execution_thread_id or "").strip() or str(uuid4())
         row = CronJobRow(
             job_id=uuid4().hex,
             thread_id=payload.thread_id,
@@ -96,7 +124,7 @@ class CronSchedulerRepository:
             timezone=payload.timezone,
             enabled=payload.enabled,
             input_json=payload.input,
-            metadata_json=payload.metadata,
+            metadata_json=_inject_execution_thread_id(payload.metadata, execution_thread_id),
             config_json=payload.config,
             context_json=payload.context,
             delivery_json=payload.delivery.model_dump() if payload.delivery is not None else None,

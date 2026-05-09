@@ -63,11 +63,14 @@ async def test_create_schedule_then_pause_schedule(scheduler_repo, monkeypatch):
     )
 
     assert "created" in created.lower()
+    assert "dedicated thread" in created.lower()
 
     jobs = await scheduler_repo.list_jobs(thread_id="thread-create")
     assert len(jobs) == 1
     assert jobs[0].enabled is True
     assert jobs[0].timezone == "Asia/Shanghai"
+    assert jobs[0].execution_thread_id is not None
+    assert jobs[0].execution_thread_id != "thread-create"
     assert jobs[0].creator_user_id == "test-user-autouse"
     assert jobs[0].delivery is not None
     assert jobs[0].delivery.channel_name == "webhook"
@@ -95,9 +98,11 @@ async def test_create_schedule_uses_runtime_thread_by_default(scheduler_repo, mo
     )
 
     assert "thread-from-runtime" in created
+    assert "dedicated thread" in created
 
     listed = await list_schedules_tool.ainvoke({"runtime": _make_runtime(thread_id="thread-from-runtime")})
     assert "thread-from-runtime" in listed
+    assert "exec_thread=" in listed
     assert "delivery=none" in listed
 
 

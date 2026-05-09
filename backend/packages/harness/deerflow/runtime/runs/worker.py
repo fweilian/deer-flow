@@ -392,7 +392,7 @@ async def run_agent(
                     ckpt = getattr(ckpt_tuple, "checkpoint", {}) or {}
                     title = ckpt.get("channel_values", {}).get("title")
                     if title:
-                        await thread_store.update_display_name(thread_id, title)
+                        await thread_store.update_display_name(thread_id, title, user_id=record.user_id)
             except Exception:
                 logger.debug("Failed to sync title for thread %s (non-fatal)", thread_id)
 
@@ -400,7 +400,7 @@ async def run_agent(
         if thread_store is not None:
             try:
                 final_status = "idle" if record.status == RunStatus.success else record.status.value
-                await thread_store.update_status(thread_id, final_status)
+                await thread_store.update_status(thread_id, final_status, user_id=record.user_id)
             except Exception:
                 logger.debug("Failed to update thread_meta status for %s (non-fatal)", thread_id)
 

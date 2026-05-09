@@ -25,7 +25,7 @@ class CronJobRow(Base):
     config_json: Mapped[dict] = mapped_column(JSON, default=dict)
     context_json: Mapped[dict] = mapped_column(JSON, default=dict)
     delivery_json: Mapped[dict | None] = mapped_column(JSON)
-    multitask_strategy: Mapped[str] = mapped_column(String(20), default="enqueue", nullable=False)
+    multitask_strategy: Mapped[str] = mapped_column(String(20), default="reject", nullable=False)
     next_fire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     last_fire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_run_id: Mapped[str | None] = mapped_column(String(64))

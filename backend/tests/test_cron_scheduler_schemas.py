@@ -57,3 +57,14 @@ def test_scheduler_models_are_registered():
     assert CronJobRow.__tablename__ == "cron_jobs"
     assert CronJobFireRow.__tablename__ == "cron_job_fires"
     assert any(constraint.name == "uq_cron_job_fires_job_sched" for constraint in CronJobFireRow.__table__.constraints)
+
+
+def test_cron_job_create_defaults_to_reject_multitask_strategy():
+    payload = CronJobCreate(
+        thread_id="thread-1",
+        assistant_id="lead_agent",
+        cron="0 9 * * *",
+        timezone="Asia/Shanghai",
+    )
+
+    assert payload.multitask_strategy == "reject"

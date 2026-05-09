@@ -250,6 +250,31 @@ async def test_stale_claim_token_cannot_mark_recovered_fire_dispatched(session_f
 
 
 @pytest.mark.anyio
+async def test_dispatch_due_jobs_logs_job_context_when_launch_fails(session_factory, caplog):
+    repo = CronSchedulerRepository(session_factory)
+    launcher = AsyncMock(side_effect=RuntimeError("boom"))
+    service = CronSchedulerService(repo, run_launcher=launcher, instance_id="worker-a")
+    job = await repo.create_job(
+        CronJobCreate(
+            thread_id="thread-1",
+            assistant_id="lead_agent",
+            cron="*/5 * * * *",
+            timezone="Asia/Shanghai",
+        ),
+        now=1_746_500_000,
+    )
+
+    with caplog.at_level("ERROR", logger="deerflow.runtime.scheduler.service"):
+        with pytest.raises(RuntimeError, match="boom"):
+            await service.dispatch_due_jobs(now=job.next_fire_at)
+
+    assert "Cron run launch failed:" in caplog.text
+    assert f"job_id={job.job_id}" in caplog.text
+    assert "thread_id=thread-1" in caplog.text
+    assert "strategy=reject" in caplog.text
+
+
+@pytest.mark.anyio
 async def test_dispatch_due_jobs_does_not_report_launch_when_mark_fire_dispatched_is_fenced(session_factory):
     repo = CronSchedulerRepository(session_factory)
     job = await repo.create_job(
