@@ -15,6 +15,7 @@ This provider preserves ``reasoning`` on:
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -34,6 +35,13 @@ from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 from langchain_openai.chat_models.base import _create_usage_metadata
+
+from deerflow.models.openai_debug import (
+    log_chat_completions_request,
+    log_chat_completions_response,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_vllm_chat_template_kwargs(payload: dict[str, Any]) -> None:
@@ -188,10 +196,22 @@ class VllmChatModel(ChatOpenAI):
             for payload_msg, ai_msg in zip(assistant_payloads, ai_messages):
                 _restore_reasoning_field(payload_msg, ai_msg)
 
+        log_chat_completions_request(
+            logger,
+            payload,
+            provider_name=type(self).__name__,
+            model_name=getattr(self, "model_name", None) or getattr(self, "model", None),
+        )
         return payload
 
     def _create_chat_result(self, response: dict | openai.BaseModel, generation_info: dict | None = None) -> ChatResult:
         """Preserve vLLM reasoning on non-streaming responses."""
+        log_chat_completions_response(
+            logger,
+            response,
+            provider_name=type(self).__name__,
+            model_name=getattr(self, "model_name", None) or getattr(self, "model", None),
+        )
         result = super()._create_chat_result(response, generation_info=generation_info)
         response_dict = response if isinstance(response, dict) else response.model_dump()
 

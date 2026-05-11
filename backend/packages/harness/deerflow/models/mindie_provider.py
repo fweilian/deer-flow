@@ -1,6 +1,7 @@
 import ast
 import html
 import json
+import logging
 import re
 import uuid
 from collections.abc import Iterator
@@ -9,6 +10,13 @@ import httpx
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
+
+from deerflow.models.openai_debug import (
+    log_chat_completions_request,
+    log_chat_completions_response,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _fix_messages(messages: list) -> list:
@@ -206,6 +214,25 @@ class MindIEChatModel(ChatOpenAI):
                             msg.tool_calls = []
                         msg.tool_calls.extend(extracted_tools)
         return result
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        log_chat_completions_request(
+            logger,
+            payload,
+            provider_name=type(self).__name__,
+            model_name=getattr(self, "model_name", None) or getattr(self, "model", None),
+        )
+        return payload
+
+    def _create_chat_result(self, response: dict | object, generation_info: dict | None = None) -> ChatResult:
+        log_chat_completions_response(
+            logger,
+            response,
+            provider_name=type(self).__name__,
+            model_name=getattr(self, "model_name", None) or getattr(self, "model", None),
+        )
+        return super()._create_chat_result(response, generation_info=generation_info)
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         result = super()._generate(_fix_messages(messages), stop=stop, run_manager=run_manager, **kwargs)

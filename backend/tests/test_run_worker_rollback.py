@@ -178,6 +178,68 @@ async def test_run_agent_success_sends_cron_delivery_and_records_success():
 
 
 @pytest.mark.anyio
+async def test_run_agent_success_prefers_ai_result_text_for_cron_delivery():
+    run_manager = RunManager()
+    record = await run_manager.create(
+        "thread-1",
+        assistant_id="lead_agent",
+        metadata={
+            "scheduler": {
+                "job": {
+                    "job_id": "job-1",
+                    "thread_id": "thread-1",
+                    "assistant_id": "lead_agent",
+                    "cron": "*/5 * * * *",
+                    "timezone": "Asia/Shanghai",
+                },
+                "delivery": {
+                    "kind": "channel",
+                    "target_mode": "explicit",
+                    "channel_name": "webhook",
+                    "chat_id": "cron-webhook",
+                    "thread_ts": "thread-ts-1",
+                },
+                "fire": {
+                    "fire_id": "fire-1",
+                    "job_id": "job-1",
+                    "scheduled_fire_at": 1746500000,
+                },
+            }
+        },
+    )
+    bridge = SimpleNamespace(
+        publish=AsyncMock(),
+        publish_end=AsyncMock(),
+        cleanup=AsyncMock(),
+    )
+    outbound_publisher = AsyncMock()
+    cron_repo = SimpleNamespace(mark_fire_delivery=AsyncMock())
+
+    class DummyAgent:
+        async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
+            yield {"messages": [{"type": "ai", "content": "这是 AI 分析后的最终结果"}]}
+
+    await run_agent(
+        bridge,
+        run_manager,
+        record,
+        ctx=RunContext(
+            checkpointer=None,
+            outbound_publisher=outbound_publisher,
+            cron_scheduler_repo=cron_repo,
+        ),
+        agent_factory=lambda *, config: DummyAgent(),
+        graph_input={},
+        config={},
+    )
+    await asyncio.sleep(0)
+
+    sent = outbound_publisher.await_args.args[0]
+    assert sent.text == "这是 AI 分析后的最终结果"
+    assert sent.metadata["cron_delivery"]["result"]["text"] == "这是 AI 分析后的最终结果"
+
+
+@pytest.mark.anyio
 async def test_run_agent_delivery_failure_does_not_flip_run_success():
     run_manager = RunManager()
     record = await run_manager.create(

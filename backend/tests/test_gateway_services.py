@@ -87,6 +87,17 @@ def test_normalize_input_passthrough():
     assert result == {"custom_key": "value"}
 
 
+def test_normalize_input_legacy_cron_description_shape():
+    from app.gateway.services import normalize_input
+
+    result = normalize_input({"description": "分析昨日 xxxx 数据并输出报告", "task_type": "xxx-performance"})
+
+    assert len(result["messages"]) == 1
+    assert result["messages"][0].content == "分析昨日 xxxx 数据并输出报告\n\ntask_type: xxx-performance"
+    assert result["description"] == "分析昨日 xxxx 数据并输出报告"
+    assert result["task_type"] == "xxx-performance"
+
+
 def test_build_run_config_basic():
     from app.gateway.services import build_run_config
 
@@ -611,3 +622,55 @@ async def test_start_cron_run_with_deps_degrades_enqueue_strategy(monkeypatch, c
     cron_request = launch_run.await_args.args[0]
     assert cron_request.multitask_strategy == "reject"
     assert "degrading to 'reject'" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_start_cron_run_with_deps_logs_cron_llm_debug(monkeypatch, caplog):
+    from app.gateway.services import start_cron_run_with_deps
+    from deerflow.runtime.scheduler.schemas import CronJobFireRecord, CronJobRecord
+
+    monkeypatch.setenv("DEERFLOW_CRON_LLM_DEBUG", "1")
+    launch_run = AsyncMock(return_value=SimpleNamespace(run_id="run-debug"))
+    monkeypatch.setattr("app.gateway.services._launch_run", launch_run)
+
+    job = CronJobRecord(
+        job_id="job-debug",
+        thread_id="thread-chat",
+        execution_thread_id="thread-exec",
+        assistant_id="lead_agent",
+        cron="*/5 * * * *",
+        timezone="Asia/Shanghai",
+        input={"messages": [{"role": "user", "content": "分析昨日数据并输出报告"}]},
+        metadata={"source": "test"},
+        config={"configurable": {"model_name": "gpt-test"}},
+        context={"thinking_enabled": True},
+        multitask_strategy="reject",
+        enabled=True,
+        next_fire_at=1746500000,
+        last_fire_at=None,
+        last_run_id=None,
+        created_at=1746400000,
+        updated_at=1746400000,
+    )
+    fire = CronJobFireRecord(
+        fire_id="fire-debug",
+        job_id="job-debug",
+        scheduled_fire_at=1746500000,
+        status="claimed",
+        claim_owner="worker-a",
+        claim_token="token-debug",
+    )
+
+    with caplog.at_level("DEBUG", logger="app.gateway.services"):
+        await start_cron_run_with_deps(
+            job,
+            fire,
+            thread_id="thread-exec",
+            bridge=object(),
+            run_mgr=object(),
+            run_ctx=object(),
+        )
+
+    assert "Cron LLM debug input" in caplog.text
+    assert '"content": "分析昨日数据并输出报告"' in caplog.text
+    assert '"execution_thread_id": "thread-exec"' in caplog.text

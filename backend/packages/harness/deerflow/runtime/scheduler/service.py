@@ -77,7 +77,9 @@ class CronSchedulerService:
 
             try:
                 run = await self._run_launcher(job, fire)
-            except Exception:
+            except Exception as exc:
+                if await self._handle_overlap_conflict(job, fire, exc):
+                    continue
                 logger.exception(
                     "Cron run launch failed: job_id=%s thread_id=%s fire_id=%s scheduled_fire_at=%s strategy=%s",
                     job.job_id,
@@ -98,3 +100,31 @@ class CronSchedulerService:
                 launched.append(run.run_id)
 
         return launched
+
+    async def _handle_overlap_conflict(
+        self,
+        job: CronJobRecord,
+        fire: CronJobFireRecord,
+        exc: Exception,
+    ) -> bool:
+        status_code = getattr(exc, "status_code", None)
+        if status_code != 409:
+            return False
+        detail = getattr(exc, "detail", None)
+        message = detail if isinstance(detail, str) and detail else str(exc)
+        skipped = await self._repo.mark_fire_skipped(
+            job.job_id,
+            fire.fire_id,
+            claim_token=fire.claim_token,
+            skipped_at=fire.scheduled_fire_at,
+            error=message,
+        )
+        logger.warning(
+            "Cron fire skipped because execution thread already has an active run: job_id=%s execution_thread_id=%s fire_id=%s detail=%s persisted=%s",
+            job.job_id,
+            getattr(job, "execution_thread_id", None) or job.thread_id,
+            fire.fire_id,
+            message,
+            skipped,
+        )
+        return True

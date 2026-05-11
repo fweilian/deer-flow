@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import anyio
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from deerflow.persistence.engine import close_engine, get_session_factory, init_engine
@@ -116,6 +117,49 @@ async def test_dispatch_due_jobs_recovers_expired_fire_lease(session_factory):
 
     assert refreshed_fire.claim_owner == "worker-b"
     assert refreshed_fire.status == "dispatched"
+
+
+@pytest.mark.anyio
+async def test_dispatch_due_jobs_skips_overlap_conflict_and_advances_schedule(session_factory, caplog):
+    repo = CronSchedulerRepository(session_factory)
+    launcher = AsyncMock(side_effect=HTTPException(status_code=409, detail="Thread thread-exec already has active run(s): run-1:running"))
+    service = CronSchedulerService(repo, run_launcher=launcher, instance_id="worker-a")
+    job = await repo.create_job(
+        CronJobCreate(
+            thread_id="thread-chat",
+            execution_thread_id="thread-exec",
+            assistant_id="lead_agent",
+            cron="*/5 * * * *",
+            timezone="Asia/Shanghai",
+        ),
+        now=1_746_500_000,
+    )
+    original_fire_at = job.next_fire_at
+
+    with caplog.at_level("WARNING", logger="deerflow.runtime.scheduler.service"):
+        launched = await service.dispatch_due_jobs(now=original_fire_at)
+
+    assert launched == []
+    assert "Cron fire skipped because execution thread already has an active run" in caplog.text
+
+    async with session_factory() as session:
+        fire = (
+            await session.execute(
+                select(CronJobFireRow).where(
+                    CronJobFireRow.job_id == job.job_id,
+                    CronJobFireRow.scheduled_fire_at == datetime.fromtimestamp(original_fire_at, UTC),
+                )
+            )
+        ).scalar_one()
+        refreshed_job = (await session.execute(select(CronJobRow).where(CronJobRow.job_id == job.job_id))).scalar_one()
+    refreshed_record = await repo.get_job(job.job_id)
+
+    assert fire.status == "skipped"
+    assert "already has active run" in (fire.error or "")
+    assert refreshed_job.next_fire_at is not None
+    assert refreshed_record is not None
+    assert refreshed_record.next_fire_at is not None
+    assert refreshed_record.next_fire_at > original_fire_at
 
 
 class _ConcurrentListCoordinator:

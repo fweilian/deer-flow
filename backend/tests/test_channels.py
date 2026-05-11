@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.channels.base import Channel
 from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage, ResolvedAttachment
@@ -317,6 +318,17 @@ class TestExtractResponseText:
         result = [{"type": "ai", "content": "from list"}]
         assert _extract_response_text(result) == "from list"
 
+    def test_langchain_message_objects(self):
+        from app.channels.manager import _extract_response_text
+
+        result = {
+            "messages": [
+                HumanMessage(content="分析昨天数据"),
+                AIMessage(content="这是分析报告正文"),
+            ]
+        }
+        assert _extract_response_text(result) == "这是分析报告正文"
+
     def test_skips_empty_ai_content(self):
         from app.channels.manager import _extract_response_text
 
@@ -402,6 +414,39 @@ class TestExtractResponseText:
             ]
         }
         assert _extract_response_text(result) == "Here is the report."
+
+    def test_prefers_final_ai_answer_over_tool_calling_ai_text(self):
+        from app.channels.manager import _extract_response_text
+
+        result = {
+            "messages": [
+                {"type": "human", "content": "分析昨天数据"},
+                {
+                    "type": "ai",
+                    "content": "我先去查询和计算数据。",
+                    "tool_calls": [{"name": "query_metrics", "args": {"date": "yesterday"}, "id": "call_1"}],
+                },
+                {"type": "tool", "name": "query_metrics", "content": "ok"},
+                {"type": "ai", "content": "这是最终分析报告：昨日转化率提升 12%，主要来自渠道 A。"},
+            ]
+        }
+        assert _extract_response_text(result) == "这是最终分析报告：昨日转化率提升 12%，主要来自渠道 A。"
+
+    def test_falls_back_to_visible_tool_calling_ai_text_when_no_final_ai_answer(self):
+        from app.channels.manager import _extract_response_text
+
+        result = {
+            "messages": [
+                {"type": "human", "content": "生成报告"},
+                {
+                    "type": "ai",
+                    "content": "报告已生成，请查收。",
+                    "tool_calls": [{"name": "present_files", "args": {"filepaths": ["/mnt/user-data/outputs/report.md"]}, "id": "call_1"}],
+                },
+                {"type": "tool", "name": "present_files", "content": "ok"},
+            ]
+        }
+        assert _extract_response_text(result) == "报告已生成，请查收。"
 
 
 # ---------------------------------------------------------------------------
@@ -1708,6 +1753,26 @@ class TestExtractArtifacts:
             ]
         }
         assert _extract_artifacts(result) == ["/mnt/user-data/outputs/a.txt", "/mnt/user-data/outputs/b.csv"]
+
+    def test_langchain_ai_message_tool_calls(self):
+        from app.channels.manager import _extract_artifacts
+
+        result = {
+            "messages": [
+                HumanMessage(content="导出报表"),
+                AIMessage(
+                    content="已生成文件。",
+                    tool_calls=[
+                        {
+                            "name": "present_files",
+                            "args": {"filepaths": ["/mnt/user-data/outputs/report.md"]},
+                            "id": "call_1",
+                        }
+                    ],
+                ),
+            ]
+        }
+        assert _extract_artifacts(result) == ["/mnt/user-data/outputs/report.md"]
 
 
 class TestFormatArtifactText:

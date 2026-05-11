@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph_sdk.errors import ConflictError
 
 from app.channels.commands import KNOWN_CHANNEL_COMMANDS
@@ -154,6 +155,71 @@ def _strip_loop_warning_text(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if "[LOOP DETECTED]" not in line).strip()
 
 
+def _message_type(msg: Any) -> str | None:
+    if isinstance(msg, dict):
+        raw = msg.get("type")
+        return str(raw).lower() if raw is not None else None
+    if isinstance(msg, HumanMessage):
+        return "human"
+    if isinstance(msg, AIMessage):
+        return "ai"
+    if isinstance(msg, ToolMessage):
+        return "tool"
+    if isinstance(msg, BaseMessage):
+        return msg.type.lower()
+    return None
+
+
+def _message_content(msg: Any) -> Any:
+    if isinstance(msg, dict):
+        return msg.get("content", "")
+    if isinstance(msg, BaseMessage):
+        return msg.content
+    return ""
+
+
+def _message_name(msg: Any) -> str | None:
+    if isinstance(msg, dict):
+        raw = msg.get("name")
+        return raw if isinstance(raw, str) else None
+    if isinstance(msg, ToolMessage):
+        return msg.name if isinstance(msg.name, str) else None
+    if isinstance(msg, BaseMessage):
+        raw = getattr(msg, "name", None)
+        return raw if isinstance(raw, str) else None
+    return None
+
+
+def _message_tool_calls(msg: Any) -> list[Any]:
+    if isinstance(msg, dict):
+        tool_calls = msg.get("tool_calls")
+        return tool_calls if isinstance(tool_calls, list) else []
+    if isinstance(msg, AIMessage):
+        return list(getattr(msg, "tool_calls", []) or [])
+    return []
+
+
+def _extract_ai_message_text(msg: Any) -> str:
+    content = _message_content(msg)
+    has_tool_calls = bool(_message_tool_calls(msg))
+    if isinstance(content, str) and content:
+        if has_tool_calls:
+            content = _strip_loop_warning_text(content)
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        text = "".join(parts)
+        if has_tool_calls:
+            text = _strip_loop_warning_text(text)
+        return text.strip()
+    return ""
+
+
 def _extract_response_text(result: dict | list) -> str:
     """Extract the last AI message text from a LangGraph runs.wait result.
 
@@ -172,48 +238,39 @@ def _extract_response_text(result: dict | list) -> str:
     else:
         return ""
 
+    visible_ai_with_tool_calls: str = ""
+
     # Walk backwards to find usable response text, but stop at the last
     # human message to avoid returning text from a previous turn.
     for msg in reversed(messages):
-        if not isinstance(msg, dict):
+        msg_type = _message_type(msg)
+        if msg_type is None:
             continue
-
-        msg_type = msg.get("type")
 
         # Stop at the last human message — anything before it is a previous turn
         if msg_type == "human":
             break
 
         # Check for tool messages from ask_clarification (interrupt case)
-        if msg_type == "tool" and msg.get("name") == "ask_clarification":
-            content = msg.get("content", "")
+        if msg_type == "tool" and _message_name(msg) == "ask_clarification":
+            content = _message_content(msg)
             if isinstance(content, str) and content:
                 return content
 
-        # Regular AI message with text content
+        # Regular AI message with text content. Prefer the final AI answer
+        # without tool calls; only fall back to tool-calling AI text if there
+        # is no plain final answer in the current turn.
         if msg_type == "ai":
-            content = msg.get("content", "")
-            has_tool_calls = bool(msg.get("tool_calls"))
-            if isinstance(content, str) and content:
-                if has_tool_calls:
-                    content = _strip_loop_warning_text(content)
-                    if not content:
-                        continue
-                return content
-            # content can be a list of content blocks
-            if isinstance(content, list):
-                parts = []
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        parts.append(block.get("text", ""))
-                    elif isinstance(block, str):
-                        parts.append(block)
-                text = "".join(parts)
-                if has_tool_calls:
-                    text = _strip_loop_warning_text(text)
-                if text:
-                    return text
-    return ""
+            has_tool_calls = bool(_message_tool_calls(msg))
+            text = _extract_ai_message_text(msg)
+            if not text:
+                continue
+            if has_tool_calls:
+                if not visible_ai_with_tool_calls:
+                    visible_ai_with_tool_calls = text
+                continue
+            return text
+    return visible_ai_with_tool_calls
 
 
 def _extract_text_content(content: Any) -> str:
@@ -325,14 +382,15 @@ def _extract_artifacts(result: dict | list) -> list[str]:
 
     artifacts: list[str] = []
     for msg in reversed(messages):
-        if not isinstance(msg, dict):
-            continue
         # Stop at the last human message — anything before it is a previous turn
-        if msg.get("type") == "human":
+        msg_type = _message_type(msg)
+        if msg_type is None:
+            continue
+        if msg_type == "human":
             break
         # Look for AI messages with present_files tool calls
-        if msg.get("type") == "ai":
-            for tc in msg.get("tool_calls", []):
+        if msg_type == "ai":
+            for tc in _message_tool_calls(msg):
                 if isinstance(tc, dict) and tc.get("name") == "present_files":
                     args = tc.get("args", {})
                     paths = args.get("filepaths", [])

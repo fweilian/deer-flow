@@ -12,6 +12,7 @@ which DeerFlow already understands.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -24,6 +25,13 @@ from langchain_openai.chat_models.base import (
     _convert_delta_to_message_chunk,
     _create_usage_metadata,
 )
+
+from deerflow.models.openai_debug import (
+    log_chat_completions_request,
+    log_chat_completions_response,
+)
+
+logger = logging.getLogger(__name__)
 
 _THINK_TAG_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL)
 
@@ -114,6 +122,12 @@ class PatchedChatMiniMax(ChatOpenAI):
             }
         else:
             payload["extra_body"] = {"reasoning_split": True}
+        log_chat_completions_request(
+            logger,
+            payload,
+            provider_name=type(self).__name__,
+            model_name=getattr(self, "model_name", None) or getattr(self, "model", None),
+        )
         return payload
 
     def _convert_chunk_to_generation_chunk(
@@ -185,6 +199,12 @@ class PatchedChatMiniMax(ChatOpenAI):
         response: dict | Any,
         generation_info: dict | None = None,
     ) -> ChatResult:
+        log_chat_completions_response(
+            logger,
+            response,
+            provider_name=type(self).__name__,
+            model_name=getattr(self, "model_name", None) or getattr(self, "model", None),
+        )
         result = super()._create_chat_result(response, generation_info)
         response_dict = response if isinstance(response, dict) else response.model_dump()
         choices = response_dict.get("choices", [])

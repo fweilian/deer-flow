@@ -628,7 +628,7 @@ async def _deliver_cron_success_notification(
         channel_name=str(resolved_delivery.get("channel_name") or ""),
         chat_id=str(resolved_delivery.get("chat_id") or ""),
         thread_id=thread_id,
-        text=str(delivery.get("text") or _format_cron_delivery_text(payload)),
+        text=_select_cron_delivery_text(delivery, payload),
         thread_ts=cast(str | None, resolved_delivery.get("thread_ts")),
         metadata={"cron_delivery": payload},
     )
@@ -730,6 +730,19 @@ def _format_cron_delivery_text(payload: dict[str, Any]) -> str:
     if isinstance(text, str) and text:
         summary.append(text)
     return "\n".join(summary)
+
+
+def _select_cron_delivery_text(delivery: dict[str, Any], payload: dict[str, Any]) -> str:
+    explicit_text = delivery.get("text")
+    if isinstance(explicit_text, str) and explicit_text:
+        return explicit_text
+
+    result = cast(dict[str, Any], payload.get("result") or {})
+    result_text = result.get("text")
+    if isinstance(result_text, str) and result_text:
+        return result_text
+
+    return _format_cron_delivery_text(payload)
 
 
 def _resolve_cron_delivery_target(delivery: dict[str, Any], deerflow_thread_id: str) -> dict[str, Any] | None:

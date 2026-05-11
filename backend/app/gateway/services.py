@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from collections.abc import Mapping
 from types import SimpleNamespace
@@ -95,11 +96,22 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
             else:
                 converted.append(msg)
         return {**raw_input, "messages": converted}
+    description = raw_input.get("description")
+    if isinstance(description, str) and description.strip():
+        task_type = raw_input.get("task_type")
+        content = description.strip()
+        if isinstance(task_type, str) and task_type.strip():
+            content = f"{content}\n\ntask_type: {task_type.strip()}"
+        return {
+            **raw_input,
+            "messages": [HumanMessage(content=content)],
+        }
     return raw_input
 
 
 _DEFAULT_ASSISTANT_ID = "lead_agent"
 _DEFAULT_CRON_MULTITASK_STRATEGY = "reject"
+_CRON_LLM_DEBUG_ENV = "DEERFLOW_CRON_LLM_DEBUG"
 
 
 # Whitelist of run-context keys that the langgraph-compat layer forwards from
@@ -158,6 +170,49 @@ def normalize_cron_multitask_strategy(strategy: str | None) -> str:
         )
         return _DEFAULT_CRON_MULTITASK_STRATEGY
     return normalized
+
+
+def _cron_llm_debug_enabled() -> bool:
+    value = os.getenv(_CRON_LLM_DEBUG_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on", "debug"}
+
+
+def _safe_debug_json(value: Any, *, max_chars: int = 20000) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except TypeError:
+        text = repr(value)
+    if len(text) > max_chars:
+        return f"{text[:max_chars]}...<truncated {len(text) - max_chars} chars>"
+    return text
+
+
+def log_cron_llm_debug(
+    *,
+    thread_id: str,
+    execution_thread_id: str,
+    assistant_id: str | None,
+    input_payload: Any,
+    metadata: dict[str, Any] | None,
+    config: dict[str, Any] | None,
+    context: Mapping[str, Any] | None,
+) -> None:
+    if not _cron_llm_debug_enabled():
+        return
+    logger.debug(
+        "Cron LLM debug input thread_id=%s execution_thread_id=%s assistant_id=%s payload=%s",
+        sanitize_log_param(thread_id),
+        sanitize_log_param(execution_thread_id),
+        sanitize_log_param(assistant_id or ""),
+        _safe_debug_json(
+            {
+                "input": input_payload,
+                "metadata": metadata,
+                "config": config,
+                "context": dict(context or {}),
+            }
+        ),
+    )
 
 
 def resolve_run_owner_id(metadata: Mapping[str, Any] | None) -> str | None | object:
@@ -368,6 +423,15 @@ async def start_cron_run_with_deps(
         stream_subgraphs=False,
         interrupt_before=None,
         interrupt_after=None,
+    )
+    log_cron_llm_debug(
+        thread_id=job.thread_id,
+        execution_thread_id=thread_id,
+        assistant_id=job.assistant_id,
+        input_payload=job.input,
+        metadata=metadata,
+        config=job.config,
+        context=job.context,
     )
     return await _launch_run(cron_request, thread_id, bridge=bridge, run_mgr=run_mgr, run_ctx=run_ctx)
 

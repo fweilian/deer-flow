@@ -399,6 +399,40 @@ class CronSchedulerRepository:
             await session.commit()
             return True
 
+    async def mark_fire_skipped(
+        self,
+        job_id: str,
+        fire_id: str,
+        *,
+        claim_token: str | None,
+        skipped_at: float | datetime,
+        error: str,
+    ) -> bool:
+        skipped_time = _coerce_datetime(skipped_at)
+        async with self._sf() as session:
+            fire = (
+                await session.execute(
+                    select(CronJobFireRow).where(
+                        CronJobFireRow.job_id == job_id,
+                        CronJobFireRow.fire_id == fire_id,
+                    )
+                )
+            ).scalar_one()
+            if fire.status != "claimed" or fire.claim_token != claim_token:
+                await session.rollback()
+                return False
+
+            job = (await session.execute(select(CronJobRow).where(CronJobRow.job_id == job_id))).scalar_one()
+
+            fire.status = "skipped"
+            fire.error = error
+            fire.lease_until = None
+            job.next_fire_at = _coerce_datetime(compute_next_fire_at(job.cron_expr, job.timezone, now=skipped_time))
+            job.updated_at = datetime.now(UTC)
+
+            await session.commit()
+            return True
+
     async def mark_fire_delivery(
         self,
         job_id: str,

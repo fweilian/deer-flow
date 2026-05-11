@@ -1,9 +1,11 @@
 import logging
 
 from langchain.chat_models import BaseChatModel
+from langchain_openai import ChatOpenAI
 
 from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
+from deerflow.models.openai_debug import DebugChatOpenAI
 from deerflow.reflection import resolve_class
 from deerflow.tracing import build_tracing_callbacks
 
@@ -63,6 +65,8 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
     if model_config is None:
         raise ValueError(f"Model {name} not found in config") from None
     model_class = resolve_class(model_config.use, BaseChatModel)
+    if model_config.use == "langchain_openai:ChatOpenAI" and issubclass(model_class, ChatOpenAI):
+        model_class = DebugChatOpenAI
     model_settings_from_config = model_config.model_dump(
         exclude_none=True,
         exclude={

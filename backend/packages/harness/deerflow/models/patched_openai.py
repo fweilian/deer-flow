@@ -21,11 +21,18 @@ message that originally carried them.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatResult
 from langchain_openai import ChatOpenAI
+
+from deerflow.models.openai_debug import (
+    log_chat_completions_request,
+    log_chat_completions_response,
+)
 
 
 class PatchedChatOpenAI(ChatOpenAI):
@@ -88,7 +95,26 @@ class PatchedChatOpenAI(ChatOpenAI):
             for (_, payload_msg), ai_msg in zip(assistant_payloads, ai_messages):
                 _restore_tool_call_signatures(payload_msg, ai_msg)
 
+        log_chat_completions_request(
+            logging.getLogger(__name__),
+            payload,
+            provider_name=type(self).__name__,
+            model_name=getattr(self, "model_name", None) or getattr(self, "model", None),
+        )
         return payload
+
+    def _create_chat_result(
+        self,
+        response: dict | Any,
+        generation_info: dict | None = None,
+    ) -> ChatResult:
+        log_chat_completions_response(
+            logging.getLogger(__name__),
+            response,
+            provider_name=type(self).__name__,
+            model_name=getattr(self, "model_name", None) or getattr(self, "model", None),
+        )
+        return super()._create_chat_result(response, generation_info=generation_info)
 
 
 def _restore_tool_call_signatures(payload_msg: dict, orig_msg: AIMessage) -> None:
