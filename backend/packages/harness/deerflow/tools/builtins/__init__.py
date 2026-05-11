@@ -6,6 +6,7 @@ from .schedule_tool import (
     list_schedules_tool,
     pause_schedule_tool,
     resume_schedule_tool,
+    update_schedule_tool,
 )
 from .setup_agent_tool import setup_agent
 from .task_tool import task_tool
@@ -19,6 +20,7 @@ __all__ = [
     "ask_clarification_tool",
     "create_schedule_tool",
     "list_schedules_tool",
+    "update_schedule_tool",
     "pause_schedule_tool",
     "resume_schedule_tool",
     "delete_schedule_tool",

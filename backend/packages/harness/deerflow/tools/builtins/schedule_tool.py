@@ -97,6 +97,23 @@ def _resolve_delivery(runtime: Runtime, delivery: CronJobChannelDelivery | None,
     return delivery.model_copy(update={"origin": origin})
 
 
+def _resolve_updated_delivery(
+    runtime: Runtime,
+    existing_delivery: CronJobChannelDelivery | None,
+    delivery: CronJobChannelDelivery | None,
+    deerflow_thread_id: str,
+) -> CronJobChannelDelivery | None:
+    if delivery is None:
+        return existing_delivery
+    if delivery.target_mode != "origin":
+        return delivery
+    if delivery.origin is not None:
+        return delivery
+    if existing_delivery is not None and existing_delivery.target_mode == "origin" and existing_delivery.origin is not None:
+        return delivery.model_copy(update={"origin": existing_delivery.origin})
+    return _resolve_delivery(runtime, delivery, deerflow_thread_id)
+
+
 def _format_delivery_summary(delivery: CronJobChannelDelivery | None) -> str:
     if delivery is None:
         return "none"
@@ -149,11 +166,11 @@ async def create_schedule_tool(
             - If `target_mode="explicit"`, the delivery config must include a
               concrete target such as `channel_name` and `chat_id`.
             - For `channel_name="webhook"` or an origin target of `webhook`,
-              real outbound delivery requires `delivery.options.api_request` or
-              `delivery.origin.options.api_request`, including at least the
-              third-party API `url`.
-            - Without that API request block, webhook delivery falls back to
-              logging only and will not call an external API.
+              `delivery.options.api_request` is optional.
+            - If `api_request` is present with a valid `url`, webhook delivery
+              will call the configured third-party API.
+            - Without that API request block, webhook delivery is still valid,
+              but it falls back to logging only and will not call an external API.
     """
 
     resolved_thread_id = _resolve_thread_id(runtime, thread_id)
@@ -172,6 +189,59 @@ async def create_schedule_tool(
         )
     )
     return f"Schedule {record.job_id} created for thread {record.thread_id}. It will execute on dedicated thread {record.execution_thread_id}. Next fire at {record.next_fire_at} ({record.timezone})."
+
+
+@tool("update_schedule", parse_docstring=True)
+async def update_schedule_tool(
+    runtime: Runtime,
+    job_id: str,
+    thread_id: str | None = None,
+    cron: str | None = None,
+    assistant_id: str | None = None,
+    input: dict[str, Any] | None = None,
+    delivery: CronJobChannelDelivery | None = None,
+) -> str:
+    """Update an existing cron schedule by job id.
+
+    Args:
+        job_id: Schedule job id.
+        thread_id: Optional management thread id. Defaults to the current runtime thread.
+        cron: Optional replacement cron expression.
+        assistant_id: Optional replacement assistant identifier.
+        input: Optional replacement input payload.
+        delivery: Optional replacement delivery target.
+            - If omitted, the existing delivery configuration is preserved.
+            - `webhook` delivery does not require `options.api_request`; without it,
+              delivery remains valid but outbound webhook sends will log only.
+            - If `target_mode="origin"` is provided without explicit origin details,
+              the tool first tries to preserve the existing origin target. Only if no
+              existing origin target is stored will it require channel-origin runtime
+              context.
+    """
+
+    resolved_thread_id = _resolve_thread_id(runtime, thread_id)
+    repo = _get_scheduler_repo()
+    existing = await repo.get_job(job_id)
+    if existing is None or existing.thread_id != resolved_thread_id:
+        return f"Schedule {job_id} not found."
+
+    resolved_delivery = _resolve_updated_delivery(
+        runtime,
+        existing.delivery,
+        delivery,
+        resolved_thread_id,
+    )
+    record = await repo.update_job(
+        job_id,
+        thread_id=resolved_thread_id,
+        cron=cron,
+        assistant_id=assistant_id,
+        input=input,
+        delivery=resolved_delivery,
+    )
+    if record is None:
+        return f"Schedule {job_id} not found."
+    return f"Schedule {record.job_id} updated. Next fire at {record.next_fire_at}. Delivery={_format_delivery_summary(record.delivery)}."
 
 
 @tool("list_schedules", parse_docstring=True)

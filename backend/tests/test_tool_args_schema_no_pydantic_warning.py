@@ -35,6 +35,7 @@ from deerflow.tools.builtins.schedule_tool import (
     list_schedules_tool,
     pause_schedule_tool,
     resume_schedule_tool,
+    update_schedule_tool,
 )
 from deerflow.tools.builtins.setup_agent_tool import setup_agent
 from deerflow.tools.builtins.task_tool import task_tool
@@ -66,6 +67,7 @@ _TOOL_CASES = [
     (present_file_tool, {"filepaths": ["/tmp/x"], "tool_call_id": "call-1"}),
     (create_schedule_tool, {"cron": "*/5 * * * *"}),
     (list_schedules_tool, {}),
+    (update_schedule_tool, {"job_id": "job-1"}),
     (pause_schedule_tool, {"job_id": "job-1"}),
     (resume_schedule_tool, {"job_id": "job-1"}),
     (delete_schedule_tool, {"job_id": "job-1"}),
@@ -109,6 +111,7 @@ def test_tool_args_schema_does_not_emit_pydantic_context_warning(tool_obj, extra
     [
         create_schedule_tool,
         list_schedules_tool,
+        update_schedule_tool,
         pause_schedule_tool,
         resume_schedule_tool,
         delete_schedule_tool,

@@ -250,6 +250,46 @@ class CronSchedulerRepository:
             await session.commit()
             return record
 
+    async def update_job(
+        self,
+        job_id: str,
+        *,
+        thread_id: str,
+        cron: str | None = None,
+        assistant_id: str | None = None,
+        input: dict | None = None,
+        delivery=None,
+        now: float | datetime | None = None,
+    ) -> CronJobRecord | None:
+        updated_at = _coerce_datetime(now)
+        async with self._sf() as session:
+            row = (
+                await session.execute(
+                    select(CronJobRow).where(
+                        CronJobRow.job_id == job_id,
+                        CronJobRow.thread_id == thread_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+
+            if cron is not None:
+                row.cron_expr = cron
+                if row.enabled:
+                    row.next_fire_at = _coerce_datetime(compute_next_fire_at(row.cron_expr, row.timezone, now=updated_at))
+            if assistant_id is not None:
+                row.assistant_id = assistant_id
+            if input is not None:
+                row.input_json = input
+            if delivery is not None:
+                row.delivery_json = delivery.model_dump()
+
+            row.updated_at = updated_at
+            await session.commit()
+            await session.refresh(row)
+            return self._row_to_record(row)
+
     async def claim_fire(
         self,
         job_id: str,

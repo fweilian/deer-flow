@@ -15,6 +15,7 @@ from deerflow.tools.builtins import (
     present_file_tool,
     resume_schedule_tool,
     task_tool,
+    update_schedule_tool,
     view_image_tool,
 )
 from deerflow.tools.builtins.tool_search import reset_deferred_registry
@@ -26,6 +27,7 @@ BUILTIN_TOOLS = [
     ask_clarification_tool,
     create_schedule_tool,
     list_schedules_tool,
+    update_schedule_tool,
     pause_schedule_tool,
     resume_schedule_tool,
     delete_schedule_tool,

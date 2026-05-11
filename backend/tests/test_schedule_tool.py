@@ -12,6 +12,7 @@ from deerflow.tools.builtins.schedule_tool import (
     list_schedules_tool,
     pause_schedule_tool,
     resume_schedule_tool,
+    update_schedule_tool,
 )
 
 
@@ -248,3 +249,87 @@ async def test_create_schedule_origin_delivery_requires_source_context(scheduler
                 },
             }
         )
+
+
+@pytest.mark.anyio
+async def test_update_schedule_preserves_existing_origin_without_runtime_source_context(scheduler_repo, monkeypatch):
+    monkeypatch.setattr("deerflow.tools.builtins.schedule_tool._get_scheduler_repo", lambda: scheduler_repo)
+    monkeypatch.setattr("deerflow.tools.builtins.schedule_tool._system_timezone", lambda: "UTC")
+
+    await create_schedule_tool.ainvoke(
+        {
+            "runtime": _make_runtime(
+                thread_id="thread-update-origin",
+                extra_context={
+                    "source_channel_name": "feishu",
+                    "source_chat_id": "chat-origin",
+                    "source_thread_ts": "msg-origin",
+                },
+            ),
+            "cron": "0 * * * *",
+            "delivery": {
+                "kind": "channel",
+                "target_mode": "origin",
+            },
+        }
+    )
+
+    jobs = await scheduler_repo.list_jobs(thread_id="thread-update-origin")
+    assert len(jobs) == 1
+
+    updated = await update_schedule_tool.ainvoke(
+        {
+            "runtime": _make_runtime(thread_id="thread-update-origin"),
+            "job_id": jobs[0].job_id,
+            "cron": "30 * * * *",
+            "delivery": {
+                "kind": "channel",
+                "target_mode": "origin",
+            },
+        }
+    )
+
+    assert "updated" in updated.lower()
+    refreshed = await scheduler_repo.get_job(jobs[0].job_id)
+    assert refreshed is not None
+    assert refreshed.cron == "30 * * * *"
+    assert refreshed.delivery is not None
+    assert refreshed.delivery.target_mode == "origin"
+    assert refreshed.delivery.origin is not None
+    assert refreshed.delivery.origin.channel_name == "feishu"
+    assert refreshed.delivery.origin.chat_id == "chat-origin"
+
+
+@pytest.mark.anyio
+async def test_update_schedule_allows_webhook_without_api_request(scheduler_repo, monkeypatch):
+    monkeypatch.setattr("deerflow.tools.builtins.schedule_tool._get_scheduler_repo", lambda: scheduler_repo)
+    monkeypatch.setattr("deerflow.tools.builtins.schedule_tool._system_timezone", lambda: "UTC")
+
+    await create_schedule_tool.ainvoke(
+        {
+            "runtime": _make_runtime(thread_id="thread-webhook-optional"),
+            "cron": "0 * * * *",
+        }
+    )
+    jobs = await scheduler_repo.list_jobs(thread_id="thread-webhook-optional")
+    assert len(jobs) == 1
+
+    updated = await update_schedule_tool.ainvoke(
+        {
+            "runtime": _make_runtime(thread_id="thread-webhook-optional"),
+            "job_id": jobs[0].job_id,
+            "delivery": {
+                "kind": "channel",
+                "target_mode": "explicit",
+                "channel_name": "webhook",
+                "chat_id": "ops-room",
+            },
+        }
+    )
+
+    assert "updated" in updated.lower()
+    refreshed = await scheduler_repo.get_job(jobs[0].job_id)
+    assert refreshed is not None
+    assert refreshed.delivery is not None
+    assert refreshed.delivery.channel_name == "webhook"
+    assert refreshed.delivery.options == {}
