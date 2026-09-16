@@ -225,3 +225,45 @@ Phase 0 冻结快照（12:51）之后、Phase 1 正式动工之前，`config.yam
 | 配置恢复 | 恢复后 `config.yaml` MD5 `13c965ec9b710c6b618ae721d6803c30` |
 
 至此，Phase 0 的基线、配置清单、主链路、artifact 生成/读取/交付校验均有证据闭合。
+
+## 8. Phase 1 收敛执行结果（2026-09-16 15:00–15:02）
+
+### 8.1 配置结果
+
+Phase 1 的 1.1–1.8 已完成。最终运行配置的 MD5 为 5f0b585c2fdb2aa9978692e48c90c11a，扩展配置 MD5 为 520b4eaf1f9595c8272f64183c57bfbb。两个运行时配置文件仍被 .gitignore 忽略，本目录另存最终快照。
+
+| 项目 | 最终值 / 证据 |
+| --- | --- |
+| 工具组 | file:read、file:write、bash |
+| 移除能力 | image_search、web、browser、knowledge |
+| 禁用 skill | extensions_config.json 显式禁用 17 个 |
+| scheduler | enabled=true |
+| agents API | enabled=true |
+| channel connections / MCP tasks | 均为 false |
+| task continuity / subagent batches | 保留配置，均为 false，标记“待评估启用” |
+| database | postgres，URL 使用 DATABASE_URL |
+| run events | db |
+| agent storage | db |
+| stream bridge | redis，URL 使用 DEER_FLOW_STREAM_BRIDGE_REDIS_URL |
+
+### 8.2 真实基础设施与 L1
+
+本机使用已存在的 postgres-dev（Postgres 15，dev_db）与 redis-dev 容器。切换后：
+
+- GET /health/ready 返回 200，database=ok、checkpointer=ok；
+- Postgres 公共表数量为 27；
+- L1 配置收敛回归：408 passed / 1 warning；
+- Postgres 中实测 runs=2、checkpoints=74、run_events=15，证明 run events 已真实落库，而非仅存在于进程内存。
+
+### 8.3 Phase 1 L2 artifact smoke
+
+使用真实 Postgres/Redis 环境执行：
+
+    SMOKE_VERIFY_ARTIFACT=1
+    SMOKE_ARTIFACT_MARKER=PHASE1_POSTGRES_REDIS_ARTIFACT_20260916
+    结果：PASS=18  FAIL=0
+    Thread: 721f4ead-508d-46b2-8706-6e16502e701e
+    首轮 Run: 30edd160-6536-4e7c-8bbc-ad29604dd23c
+    Resume Run: ed872b7d-3260-404c-8609-9fc7c452697d
+
+本轮验证了 thread → run → SSE → checkpoint → resume，以及 artifact 生成、artifact API 读取、内容标记校验和 run.delivery.present_files 回执。为让 Agent 生成文件而临时加入的 write_file 已在 smoke 后移除；最终配置恢复并通过哈希核对。

@@ -120,6 +120,18 @@ Phase 2.9 要删 `workspace_changes` 的 L1（前端 UI）+ L2（事件与路由
 
 → **Phase 0 的 V1 验收已闭合，可以进入后续阶段。**
 
+## 六、Phase 1 收敛完成（2026-09-16）
+
+Phase 1 的 1.1–1.8 已在当前工作区完成并通过验证：
+
+- 工具面仅保留 file:read、file:write、bash 三组，移除 image_search、web、browser、knowledge。
+- extensions_config.json 显式禁用 17 个非本期 skill；mcpServers 保持为空。
+- scheduler.enabled=true、agents_api.enabled=true；channel_connections 与 mcp_tasks 保持关闭。
+- task_continuity 与 subagent_batches 保留配置但维持关闭，状态标记为“待评估启用”，没有误删。
+- 生产配置切换为 Postgres + DB run events + DB agent storage + Redis stream bridge。连接信息通过 DATABASE_URL 与 DEER_FLOW_STREAM_BRIDGE_REDIS_URL 注入，不把凭据写入配置或提交。
+
+验证结果：L1 配置收敛回归 408 passed / 1 warning；真实 Postgres/Redis 环境下 L2 artifact smoke PASS=18 / FAIL=0。artifact 曾临时启用 write_file 生成并读取，smoke 完成后已移除该临时工具，最终配置不含 write_file。
+
 ---
 
 ## 五、环境注意事项（本机踩过的坑）

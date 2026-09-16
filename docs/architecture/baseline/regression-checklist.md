@@ -224,7 +224,7 @@ PASS run.delivery 记录了 present_files
 | 阶段              | L0 | L1 | L2 | 备注                                  |
 | --------------- | -- | -- | -- | ----------------------------------- |
 | **Phase 0（本阶段）** | ✅  | ✅  | ✅  | **主链路三轮 + artifact 补充轮均通过（PASS=17，FAIL=0）** |
-| Phase 1         |    |    |    | 配置层收敛；**必须先建 `extensions_config.json`** |
+| **Phase 1（配置收敛）** | ✅ | ✅ | ✅ | **1.1–1.8 完成；L1=408 passed；Postgres/Redis L2 artifact=PASS=18、FAIL=0** |
 | Phase 2         |    |    |    | 删叶子；每删一个模块跑一次 L1                    |
 | Phase 3         |    |    |    | 渠道下线；顺序 3.2 → 3.2b → 3.3 → 3.4 不可换  |
 | Phase 4         |    |    |    | 浏览器下线                               |

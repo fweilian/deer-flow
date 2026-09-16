@@ -1,0 +1,58 @@
+{
+  "middlewares": [],
+  "mcpInterceptors": [],
+  "mcpServers": {},
+  "skills": {
+    "academic-paper-review": {
+      "enabled": false
+    },
+    "claude-to-deerflow": {
+      "enabled": false
+    },
+    "code-documentation": {
+      "enabled": false
+    },
+    "consulting-analysis": {
+      "enabled": false
+    },
+    "deep-research": {
+      "enabled": false
+    },
+    "frontend-design": {
+      "enabled": false
+    },
+    "github-deep-research": {
+      "enabled": false
+    },
+    "image-generation": {
+      "enabled": false
+    },
+    "music-generation": {
+      "enabled": false
+    },
+    "newsletter-generation": {
+      "enabled": false
+    },
+    "podcast-generation": {
+      "enabled": false
+    },
+    "ppt-generation": {
+      "enabled": false
+    },
+    "surprise-me": {
+      "enabled": false
+    },
+    "systematic-literature-review": {
+      "enabled": false
+    },
+    "vercel-deploy-claimable": {
+      "enabled": false
+    },
+    "video-generation": {
+      "enabled": false
+    },
+    "web-design-guidelines": {
+      "enabled": false
+    }
+  }
+}
