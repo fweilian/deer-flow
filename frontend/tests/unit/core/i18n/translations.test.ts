@@ -14,11 +14,7 @@ describe("core copy loading", () => {
     expect(chinese.inputBox.disclaimer).toBe(
       "内容由AI生成，重要信息请务必核查",
     );
-    expect(english.channels.descriptions.buzz).toBe(
-      "Buzz channels and direct messages through your DeerFlow agent.",
-    );
-    expect(chinese.channels.descriptions.buzz).toBe(
-      "通过 DeerFlow 智能体接收 Buzz 频道消息和私聊。",
-    );
+    expect(english.channels.descriptions).toEqual({});
+    expect(chinese.channels.descriptions).toEqual({});
   });
 });

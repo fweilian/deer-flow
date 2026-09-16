@@ -327,7 +327,7 @@ def test_reset_user_skill_storage_normalises_cache_key(monkeypatch):
     """reset_user_skill_storage must normalise the user_id so that the cache
     key matches the one used by get_or_new_user_skill_storage.
 
-    Without normalisation, an IM-style user ID like ``feishu:ou_xxx`` would
+    Without normalisation, an IM-style user ID like ``custom:ou_xxx`` would
     fail to clear its stale cache entry because ``get_or_new`` stores by
     ``make_safe_user_id(user_id)`` but ``reset`` would try to pop by the raw
     ID — a silent cache-invalidation failure.
@@ -338,7 +338,7 @@ def test_reset_user_skill_storage_normalises_cache_key(monkeypatch):
     SlowUserSkillStorage.instances_created = 0
     _patch_user_storage_resolution(monkeypatch)
 
-    raw_id = "feishu:ou_abc123"
+    raw_id = "custom:ou_abc123"
     safe_id = make_safe_user_id(raw_id)
 
     # Create storage via the normal flow (which normalises the key)

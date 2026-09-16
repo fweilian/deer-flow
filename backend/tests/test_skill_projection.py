@@ -220,18 +220,18 @@ def test_per_user_toggle_removes_custom_skill_before_returning(projection_env) -
 def test_managed_integration_projection_is_filtered_per_user(projection_env) -> None:
     env = projection_env
     integration_root = env.paths.integration_skills_dir()
-    _write_skill(integration_root / "lark-cli", "lark-doc")
+    _write_skill(integration_root / "custom-pack", "custom-doc")
 
     alice_projection = rebuild_skill_projections(env.storage)
-    alice_skill = alice_projection.integrations / "lark-cli" / "lark-doc" / "SKILL.md"
+    alice_skill = alice_projection.integrations / "custom-pack" / "custom-doc" / "SKILL.md"
     assert alice_skill.is_file()
 
-    env.storage.set_skill_enabled_state("lark-doc", False)
+    env.storage.set_skill_enabled_state("custom-doc", False)
     assert not alice_skill.exists()
 
     bob_storage = UserScopedSkillStorage("bob", host_path=str(env.skills_root), app_config=env.config)
     bob_projection = rebuild_skill_projections(bob_storage)
-    assert (bob_projection.integrations / "lark-cli" / "lark-doc" / "SKILL.md").is_file()
+    assert (bob_projection.integrations / "custom-pack" / "custom-doc" / "SKILL.md").is_file()
 
 
 def test_thread_projection_enforces_agent_allowlist_across_skill_categories(projection_env) -> None:

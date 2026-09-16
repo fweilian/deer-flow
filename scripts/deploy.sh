@@ -234,7 +234,7 @@ fi
 # ── UV_EXTRAS auto-detection ─────────────────────────────────────────────────
 # The production Dockerfile accepts UV_EXTRAS as a single build-arg token and
 # adds the --extra prefix itself. Convert the detector's uv flag string
-# ("--extra postgres --extra discord") to a comma-joined name token.
+# ("--extra postgres") to a comma-joined name token.
 
 if [ "$CMD" != "down" ] && [ -z "$UV_EXTRAS" ]; then
     _detect_python=""

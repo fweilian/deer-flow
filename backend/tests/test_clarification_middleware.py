@@ -516,7 +516,7 @@ class TestFormPayload:
 
     def test_serialized_fields_over_byte_budget_degrade_whole_form(self, middleware):
         """Per-item caps alone allow a form whose IM text fallback exceeds
-        channel limits (Slack 40k chars, Feishu ~30KB card); a total serialized
+        adapter delivery limits; a total serialized
         byte budget must bound the whole definition."""
         fields = [
             {
@@ -702,7 +702,7 @@ class TestClarificationCommandIdempotency:
 class TestClarificationDisabled:
     """When ``disable_clarification`` is set in runtime context, a clarification
     must NOT interrupt the run — it returns a ToolMessage nudging the agent to
-    proceed, so non-interactive channels (GitHub) don't dead-end."""
+    proceed, so non-interactive external deliveries don't dead-end."""
 
     def _request(self, *, runtime_context):
         return SimpleNamespace(

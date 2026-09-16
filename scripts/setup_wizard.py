@@ -51,14 +51,18 @@ def main() -> int:
         if config_path.exists():
             print(yellow("Existing configuration detected."))
             print()
-            should_reconfigure = ask_yes_no("Do you want to reconfigure?", default=False)
+            should_reconfigure = ask_yes_no(
+                "Do you want to reconfigure?", default=False
+            )
             if not should_reconfigure:
                 print()
-                print_info("Keeping existing config. Run 'make doctor' to verify your setup.")
+                print_info(
+                    "Keeping existing config. Run 'make doctor' to verify your setup."
+                )
                 return 0
             print()
 
-        total_steps = 4
+        total_steps = 3
 
         from wizard.steps.llm import run_llm_step
 
@@ -67,10 +71,6 @@ def main() -> int:
         from wizard.steps.execution import run_execution_step
 
         execution = run_execution_step(f"Step 2/{total_steps}")
-
-        from wizard.steps.channels import run_channels_step
-
-        channels = run_channels_step(f"Step 3/{total_steps}")
 
         print_header(f"Step {total_steps}/{total_steps} · Writing configuration")
 
@@ -87,7 +87,6 @@ def main() -> int:
             allow_host_bash=execution.allow_host_bash,
             include_bash_tool=execution.include_bash_tool,
             include_write_tools=execution.include_write_tools,
-            channel_connection_providers=channels.enabled_providers,
         )
         print_success(f"Config written to: {config_path.relative_to(project_root)}")
 
@@ -95,6 +94,7 @@ def main() -> int:
             env_example = project_root / ".env.example"
             if env_example.exists():
                 import shutil
+
                 shutil.copyfile(env_example, env_path)
 
         env_pairs: dict[str, str] = {}
@@ -109,12 +109,19 @@ def main() -> int:
         frontend_env_example = project_root / "frontend" / ".env.example"
         if not frontend_env.exists() and frontend_env_example.exists():
             import shutil
+
             shutil.copyfile(frontend_env_example, frontend_env)
             print_success("frontend/.env created from example")
 
         print_header("Setup complete!")
-        print(f"  {green('✓')} LLM:        {llm.provider.display_name} / {llm.model_name}")
-        sandbox_label = "Local sandbox" if execution.sandbox_use.endswith("LocalSandboxProvider") else "Container sandbox"
+        print(
+            f"  {green('✓')} LLM:        {llm.provider.display_name} / {llm.model_name}"
+        )
+        sandbox_label = (
+            "Local sandbox"
+            if execution.sandbox_use.endswith("LocalSandboxProvider")
+            else "Container sandbox"
+        )
         print(f"  {green('✓')} Execution:  {sandbox_label}")
         if execution.include_bash_tool:
             bash_label = "enabled"
@@ -127,10 +134,9 @@ def main() -> int:
             print(f"  {green('✓')} File write: enabled")
         else:
             print(f"  {'—':>3} File write: disabled")
-        if channels.enabled_providers:
-            print(f"  {green('✓')} IM channels: {', '.join(channels.enabled_providers)}")
-        else:
-            print(f"  {'—':>3} IM channels: disabled")
+        print(
+            f"  {'—':>3} IM channels: no built-in providers (extensions can register Channels)"
+        )
         print()
         print("Next steps:")
         print(f"  {cyan('make install')}    # Install dependencies (first time only)")

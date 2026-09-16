@@ -280,7 +280,7 @@ def test_channel_posts_require_double_submit_csrf():
     client = TestClient(_make_app(), base_url="https://deerflow.example")
 
     response = client.post(
-        "/api/channels/slack/connect",
+        "/api/channels/custom/connect",
         headers={"Origin": "https://deerflow.example"},
     )
 

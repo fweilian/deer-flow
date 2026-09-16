@@ -545,27 +545,9 @@ _SERVER_OWNED_RUNTIME_CONTEXT_KEYS: frozenset[str] = (
     | SANDBOX_SERVER_OWNED_CONTEXT_KEYS
 )
 
-# Keys forwarded from ``body.context`` into ``config['context']`` ONLY (the
-# runtime context that becomes ``ToolRuntime.context`` / ``runtime.context``),
-# never into ``config['configurable']``. These are read by tools and
-# middlewares from ``runtime.context`` and have no reason to live in
-# ``configurable`` — and ``configurable`` is persisted in checkpoints, so
-# keeping secrets like ``github_token`` out of it avoids writing a
-# short-lived installation token into the checkpoint store.
-#
-#   ``github_token``         — App installation token minted by the GitHub
-#                              channel; the bash tool exposes it as
-#                              ``GH_TOKEN``/``GITHUB_TOKEN`` so ``gh`` and
-#                              ``git`` push as the bot, not the host user.
-#   ``disable_clarification`` — set for non-interactive channels (GitHub
-#                              webhooks) so ClarificationMiddleware proceeds
-#                              instead of dead-ending the run.
-#
-# Both are produced server-side by the channel run policies
-# (``ChannelManager._apply_channel_policy`` and ``app.gateway.github.run_policy``),
-# which reach the Gateway over the internally-authenticated request channel, so
-# they are internal-only as well — see :data:`_INTERNAL_ONLY_CONTEXT_KEYS`.
-_CONTEXT_RUNTIME_ONLY_KEYS: frozenset[str] = frozenset({"github_token", "disable_clarification"})
+# Keys forwarded from ``body.context`` into ``config['context']`` only. They are
+# internal runtime flags and must not be persisted in ``configurable``.
+_CONTEXT_RUNTIME_ONLY_KEYS: frozenset[str] = frozenset({"disable_clarification"})
 
 # Every run-context key an external client may never supply, in either section.
 # The two sets differ only in *where* a legitimate internal caller's value lands
@@ -576,10 +558,7 @@ _CONTEXT_RUNTIME_ONLY_KEYS: frozenset[str] = frozenset({"github_token", "disable
 # included — with "proceed without asking" instead of interrupting, and
 # ``SandboxMiddleware`` reads the two keys as the same non-interactive signal.
 # Accepting it from a client therefore reproduces the effect the
-# ``non_interactive`` gate exists to prevent. ``github_token`` is a live
-# credential that ``bash`` exports as ``GH_TOKEN``/``GITHUB_TOKEN``, and a copy
-# smuggled through ``body.config['configurable']`` would be written to the
-# checkpoint store.
+# ``non_interactive`` gate exists to prevent.
 _INTERNAL_ONLY_CONTEXT_KEYS: frozenset[str] = _CONTEXT_INTERNAL_CALLER_KEYS | _CONTEXT_RUNTIME_ONLY_KEYS | _SERVER_OWNED_RUNTIME_CONTEXT_KEYS
 
 
@@ -614,12 +593,10 @@ def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, An
     is True; for non-internal callers those keys are dropped from client requests
     by :func:`strip_internal_context_keys`.
 
-    A second set of keys (``_CONTEXT_RUNTIME_ONLY_KEYS`` — e.g. ``github_token``,
+    A second set of keys (``_CONTEXT_RUNTIME_ONLY_KEYS`` — e.g.
     ``disable_clarification``) is likewise forwarded only when ``internal`` is True,
     and then into ``config['context']`` only, never ``configurable``. These are
-    secrets / runtime flags read by tools and middlewares from ``runtime.context``;
-    keeping them out of ``configurable`` avoids persisting a short-lived token in the
-    checkpoint store.
+    runtime flags read by tools and middlewares from ``runtime.context``.
     """
     if not context:
         return

@@ -27,16 +27,6 @@ Accepted divergence: a crash-recovered scheduled launch reuses its run via the i
 
 Tests: the `tests/test_trace_*` and `tests/test_worker_trace_binding.py` suites, `test_gateway_services.py`, `test_run_metadata_secret_safety.py`, plus the Langfuse suites in `tracing/AGENTS.md`.
 
-### Managed Lark CLI credentials (`integrations/lark_cli.py`)
-
-App registration and direct app switching replace the per-user Lark credential
-tree transactionally. Clear the old OAuth data before running `lark-cli config
-init`: on Linux that command writes the new app secret into the file-backed
-keychain under the data directory, so clearing the directory afterward would
-leave `config.json` with a dangling keychain reference. The transaction snapshot
-still supplies the previous OAuth data for logout and restores the complete old
-tree if any switch step fails.
-
 ### Browser Progress Screenshots (`community/browser_automation/`)
 
 Hidden per-action browser progress frames use JPEG at quality 80 to keep their

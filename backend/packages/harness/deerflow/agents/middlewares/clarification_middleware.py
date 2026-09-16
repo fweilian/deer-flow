@@ -55,8 +55,7 @@ MAX_FIELD_OPTIONS = 24
 MAX_FIELD_TEXT_CHARS = 200
 # Total budget over the serialized normalized fields, in UTF-8 bytes. The
 # per-item caps alone still admit forms whose plain-text IM fallback exceeds
-# channel delivery limits (Slack truncates at 40k chars per message; Feishu
-# guides ~30KB per card), which would silently drop trailing fields — the very
+# adapter delivery limits, which would silently drop trailing fields — the very
 # thing atomic validation exists to prevent. 16KB keeps the fallback text of
 # any accepted form comfortably inside the strictest supported channel while
 # leaving headroom for question/context.
@@ -377,7 +376,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
     def _clarification_disabled(self, runtime: Any) -> bool:
         """Whether clarifications are suppressed for this run.
 
-        Non-interactive channels (e.g. GitHub webhooks) set
+        Non-interactive external deliveries set
         ``disable_clarification`` in the run context because a clarification
         would dead-end the run — the human only "replies" via a later
         webhook delivery, by which point the agent's turn is long over.

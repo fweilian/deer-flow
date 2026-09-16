@@ -222,8 +222,6 @@ skills:
 #    Reference them from config.yaml as $VAR. Example:
 #      secrets:
 #        OPENAI_API_KEY: "sk-..."
-#        FEISHU_APP_ID: "cli_xxx"
-#        FEISHU_APP_SECRET: "xxx"
 #        GITHUB_TOKEN: "ghp_xxx"
 secrets: {}
 # -- Use an existing Secret instead of creating one from `secrets` above.

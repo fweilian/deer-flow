@@ -99,7 +99,8 @@ class ChannelRuntimeConfigStore:
 
 
 def _provider_enabled(channel_connections_config: Any, provider: str) -> bool:
-    provider_config = getattr(channel_connections_config, provider, None)
+    providers = getattr(channel_connections_config, "providers", None)
+    provider_config = providers.get(provider) if isinstance(providers, dict) else None
     return bool(getattr(provider_config, "enabled", False))
 
 
@@ -137,21 +138,11 @@ def apply_runtime_connection_config(
 ) -> Any:
     """Apply persisted connection metadata that lives outside ``channels``.
 
-    Telegram uses a bot username for deep links; UI-entered values are stored
-    with the runtime channel config so local restarts keep the provider
-    configured.
+    Provider-specific metadata belongs to the registered Channel. The generic
+    connection config has no built-in provider fields to apply here.
     """
     if channel_connections_config is None or not getattr(channel_connections_config, "enabled", False):
         return channel_connections_config
 
-    runtime_store = store or ChannelRuntimeConfigStore()
-    telegram_runtime_config = runtime_store.get_provider_config("telegram")
-    bot_username = ""
-    if isinstance(telegram_runtime_config, dict):
-        bot_username = str(telegram_runtime_config.get("bot_username") or "").strip()
-    if not bot_username or not _provider_enabled(channel_connections_config, "telegram"):
-        return channel_connections_config
-
-    config = channel_connections_config.model_copy(deep=True)
-    config.telegram.bot_username = bot_username
-    return config
+    del store
+    return channel_connections_config

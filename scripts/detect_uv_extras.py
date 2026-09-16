@@ -13,7 +13,6 @@ Order of resolution:
    - stream_bridge.type == redis         -> redis
    - tools[].name == browser_navigate    -> browser
    - sandbox.ownership.type == redis     -> redis
-   - channels.buzz.enabled == true       -> buzz
    - models[].use == langchain_ollama:*  -> ollama
 3. Runtime environment toggles that enable optional backends:
    - DEER_FLOW_STREAM_BRIDGE_REDIS_URL   -> redis
@@ -164,11 +163,11 @@ def section_value(lines: list[str], section: str, key: str) -> str | None:
 
 
 def nested_section_value(lines: list[str], section_path: str, key: str) -> str | None:
-    """Return the value of a nested YAML key like ``channels.discord.enabled``.
+    """Return the value of a nested YAML key like ``channel_connections.enabled``.
 
     Handles two levels of nesting:
-        channels:
-          discord:
+        channel_connections:
+          enabled:
             enabled: true
     """
     parts = section_path.split(".")
@@ -300,7 +299,9 @@ def models_use_providers(lines: list[str]) -> set[str]:
         stripped = line.lstrip()
         indent = len(line) - len(stripped)
         item_match = _LIST_ITEM_RE.match(line)
-        if item_match and (item_indent is None or len(item_match.group(1)) == item_indent):
+        if item_match and (
+            item_indent is None or len(item_match.group(1)) == item_indent
+        ):
             # A model entry. Checked before the section-end test below because
             # `yaml.safe_dump` puts these at column 0.
             item_indent = len(item_match.group(1))
@@ -334,12 +335,10 @@ def detect_from_config(path: Path) -> list[str]:
         extras.add("postgres")
     if (section_value(lines, "stream_bridge", "type") or "").lower() == "redis":
         extras.add("redis")
-    if (nested_section_value(lines, "sandbox.ownership", "type") or "").lower() == "redis":
+    if (
+        nested_section_value(lines, "sandbox.ownership", "type") or ""
+    ).lower() == "redis":
         extras.add("redis")
-    if (nested_section_value(lines, "channels.discord", "enabled") or "").lower() == "true":
-        extras.add("discord")
-    if (nested_section_value(lines, "channels.buzz", "enabled") or "").lower() == "true":
-        extras.add("buzz")
     if tools_include_name(lines, "browser_navigate"):
         extras.add("browser")
     for provider in models_use_providers(lines):

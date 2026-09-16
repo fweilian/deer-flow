@@ -135,10 +135,9 @@ FastAPI 应用程序，为前端集成提供 REST 接口：
 
 ### 即时通信渠道
 
-即时通信桥接支持飞书、Slack 和 Telegram。Slack 和 Telegram 仍然使用最终的 `runs.wait()` 响应路径；飞书现在通过 `runs.stream(["messages-tuple", "values"])` 进行流式传输，在渠道管理器内部对同一线程中快速连续到达的请求进行串行化，并针对每条源消息原地更新线程内的同一张卡片。
+后端保留与 provider 无关的通用 Channel 运行时，本阶段不内置具体适配器。扩展可以注册自定义适配器，将 `InboundMessage` 发布到 `MessageBus`，并通过 `Channel.send()` 发送 `OutboundMessage`。通用 Channel 与连接路由、身份映射、附件上传路径以及持久化连接表继续保留。
 
-对于飞书卡片更新，DeerFlow 会按每条入站消息保存运行中卡片的 `message_id`，并持续更新同一张卡片直到运行结束，同时保留现有的 `OK` / `DONE` 表情回应流程。当现有飞书话题中的上一轮仍在运行时收到后续消息，新消息会在映射的 DeerFlow `thread_id` 上等待，在对应的源消息上显示排队中或运行中的卡片，并在后续更新中保留简洁的源消息引用块，使快速连续提出的问题仍然容易区分。
-
+---
 ---
 
 ## 快速开始

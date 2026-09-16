@@ -123,6 +123,7 @@ class _ScriptedAgent:
     async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
         del subgraphs
         self.controller.started.set()
+        completed = False
 
         try:
             thread_id = _thread_id_from_config(config)
@@ -145,6 +146,7 @@ class _ScriptedAgent:
             if self.block_after_first_chunk:
                 while not self.controller.release.is_set():
                     await asyncio.sleep(0.05)
+            completed = True
         except asyncio.CancelledError:
             # Catch cancellation arriving anywhere in the body — including the
             # `await ainvoke()` / `_write_checkpoint()` / `yield` points between
@@ -153,6 +155,11 @@ class _ScriptedAgent:
             # race with cancellation arriving early.
             self.controller.cancelled.set()
             raise
+        finally:
+            # Some async consumers close an in-flight async generator instead
+            # of delivering CancelledError into its body.
+            if not completed:
+                self.controller.cancelled.set()
 
 
 def _make_agent_factory(controller: _RunController, **agent_kwargs):
@@ -227,6 +234,7 @@ def _reset_process_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
     from deerflow.config import app_config as app_config_module
     from deerflow.config import extensions_config as extensions_config_module
     from deerflow.config import paths as paths_module
+    from deerflow.config import stream_bridge_config
     from deerflow.persistence import engine as engine_module
 
     for module, attr, value in (
@@ -241,6 +249,7 @@ def _reset_process_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
         (engine_module, "_session_factory", None),
         (deps_module, "_cached_local_provider", None),
         (deps_module, "_cached_repo", None),
+        (stream_bridge_config, "_stream_bridge_config", None),
     ):
         monkeypatch.setattr(module, attr, value, raising=False)
 

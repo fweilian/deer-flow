@@ -39,8 +39,8 @@ describe("channels api", () => {
         enabled: true,
         providers: [
           {
-            provider: "telegram",
-            display_name: "Telegram",
+            provider: "custom",
+            display_name: "Custom",
             enabled: true,
             configured: true,
             auth_mode: "deep_link",
@@ -58,8 +58,8 @@ describe("channels api", () => {
       enabled: true,
       providers: [
         {
-          provider: "telegram",
-          display_name: "Telegram",
+          provider: "custom",
+          display_name: "Custom",
           credential_values: {
             bot_token: "********",
             bot_username: "deerflow_bot",
@@ -76,7 +76,7 @@ describe("channels api", () => {
         connections: [
           {
             id: "connection-1",
-            provider: "telegram",
+            provider: "custom",
             status: "connected",
             external_account_name: "Alice",
             scopes: [],
@@ -87,7 +87,7 @@ describe("channels api", () => {
     );
 
     await expect(listChannelConnections()).resolves.toMatchObject([
-      { id: "connection-1", provider: "telegram", status: "connected" },
+      { id: "connection-1", provider: "custom", status: "connected" },
     ]);
     expect(mockedFetch).toHaveBeenCalledWith(
       "/backend/api/channels/connections",
@@ -97,22 +97,22 @@ describe("channels api", () => {
   test("starts a provider connection flow", async () => {
     mockedFetch.mockResolvedValueOnce(
       jsonResponse(200, {
-        provider: "telegram",
+        provider: "custom",
         mode: "deep_link",
         url: "https://t.me/deerflow_bot?start=state",
         code: "state",
-        instruction: "Send /start state to the DeerFlow Telegram bot.",
+        instruction: "Send /connect state to the DeerFlow custom channel.",
         expires_in: 600,
       }),
     );
 
-    await expect(connectChannelProvider("telegram")).resolves.toMatchObject({
-      provider: "telegram",
+    await expect(connectChannelProvider("custom")).resolves.toMatchObject({
+      provider: "custom",
       url: "https://t.me/deerflow_bot?start=state",
-      instruction: "Send /start state to the DeerFlow Telegram bot.",
+      instruction: "Send /connect state to the DeerFlow custom channel.",
     });
     expect(mockedFetch).toHaveBeenCalledWith(
-      "/backend/api/channels/telegram/connect",
+      "/backend/api/channels/custom/connect",
       { method: "POST" },
     );
   });
@@ -120,28 +120,28 @@ describe("channels api", () => {
   test("starts a binding-code connection flow", async () => {
     mockedFetch.mockResolvedValueOnce(
       jsonResponse(200, {
-        provider: "slack",
+        provider: "custom",
         mode: "binding_code",
         url: null,
         code: "abc123",
-        instruction: "Send /connect abc123 to the DeerFlow Slack bot.",
+        instruction: "Send /connect abc123 to the DeerFlow custom channel.",
         expires_in: 600,
       }),
     );
 
-    await expect(connectChannelProvider("slack")).resolves.toMatchObject({
-      provider: "slack",
+    await expect(connectChannelProvider("custom")).resolves.toMatchObject({
+      provider: "custom",
       url: null,
       code: "abc123",
-      instruction: "Send /connect abc123 to the DeerFlow Slack bot.",
+      instruction: "Send /connect abc123 to the DeerFlow custom channel.",
     });
   });
 
   test("submits runtime provider configuration", async () => {
     mockedFetch.mockResolvedValueOnce(
       jsonResponse(200, {
-        provider: "slack",
-        display_name: "Slack",
+        provider: "custom",
+        display_name: "Custom",
         enabled: true,
         configured: true,
         connectable: true,
@@ -151,17 +151,17 @@ describe("channels api", () => {
     );
 
     await expect(
-      configureChannelProvider("slack", {
+      configureChannelProvider("custom", {
         bot_token: "xoxb-ui",
         app_token: "xapp-ui",
       }),
     ).resolves.toMatchObject({
-      provider: "slack",
+      provider: "custom",
       configured: true,
       connectable: true,
     });
     expect(mockedFetch).toHaveBeenCalledWith(
-      "/backend/api/channels/slack/runtime-config",
+      "/backend/api/channels/custom/runtime-config",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -187,8 +187,8 @@ describe("channels api", () => {
   test("disconnects provider runtime configuration", async () => {
     mockedFetch.mockResolvedValueOnce(
       jsonResponse(200, {
-        provider: "slack",
-        display_name: "Slack",
+        provider: "custom",
+        display_name: "Custom",
         enabled: true,
         configured: false,
         connectable: false,
@@ -197,13 +197,13 @@ describe("channels api", () => {
       }),
     );
 
-    await expect(disconnectChannelProvider("slack")).resolves.toMatchObject({
-      provider: "slack",
+    await expect(disconnectChannelProvider("custom")).resolves.toMatchObject({
+      provider: "custom",
       configured: false,
       connection_status: "not_connected",
     });
     expect(mockedFetch).toHaveBeenCalledWith(
-      "/backend/api/channels/slack/runtime-config",
+      "/backend/api/channels/custom/runtime-config",
       { method: "DELETE" },
     );
   });
@@ -213,7 +213,7 @@ describe("channels api", () => {
       jsonResponse(400, { detail: "Channel provider is not configured" }),
     );
 
-    await expect(connectChannelProvider("slack")).rejects.toThrow(
+    await expect(connectChannelProvider("custom")).rejects.toThrow(
       "Channel provider is not configured",
     );
   });

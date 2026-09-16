@@ -83,8 +83,8 @@ class Sandbox(ABC):
             command: The command to execute.
             env: Optional per-call environment variables to inject into the
                 command's process. Used to pass request-scoped secrets (e.g. a
-                short-lived end-user token for skill scripts, issue #3861, or a
-                GitHub App installation token for ``git push`` / ``gh``) without
+                short-lived end-user token for skill scripts, issue #3861, or an
+                external integration token) without
                 placing them in the prompt, tool arguments, or the command
                 string. When ``None`` the sandbox uses its default environment.
                 Keys must be valid POSIX environment-variable names

@@ -39,7 +39,7 @@ export async function staticApiResponse(
 
   const path = url.pathname.slice(root.pathname.length).replace(/\/$/, "");
   // These routes already own the demo settings data; do not maintain a second copy.
-  if (["skills", "mcp/config", "integrations/lark/status"].includes(path)) {
+  if (["skills", "mcp/config"].includes(path)) {
     return globalThis.fetch(new URL(`/mock/api/${path}`, origin).href, init);
   }
 

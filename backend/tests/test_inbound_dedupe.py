@@ -154,7 +154,7 @@ def _fake_session_factory(*, insert_rowcount: int = 1, execute_raises: BaseExcep
 async def test_postgres_try_record_new_then_conflict():
     factory, session = _fake_session_factory(insert_rowcount=1)
     store = PostgresInboundDedupeStore(session_factory=factory)
-    key = ("github", "repo", "repo", "d1:uA:agentX")
+    key = ("custom", "repo", "repo", "d1:uA:agentX")
     # First delivery is inserted -> proceed (not a duplicate).
     assert await store.try_record(key) is False
     # Redelivery (same key) on a still-live row: ON CONFLICT -> DO UPDATE WHERE
@@ -167,7 +167,7 @@ async def test_postgres_try_record_new_then_conflict():
 async def test_postgres_try_record_uses_atomic_on_conflict_and_lazy_cleanup():
     factory, session = _fake_session_factory()
     store = PostgresInboundDedupeStore(session_factory=factory)
-    await store.try_record(("slack", "T1", "C1", "123.456"))
+    await store.try_record(("custom", "T1", "C1", "123.456"))
     # call 0: conditional upsert (INSERT ... ON CONFLICT DO UPDATE ... WHERE TTL);
     # call 1: lazy cross-table cleanup (only on admit).
     upsert_sql = session.execute.call_args_list[0].args[0].text
@@ -187,7 +187,7 @@ async def test_postgres_try_record_reclaims_expired_unreleased_row():
     # RETURNS the row, so the redelivery is re-admitted (proceed, not dropped).
     factory, session = _fake_session_factory()
     store = PostgresInboundDedupeStore(session_factory=factory)
-    key = ("slack", "T1", "C1", "123.456")
+    key = ("custom", "T1", "C1", "123.456")
     # The upsert result returns a row, meaning the expired row was re-admitted
     # (proceed, not a duplicate).
     assert await store.try_record(key) is False
@@ -208,7 +208,7 @@ async def test_postgres_try_record_alive_row_still_deduped_without_cleanup():
     # because no row is returned the lazy cleanup is skipped (only 1 execute).
     factory, session = _fake_session_factory()
     store = PostgresInboundDedupeStore(session_factory=factory)
-    key = ("slack", "T1", "C1", "123.456")
+    key = ("custom", "T1", "C1", "123.456")
     session.execute.side_effect = [
         MagicMock(fetchone=MagicMock(return_value=None)),  # upsert: live conflict, no row
     ]
@@ -221,14 +221,14 @@ async def test_postgres_try_record_fail_open_on_exception():
     factory, _ = _fake_session_factory(execute_raises=RuntimeError("db down"))
     store = PostgresInboundDedupeStore(session_factory=factory)
     # Storage error must NOT drop the webhook: fail open = proceed (return False).
-    assert await store.try_record(("discord", "G1", "C1", "111")) is False
+    assert await store.try_record(("custom", "G1", "C1", "111")) is False
 
 
 @pytest.mark.asyncio
 async def test_postgres_release_deletes_key():
     factory, session = _fake_session_factory()
     store = PostgresInboundDedupeStore(session_factory=factory)
-    await store.release(("telegram", "chat1", "chat1", "55"))
+    await store.release(("custom", "chat1", "chat1", "55"))
     sql = session.execute.call_args_list[0].args[0].text
     assert "DELETE FROM webhook_deliveries WHERE channel = " in sql
     assert "AND message_id = " in sql
@@ -243,7 +243,7 @@ async def test_postgres_try_record_fail_open_when_no_session_factory(monkeypatch
     monkeypatch.setattr(engine_mod, "get_session_factory", lambda: None)
     store = PostgresInboundDedupeStore()  # no injected factory -> resolved lazily
     # No DB available must NOT drop the message: fail open = proceed (return False).
-    assert await store.try_record(("discord", "G1", "C1", "111")) is False
+    assert await store.try_record(("custom", "G1", "C1", "111")) is False
 
 
 def test_factory_resolves_postgres_store_when_db_is_postgres():

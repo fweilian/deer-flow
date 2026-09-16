@@ -1010,11 +1010,17 @@ async def test_redis_bridge_rejects_oversized_subscription_heartbeat_before_io()
 
 
 @pytest.mark.anyio
-async def test_make_stream_bridge_defaults():
+async def test_make_stream_bridge_defaults(monkeypatch):
     """make_stream_bridge() with no config yields a MemoryStreamBridge."""
-    async with make_stream_bridge() as bridge:
-        assert isinstance(bridge, MemoryStreamBridge)
-        assert bridge.heartbeat_interval == 15.0
+    monkeypatch.delenv("DEER_FLOW_STREAM_BRIDGE_REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    set_stream_bridge_config(None)
+    try:
+        async with make_stream_bridge() as bridge:
+            assert isinstance(bridge, MemoryStreamBridge)
+            assert bridge.heartbeat_interval == 15.0
+    finally:
+        set_stream_bridge_config(None)
 
 
 @pytest.mark.anyio

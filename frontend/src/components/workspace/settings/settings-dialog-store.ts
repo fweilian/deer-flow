@@ -63,7 +63,7 @@ export function setSettingsDialogOpen(open: boolean) {
  * Multiple entry points (nav menu, command palette, `?settings=` deep link)
  * drive this one store instead of each mounting its own `SettingsDialog`, so
  * two dialogs can never be open at once with racing per-instance flows (e.g.
- * duplicate Lark auth device-code polling).
+ * duplicate settings-page state.
  */
 export function useSettingsDialog() {
   const snapshot = useSyncExternalStore(

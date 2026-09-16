@@ -143,18 +143,18 @@ class TestSkillLoading:
         assert public_skills[0].name == "deep-research"
 
     def test_managed_integration_skills_are_global_but_enabled_per_user(self, base_dir: Path, skills_root: Path, config):
-        integration_dir = base_dir / "integrations" / "skills" / "lark-cli" / "lark-doc"
+        integration_dir = base_dir / "integrations" / "skills" / "custom-pack" / "custom-doc"
         integration_dir.mkdir(parents=True)
-        (integration_dir / "SKILL.md").write_text(_skill_content("lark-doc"), encoding="utf-8")
+        (integration_dir / "SKILL.md").write_text(_skill_content("custom-doc"), encoding="utf-8")
 
         with patch("deerflow.config.paths.get_paths", return_value=Paths(base_dir=base_dir)):
             alice = UserScopedSkillStorage("alice", host_path=str(skills_root), app_config=config)
             bob = UserScopedSkillStorage("bob", host_path=str(skills_root), app_config=config)
 
-        alice.set_skill_enabled_state("lark-doc", False)
+        alice.set_skill_enabled_state("custom-doc", False)
 
-        alice_skill = next(skill for skill in alice.load_skills(enabled_only=False) if skill.name == "lark-doc")
-        bob_skill = next(skill for skill in bob.load_skills(enabled_only=False) if skill.name == "lark-doc")
+        alice_skill = next(skill for skill in alice.load_skills(enabled_only=False) if skill.name == "custom-doc")
+        bob_skill = next(skill for skill in bob.load_skills(enabled_only=False) if skill.name == "custom-doc")
         assert alice_skill.category == SkillCategory.INTEGRATION
         assert alice_skill.skill_file == integration_dir / "SKILL.md"
         assert alice_skill.enabled is False
@@ -292,7 +292,7 @@ class TestPathSafety:
         skill_files = [
             skills_root / "public" / "public-skill" / "SKILL.md",
             base_dir / "users" / "test-user" / "skills" / "custom" / "custom-skill" / "SKILL.md",
-            base_dir / "integrations" / "skills" / "lark-cli" / "lark-doc" / "SKILL.md",
+            base_dir / "integrations" / "skills" / "custom-pack" / "custom-doc" / "SKILL.md",
         ]
         for skill_file in skill_files:
             skill_file.parent.mkdir(parents=True, exist_ok=True)

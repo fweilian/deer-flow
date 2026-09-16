@@ -182,7 +182,7 @@ test.describe("Agent chat", () => {
           thread_id: threadId,
           title: "IM research conversation",
           metadata: {
-            channel_source: { type: "im_channel", provider: "telegram" },
+            channel_source: { type: "im_channel", provider: "custom" },
             channel_agent_name: "researcher",
             agent_name: "researcher",
           },

@@ -22,13 +22,18 @@ const config = {
   output:
     process.env.NEXT_CONFIG_BUILD_OUTPUT === "standalone"
       ? "standalone"
-      : undefined,
+      : process.env.NEXT_CONFIG_BUILD_OUTPUT === "export"
+        ? "export"
+        : undefined,
   i18n: {
     locales: ["en", "zh"],
     defaultLocale: "en",
   },
   turbopack: {
     root: fileURLToPath(new URL(".", import.meta.url)),
+  },
+  typescript: {
+    ignoreBuildErrors: process.env.NEXT_IGNORE_TS_ERRORS === "1",
   },
   devIndicators: false,
   allowedDevOrigins: getAllowedDevOrigins(),

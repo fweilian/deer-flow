@@ -184,7 +184,7 @@ async def test_manual_trigger_keeps_the_requesting_trace():
 
 def _inbound(index: int) -> InboundMessage:
     return InboundMessage(
-        channel_name="slack",
+        channel_name="custom",
         chat_id="C1",
         user_id="U1",
         text=f"message-{index}",

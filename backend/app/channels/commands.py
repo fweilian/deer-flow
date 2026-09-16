@@ -1,7 +1,7 @@
-"""Shared command definitions used by all channel implementations.
+"""Shared command definitions used by all Channel implementations.
 
 Keeping the authoritative command set in one place ensures that channel
-parsers (e.g. Feishu) and the ChannelManager dispatcher stay in sync
+parsers and the ChannelManager dispatcher stay in sync
 automatically — adding or removing a command here is the single edit
 required.
 """
@@ -25,18 +25,17 @@ KNOWN_CHANNEL_COMMANDS: frozenset[str] = frozenset(
 def _is_leading_mention_token(token: str) -> bool:
     """Return whether *token* looks like a platform bot/user mention.
 
-    Group chats often require ``@bot`` before the message is delivered. Slack
-    and Discord strip those tokens before connect parsing; Feishu / DingTalk
-    leave them in the text (``@_user_1``, ``@bot``, ``<@id>``). Treat them as
+    Group chats often require ``@bot`` before the message is delivered. Treat it
+    as
     transport noise only when they lead the message so
     ``@bot /connect <code>`` still binds.
     """
     if not token:
         return False
-    # Slack / Discord style: <@U123> or <@!U123> or <@U123|name>
+    # Common platform style: <@U123> or <@!U123> or <@U123|name>
     if token.startswith("<@") and token.endswith(">"):
         return True
-    # Feishu / DingTalk / generic: @_user_1, @bot, @nickname
+    # Generic forms: @_user_1, @bot, @nickname
     if token.startswith("@") and len(token) > 1:
         return True
     return False
@@ -51,9 +50,8 @@ def strip_leading_mentions(text: str) -> str:
     text with a leading space or no leading mention is returned unchanged, so
     ``" /new"`` stays a non-command. Whitespace is otherwise preserved (unlike
     :func:`extract_connect_code`, which is deliberately whitespace-lenient for the
-    bind path). Channels that resolve their own bot id (Slack/Discord) strip only
-    the bot's mention upstream; this is for adapters that leave the mention in the
-    text and cannot tell the bot's mention from another user's (Feishu/DingTalk).
+    bind path). Concrete adapters may normalize mentions before passing text to this
+    generic command parser.
     """
     remainder = text
     while True:
@@ -65,11 +63,10 @@ def strip_leading_mentions(text: str) -> str:
 
 
 def extract_connect_code(text: str) -> str | None:
-    """Extract the one-time channel binding code from a connect command.
+    """Extract the one-time Channel binding code from a connect command.
 
     Accepts a leading platform mention so group ``@bot /connect <code>``
-    messages bind the same way as bare ``/connect <code>`` (Slack/Discord
-    already strip mentions before calling this helper).
+    messages bind the same way as bare ``/connect <code>``.
     """
     parts = text.strip().split()
     index = 0

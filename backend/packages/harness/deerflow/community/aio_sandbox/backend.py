@@ -136,8 +136,6 @@ class SandboxBackend(ABC):
         extra_mounts: list[tuple[str, str, bool]] | None = None,
         *,
         user_id: str | None = None,
-        provision_lark_cli_runtime: bool = False,
-        provision_lark_cli_broker: bool = False,
     ) -> SandboxInfo:
         """Create/provision a new sandbox.
 
@@ -147,14 +145,6 @@ class SandboxBackend(ABC):
             extra_mounts: Additional volume mounts as (host_path, container_path, read_only) tuples.
                 Ignored by backends that don't manage containers (e.g., remote).
             user_id: User bucket that the sandbox should mount or provision for.
-            provision_lark_cli_runtime: Ask the backend to provision the sandbox
-                lark-cli runtime via its native mechanism (e.g. the provisioner's
-                init container + emptyDir). Backends that can't do this ignore it.
-            provision_lark_cli_broker: Ask the backend to provision a lark-cli
-                broker sidecar (Pattern B, issue #4338) so credentials stay out of
-                the sandbox. Supersedes ``provision_lark_cli_runtime`` when the
-                backend supports it; backends that can't do this ignore it.
-
         Returns:
             SandboxInfo with connection details.
         """

@@ -197,19 +197,11 @@ Blocking-IO runtime gate (`tests/blocking_io/`):
   API — including idempotent singleton-event writes — offloading its file IO
   via `asyncio.to_thread`); `test_run_journal_callbacks.py` (locks
   `RunJournal.run_inline` tool callbacks to in-memory/event-loop-safe work);
-  `test_integrations_router.py` (locks Lark integration install and auth
-  completion route handlers offloading archive filesystem work and `lark-cli`
-  subprocesses);
   `test_uploads_middleware.py` (locks `UploadsMiddleware.abefore_agent`
   offloading the uploads-directory scan off the event loop);
   `test_uploads_router.py` (locks Gateway upload/list/delete endpoints
   offloading upload directory creation, staged writes, chmod/cleanup,
   directory scans/deletes, and remote sandbox sync off the event loop);
-  `test_feishu_receive_file.py` (locks Feishu attachment path preparation and
-  persistence plus remote sandbox acquisition/sync off the event loop, and
-  skips redundant sandbox sync when thread data is already mounted);
-  `test_channel_outbound_files.py` (locks Feishu, Telegram, and WeCom outbound
-  attachment open/read/hash work off the event loop);
   `test_openviking_memory_backend.py` (locks the official OpenViking backend's
   async add/context/search entrypoints offloading synchronous SDK and cursor
   filesystem IO); and

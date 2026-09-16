@@ -66,7 +66,7 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
     # consumed directly by ``start_channel_service()`` once at lifespan
     # startup and the live channel clients are not rebuilt on
     # config.yaml edits.
-    "channels": ("start_channel_service() is invoked once during startup; the live IM channel clients (Feishu, Slack, Telegram, DingTalk) are not rebuilt when channels.* changes."),
+    "channels": ("start_channel_service() is invoked once during startup; registered Channel clients are not rebuilt when channels.* changes."),
     "channel_connections": (
         "start_channel_service() wires the connection repository and channel workers once at startup, and the channel-connections router caches the merged provider config on app.state; channel_connections.* edits need a restart."
     ),

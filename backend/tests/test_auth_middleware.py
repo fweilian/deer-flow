@@ -52,7 +52,7 @@ def test_public_paths(path: str):
         "/api/agents",
         "/api/channels",
         "/api/channels/providers",
-        "/api/channels/slack/connect",
+        "/api/channels/custom/connect",
         "/api/runs/stream",
         "/api/threads/123/runs",
         "/api/v1/auth/me",

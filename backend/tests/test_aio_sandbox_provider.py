@@ -4,18 +4,14 @@ import asyncio
 import contextlib
 import hashlib
 import importlib
-import os
-import stat
 import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from _windows_acl_helpers import _windows_acl_owner_sid, _windows_acl_sids
 
 from deerflow.config.paths import Paths, join_host_path
 from deerflow.config.sandbox_config import SandboxConfig
-from deerflow.runtime.user_context import reset_current_user, set_current_user
 from deerflow.sandbox.acquire_serialization import AcquireSerializer
 
 _LEGACY_COLLIDING_IDENTITIES = (
@@ -194,51 +190,6 @@ def test_get_thread_mounts_uses_explicit_user_id(tmp_path, monkeypatch):
     assert container_paths["/mnt/user-data/outputs"] == str(tmp_path / "users" / "ou-user" / "threads" / "thread-4" / "user-data" / "outputs")
 
 
-def test_get_lark_cli_runtime_mounts_uses_user_auth_dirs(tmp_path, monkeypatch):
-    """Sandbox lark-cli commands must read the same auth dirs as Settings."""
-    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
-    lark_cli = importlib.import_module("deerflow.integrations.lark_cli")
-    monkeypatch.setattr(aio_mod, "get_paths", lambda: Paths(base_dir=tmp_path))
-    monkeypatch.setattr(aio_mod, "get_effective_user_id", lambda: "default")
-    runtime_dir = tmp_path / "integrations" / "lark-cli" / "sandbox-cli"
-    runtime_dir.mkdir(parents=True)
-
-    mounts = aio_mod.AioSandboxProvider._get_lark_cli_runtime_mounts(user_id="alice")
-    mount_order = [container_path for _host_path, container_path, _read_only in mounts]
-    container_paths = {container_path: (host_path, read_only) for host_path, container_path, read_only in mounts}
-
-    assert container_paths[lark_cli.LARK_CLI_SANDBOX_CONFIG_DIR] == (
-        str(tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "config"),
-        True,
-    )
-    assert container_paths[f"{lark_cli.LARK_CLI_SANDBOX_CONFIG_DIR}/locks"] == (
-        str(tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "config" / "locks"),
-        False,
-    )
-    assert mount_order.index(lark_cli.LARK_CLI_SANDBOX_CONFIG_DIR) < mount_order.index(lark_cli.LARK_CLI_SANDBOX_LOCKS_DIR)
-    assert container_paths[lark_cli.LARK_CLI_SANDBOX_DATA_DIR] == (
-        str(tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "data"),
-        False,
-    )
-    config_dir = tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "config"
-    locks_dir = config_dir / "locks"
-    data_dir = tmp_path / "users" / "alice" / "integrations" / "lark-cli" / "data"
-    if os.name == "nt":
-        # NTFS cannot represent POSIX modes; the contract the credential-tree
-        # hardener establishes on Windows is an owner-only inheritable DACL.
-        owner_sid = _windows_acl_owner_sid(config_dir)
-        for hardened in (config_dir, locks_dir, data_dir):
-            assert _windows_acl_sids(hardened) == {owner_sid}
-    else:
-        assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700
-        assert stat.S_IMODE(locks_dir.stat().st_mode) == 0o700
-        assert stat.S_IMODE(data_dir.stat().st_mode) == 0o700
-    assert container_paths["/mnt/integrations/lark-cli/runtime"] == (
-        str(runtime_dir),
-        True,
-    )
-
-
 def test_get_user_skill_mounts_mounts_only_global_integrations(tmp_path, monkeypatch):
     aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
     skills_root = tmp_path / "skills"
@@ -260,64 +211,6 @@ def test_get_user_skill_mounts_mounts_only_global_integrations(tmp_path, monkeyp
     assert alice["/mnt/skills/integrations"] != bob["/mnt/skills/integrations"]
     assert alice["/mnt/skills/integrations"] == str(tmp_path / "home" / "users" / "alice" / "skills_view" / "integrations")
     assert bob["/mnt/skills/integrations"] == str(tmp_path / "home" / "users" / "bob" / "skills_view" / "integrations")
-
-
-def test_get_extra_mounts_provisioner_payload_has_unique_container_paths(tmp_path, monkeypatch, provisioner_module):
-    """Full AIO mount composition must not send duplicate paths to provisioner."""
-    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
-    lark_cli = importlib.import_module("deerflow.integrations.lark_cli")
-    remote_backend = importlib.import_module("deerflow.community.aio_sandbox.remote_backend")
-    skills_root = tmp_path / "skills"
-    (skills_root / "public").mkdir(parents=True)
-    home = tmp_path / "home"
-    config = SimpleNamespace(
-        skills=SimpleNamespace(
-            get_skills_path=lambda: skills_root,
-            container_path="/mnt/skills",
-        )
-    )
-    runtime_dir = home / "integrations" / "lark-cli" / "sandbox-cli"
-    runtime_dir.mkdir(parents=True)
-
-    monkeypatch.setattr(aio_mod, "get_app_config", lambda: config)
-    monkeypatch.setattr(aio_mod, "get_paths", lambda: Paths(base_dir=home))
-    monkeypatch.setattr(aio_mod, "get_effective_user_id", lambda: "default")
-    monkeypatch.setattr(remote_backend, "user_should_see_legacy_skills", lambda *_args, **_kwargs: False)
-
-    provider = _make_provider(tmp_path)
-    provider._config["skills_container_path"] = config.skills.container_path
-    mounts = provider._get_extra_mounts("thread-1", user_id="alice")
-    container_paths = [container for _host, container, _read_only in mounts]
-
-    assert len(container_paths) == len(set(container_paths))
-    assert "/mnt/skills/custom" in container_paths
-    assert "/mnt/skills/integrations" in container_paths
-    assert lark_cli.LARK_CLI_SANDBOX_CONFIG_DIR in container_paths
-    assert lark_cli.LARK_CLI_SANDBOX_LOCKS_DIR in container_paths
-    assert lark_cli.LARK_CLI_SANDBOX_DATA_DIR in container_paths
-    assert lark_cli.LARK_CLI_SANDBOX_RUNTIME_DIR in container_paths
-
-    payload = remote_backend._provisioner_extra_mounts_payload(mounts)
-    payload_paths = [str(item["container_path"]) for item in payload]
-    assert len(payload_paths) == len(set(payload_paths))
-    assert payload_paths.index(lark_cli.LARK_CLI_SANDBOX_CONFIG_DIR) < payload_paths.index(lark_cli.LARK_CLI_SANDBOX_LOCKS_DIR)
-
-    provisioner_module.DEER_FLOW_HOST_BASE_DIR = str(home)
-    validated = provisioner_module._validated_extra_mounts([provisioner_module.ExtraMount(**item) for item in payload])
-    validated_paths = [mount.container_path for mount in validated]
-
-    assert len(validated_paths) == len(set(validated_paths))
-    assert set(validated_paths) == {
-        "/mnt/acp-workspace",
-        "/mnt/skills/public",
-        "/mnt/skills/custom",
-        "/mnt/skills/legacy",
-        "/mnt/skills/integrations",
-        lark_cli.LARK_CLI_SANDBOX_CONFIG_DIR,
-        lark_cli.LARK_CLI_SANDBOX_LOCKS_DIR,
-        lark_cli.LARK_CLI_SANDBOX_DATA_DIR,
-        lark_cli.LARK_CLI_SANDBOX_RUNTIME_DIR,
-    }
 
 
 def test_thread_skill_projection_mounts_all_categories(
@@ -454,201 +347,6 @@ def test_cached_sandbox_is_replaced_when_expected_identity_changes(
         is None
     )
     destroy.assert_called_once_with("stale-root-id")
-
-
-def test_policy_scoped_create_excludes_local_config_mounts_below_skills_root(
-    tmp_path,
-    monkeypatch,
-):
-    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
-    paths = Paths(base_dir=tmp_path / "home")
-    paths.thread_skills_view_dir(
-        "thread-policy",
-        user_id="alice",
-    ).mkdir(parents=True)
-    monkeypatch.setattr(aio_mod, "get_paths", lambda: paths)
-    monkeypatch.setattr(
-        aio_mod,
-        "get_app_config",
-        lambda: SimpleNamespace(skills=SimpleNamespace(container_path="/mnt/skills")),
-    )
-
-    provider = _make_provider(tmp_path)
-    provider._config = {
-        "replicas": 3,
-        "skills_container_path": "/mnt/skills",
-    }
-    provider._thread_locks = {}
-    provider._warm_pool = {}
-    provider._sandbox_infos = {}
-    provider._thread_sandboxes = {}
-    provider._last_activity = {}
-    provider._lock = aio_mod.threading.Lock()
-    captured: dict = {}
-
-    backend = object.__new__(aio_mod.LocalContainerBackend)
-
-    def _create(thread_id, sandbox_id, **kwargs):
-        captured.update(kwargs)
-        return aio_mod.SandboxInfo(
-            sandbox_id=sandbox_id,
-            sandbox_url="http://sandbox",
-        )
-
-    backend.create = _create
-    provider._backend = backend
-    monkeypatch.setattr(aio_mod, "wait_for_sandbox_ready", lambda *_a, **_k: True)
-    monkeypatch.setattr(provider, "_get_extra_mounts", lambda *_a, **_k: [])
-    monkeypatch.setattr(
-        aio_mod.AioSandboxProvider,
-        "_lark_integration_active",
-        staticmethod(lambda user_id=None: False),
-    )
-    monkeypatch.setattr(
-        aio_mod.AioSandboxProvider,
-        "_lark_broker_active",
-        staticmethod(lambda user_id=None: False),
-    )
-    monkeypatch.setattr(
-        provider,
-        "_register_created_sandbox",
-        lambda *a, **k: "sandbox-policy",
-    )
-
-    provider._create_sandbox(
-        "thread-policy",
-        "sandbox-policy",
-        user_id="alice",
-    )
-
-    assert captured["config_mount_exclusion_root"] == "/mnt/skills"
-
-
-def test_remote_create_forwards_configured_skills_container_path(
-    tmp_path,
-    monkeypatch,
-):
-    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
-    provider = _make_provider(tmp_path)
-    provider._config = {
-        "replicas": 3,
-        "skills_container_path": "/custom-skills",
-    }
-    provider._thread_locks = {}
-    provider._warm_pool = {}
-    provider._sandbox_infos = {}
-    provider._thread_sandboxes = {}
-    provider._last_activity = {}
-    provider._lock = aio_mod.threading.Lock()
-    captured: dict = {}
-
-    backend = aio_mod.RemoteSandboxBackend("http://provisioner:8002")
-
-    def _create(thread_id, sandbox_id, **kwargs):
-        captured.update(kwargs)
-        return aio_mod.SandboxInfo(
-            sandbox_id=sandbox_id,
-            sandbox_url="http://sandbox",
-        )
-
-    backend.create = _create
-    provider._backend = backend
-    monkeypatch.setattr(
-        aio_mod,
-        "get_app_config",
-        lambda: SimpleNamespace(skills=SimpleNamespace(container_path="/custom-skills")),
-    )
-    monkeypatch.setattr(aio_mod, "wait_for_sandbox_ready", lambda *_a, **_k: True)
-    monkeypatch.setattr(provider, "_get_extra_mounts", lambda *_a, **_k: [])
-    monkeypatch.setattr(
-        aio_mod.AioSandboxProvider,
-        "_lark_integration_active",
-        staticmethod(lambda user_id=None: False),
-    )
-    monkeypatch.setattr(
-        aio_mod.AioSandboxProvider,
-        "_lark_broker_active",
-        staticmethod(lambda user_id=None: False),
-    )
-    monkeypatch.setattr(
-        provider,
-        "_register_created_sandbox",
-        lambda *a, **k: "sandbox-custom-root",
-    )
-
-    provider._create_sandbox(
-        "thread-custom-root",
-        "sandbox-custom-root",
-        user_id="alice",
-    )
-
-    assert captured["skills_container_path"] == "/custom-skills"
-
-
-@pytest.mark.anyio
-async def test_remote_create_async_forwards_configured_skills_container_path(
-    tmp_path,
-    monkeypatch,
-):
-    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
-    provider = _make_provider(tmp_path)
-    provider._config = {
-        "replicas": 3,
-        "skills_container_path": "/custom-skills",
-    }
-    provider._thread_locks = {}
-    provider._warm_pool = {}
-    provider._sandbox_infos = {}
-    provider._thread_sandboxes = {}
-    provider._last_activity = {}
-    provider._lock = aio_mod.threading.Lock()
-    captured: dict = {}
-
-    backend = aio_mod.RemoteSandboxBackend("http://provisioner:8002")
-
-    def _create(thread_id, sandbox_id, **kwargs):
-        captured.update(kwargs)
-        return aio_mod.SandboxInfo(
-            sandbox_id=sandbox_id,
-            sandbox_url="http://sandbox",
-        )
-
-    backend.create = _create
-    provider._backend = backend
-    monkeypatch.setattr(
-        aio_mod,
-        "get_app_config",
-        lambda: SimpleNamespace(skills=SimpleNamespace(container_path="/custom-skills")),
-    )
-
-    async def _ready(*_args, **_kwargs):
-        return True
-
-    monkeypatch.setattr(aio_mod, "wait_for_sandbox_ready_async", _ready)
-    monkeypatch.setattr(provider, "_get_extra_mounts", lambda *_a, **_k: [])
-    monkeypatch.setattr(
-        aio_mod.AioSandboxProvider,
-        "_lark_integration_active",
-        staticmethod(lambda user_id=None: False),
-    )
-    monkeypatch.setattr(
-        aio_mod.AioSandboxProvider,
-        "_lark_broker_active",
-        staticmethod(lambda user_id=None: False),
-    )
-    monkeypatch.setattr(
-        provider,
-        "_register_created_sandbox",
-        lambda *a, **k: "sandbox-custom-root",
-    )
-
-    await provider._create_sandbox_async(
-        "thread-custom-root",
-        "sandbox-custom-root",
-        user_id="alice",
-    )
-
-    assert captured["skills_container_path"] == "/custom-skills"
 
 
 def test_join_host_path_preserves_windows_drive_letter_style():
@@ -914,44 +612,6 @@ async def test_acquire_internal_async_offloads_cached_reuse_health_check(tmp_pat
     ]
 
 
-def test_remote_backend_create_forwards_effective_user_id(monkeypatch):
-    """Provisioner mode must receive user_id so PVC subPath matches user isolation."""
-    remote_mod = importlib.import_module("deerflow.community.aio_sandbox.remote_backend")
-    backend = remote_mod.RemoteSandboxBackend("http://provisioner:8002")
-    token = set_current_user(SimpleNamespace(id="user-7"))
-    posted: dict = {}
-
-    class _Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"sandbox_url": "http://sandbox.local"}
-
-    def _post(url, json, timeout, headers=None):  # noqa: A002 - mirrors requests.post kwarg
-        posted.update({"url": url, "json": json, "timeout": timeout})
-        return _Response()
-
-    monkeypatch.setattr(remote_mod.requests, "post", _post)
-    monkeypatch.setattr(remote_mod, "user_should_see_legacy_skills", lambda _user_id: True)
-
-    try:
-        backend.create("thread-42", "sandbox-42")
-    finally:
-        reset_current_user(token)
-
-    assert posted["url"] == "http://provisioner:8002/api/sandboxes"
-    assert posted["json"] == {
-        "sandbox_id": "sandbox-42",
-        "thread_id": "thread-42",
-        "user_id": "user-7",
-        "include_legacy_skills": True,
-        "skills_container_path": "/mnt/skills",
-        "provision_lark_cli_runtime": False,
-        "provision_lark_cli_broker": False,
-    }
-
-
 def test_remote_backend_create_prefers_explicit_user_id(monkeypatch):
     """Provisioner mode must not fall back to the ambient default for channel runs."""
     remote_mod = importlib.import_module("deerflow.community.aio_sandbox.remote_backend")
@@ -977,99 +637,6 @@ def test_remote_backend_create_prefers_explicit_user_id(monkeypatch):
 
     assert posted["json"]["user_id"] == "ou-user"
     assert posted["json"]["include_legacy_skills"] is False
-
-
-def test_create_sandbox_requests_runtime_when_lark_installed(tmp_path, monkeypatch):
-    """The provider must request lark-cli runtime provisioning when Lark is installed."""
-    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
-    provider = _make_provider(tmp_path)
-    provider._config = {"replicas": 3}
-    provider._warm_pool = {}
-    provider._sandbox_infos = {}
-    provider._thread_sandboxes = {}
-    provider._last_activity = {}
-    provider._lock = aio_mod.threading.Lock()
-
-    captured: dict = {}
-
-    def _create(thread_id, sandbox_id, *, extra_mounts=None, user_id=None, provision_lark_cli_runtime=False, provision_lark_cli_broker=False):
-        captured["provision_lark_cli_runtime"] = provision_lark_cli_runtime
-        captured["provision_lark_cli_broker"] = provision_lark_cli_broker
-        return aio_mod.SandboxInfo(sandbox_id=sandbox_id, sandbox_url="http://sandbox")
-
-    provider._backend = SimpleNamespace(create=_create, destroy=MagicMock(), discover=MagicMock(return_value=None))
-    monkeypatch.setattr(aio_mod, "wait_for_sandbox_ready", lambda *_a, **_k: True)
-    monkeypatch.setattr(provider, "_get_extra_mounts", lambda *_a, **_k: [])
-    monkeypatch.setattr(aio_mod.AioSandboxProvider, "_lark_integration_active", staticmethod(lambda user_id=None: True))
-    monkeypatch.setattr(aio_mod.AioSandboxProvider, "_lark_broker_active", staticmethod(lambda user_id=None: False))
-    monkeypatch.setattr(provider, "_register_created_sandbox", lambda *a, **k: "sandbox-lark")
-
-    provider._create_sandbox("thread-lark", "sandbox-lark", user_id="alice")
-    assert captured["provision_lark_cli_runtime"] is True
-    assert captured["provision_lark_cli_broker"] is False
-
-
-def test_create_sandbox_requests_broker_when_active(tmp_path, monkeypatch):
-    """Broker mode (Pattern B) is requested when the provisioner reports it."""
-    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
-    provider = _make_provider(tmp_path)
-    provider._config = {"replicas": 3}
-    provider._warm_pool = {}
-    provider._sandbox_infos = {}
-    provider._thread_sandboxes = {}
-    provider._last_activity = {}
-    provider._lock = aio_mod.threading.Lock()
-
-    captured: dict = {}
-
-    def _create(thread_id, sandbox_id, *, extra_mounts=None, user_id=None, provision_lark_cli_runtime=False, provision_lark_cli_broker=False):
-        captured["provision_lark_cli_runtime"] = provision_lark_cli_runtime
-        captured["provision_lark_cli_broker"] = provision_lark_cli_broker
-        return aio_mod.SandboxInfo(sandbox_id=sandbox_id, sandbox_url="http://sandbox")
-
-    provider._backend = SimpleNamespace(create=_create, destroy=MagicMock(), discover=MagicMock(return_value=None))
-    monkeypatch.setattr(aio_mod, "wait_for_sandbox_ready", lambda *_a, **_k: True)
-    monkeypatch.setattr(provider, "_get_extra_mounts", lambda *_a, **_k: [])
-    monkeypatch.setattr(aio_mod.AioSandboxProvider, "_lark_integration_active", staticmethod(lambda user_id=None: True))
-    monkeypatch.setattr(aio_mod.AioSandboxProvider, "_lark_broker_active", staticmethod(lambda user_id=None: True))
-    monkeypatch.setattr(provider, "_register_created_sandbox", lambda *a, **k: "sandbox-broker")
-
-    provider._create_sandbox("thread-broker", "sandbox-broker", user_id="alice")
-    assert captured["provision_lark_cli_runtime"] is True
-    assert captured["provision_lark_cli_broker"] is True
-
-
-def test_create_sandbox_skips_runtime_when_lark_absent(tmp_path, monkeypatch):
-    """No runtime provisioning request when the Lark skill pack is not installed."""
-    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
-    provider = _make_provider(tmp_path)
-    provider._config = {"replicas": 3}
-    provider._warm_pool = {}
-    provider._sandbox_infos = {}
-    provider._thread_sandboxes = {}
-    provider._last_activity = {}
-    provider._lock = aio_mod.threading.Lock()
-
-    captured: dict = {}
-
-    def _create(thread_id, sandbox_id, *, extra_mounts=None, user_id=None, provision_lark_cli_runtime=False, provision_lark_cli_broker=False):
-        captured["provision_lark_cli_runtime"] = provision_lark_cli_runtime
-        captured["provision_lark_cli_broker"] = provision_lark_cli_broker
-        return aio_mod.SandboxInfo(sandbox_id=sandbox_id, sandbox_url="http://sandbox")
-
-    provider._backend = SimpleNamespace(create=_create, destroy=MagicMock(), discover=MagicMock(return_value=None))
-    monkeypatch.setattr(aio_mod, "wait_for_sandbox_ready", lambda *_a, **_k: True)
-    monkeypatch.setattr(provider, "_get_extra_mounts", lambda *_a, **_k: [])
-    monkeypatch.setattr(aio_mod.AioSandboxProvider, "_lark_integration_active", staticmethod(lambda user_id=None: False))
-    monkeypatch.setattr(aio_mod.AioSandboxProvider, "_lark_broker_active", staticmethod(lambda user_id=None: False))
-    monkeypatch.setattr(provider, "_register_created_sandbox", lambda *a, **k: "sandbox-nolark")
-
-    provider._create_sandbox("thread-nolark", "sandbox-nolark", user_id="alice")
-    assert captured["provision_lark_cli_runtime"] is False
-    assert captured["provision_lark_cli_broker"] is False
-
-
-# ── Sandbox client teardown (#2872) ──────────────────────────────────────────
 
 
 def _make_provider_with_active_sandbox(tmp_path, sandbox_id: str):

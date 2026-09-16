@@ -1093,7 +1093,7 @@ Note: MCP outbound connections can still use OAuth for configured HTTP/SSE MCP s
 
 ### Internal Auth (platform HTTP integration)
 
-For server-to-server integrations (e.g. a Feishu or WeCom/Enterprise WeChat bot backend), configure:
+For server-to-server integrations such as a custom Channel backend, configure:
 
 ```bash
 export DEER_FLOW_INTERNAL_AUTH_TOKEN="<long-random-secret>"
@@ -1102,7 +1102,7 @@ export DEER_FLOW_INTERNAL_AUTH_TOKEN="<long-random-secret>"
 | Header | Required | Description |
 |---|---|---|
 | `X-DeerFlow-Internal-Token` | Yes | Must match `DEER_FLOW_INTERNAL_AUTH_TOKEN`; missing/invalid → `401` |
-| `X-DeerFlow-Owner-User-Id` | Yes for per-user isolation | Platform user id (e.g. `feishu_ou_alice`, `wecom_user_bob`); omit → `default` bucket |
+| `X-DeerFlow-Owner-User-Id` | Yes for per-user isolation | External platform user id; omit → `default` bucket |
 
 Does **not** use browser cookies or CSRF tokens. Does **not** insert into `users`; sets `threads_meta.user_id` / `runs.user_id` from the owner header. DeerFlow validates only the platform token—not whether the owner id represents a real end user; user validity is entirely the platform's responsibility. See [AUTH_DESIGN.md — Internal Auth](AUTH_DESIGN.md#internal-auth-direct-http) for trust boundaries, persistence, and security notes.
 

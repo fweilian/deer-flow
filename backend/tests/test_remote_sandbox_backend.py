@@ -45,7 +45,6 @@ class _StubResponse:
         "/mnt",
         "/mnt/user-data/skills",
         "/mnt/acp-workspace/skills",
-        "/mnt/integrations/lark-cli/skills",
     ],
 )
 def test_skills_container_path_rejects_unsafe_or_noncanonical_roots(
@@ -197,16 +196,12 @@ def test_create_delegates_to_provisioner_create(monkeypatch, expected_user_id):
         *,
         user_id=None,
         skills_container_path="/mnt/skills",
-        provision_lark_cli_runtime=False,
-        provision_lark_cli_broker=False,
     ):
         assert thread_id == "thread-1"
         assert sandbox_id == "abc123"
         assert extra_mounts == [("/host", "/container", False)]
         assert user_id == expected_user_id
         assert skills_container_path == "/mnt/skills"
-        assert provision_lark_cli_runtime is True
-        assert provision_lark_cli_broker is False
         return expected
 
     monkeypatch.setattr(backend, "_provisioner_create", mock_create)
@@ -216,7 +211,6 @@ def test_create_delegates_to_provisioner_create(monkeypatch, expected_user_id):
         "abc123",
         extra_mounts=[("/host", "/container", False)],
         user_id=expected_user_id,
-        provision_lark_cli_runtime=True,
     )
     assert result == expected
 
@@ -233,8 +227,6 @@ def test_provisioner_create_returns_sandbox_info(monkeypatch):
             "user_id": "test-user-autouse",
             "include_legacy_skills": True,
             "skills_container_path": "/mnt/skills",
-            "provision_lark_cli_runtime": False,
-            "provision_lark_cli_broker": False,
         }
         assert timeout == 30
         return _StubResponse(payload={"sandbox_id": "abc123", "sandbox_url": "http://k3s:31001"})
@@ -259,11 +251,6 @@ def test_provisioner_create_forwards_supported_extra_mounts(monkeypatch):
                 "container_path": "/mnt/skills/integrations",
                 "read_only": True,
             },
-            {
-                "host_path": "/state/users/alice/integrations/lark-cli/config",
-                "container_path": "/mnt/integrations/lark-cli/config",
-                "read_only": False,
-            },
         ]
         assert timeout == 30
         return _StubResponse(payload={"sandbox_id": "abc123", "sandbox_url": "http://k3s:31001"})
@@ -277,7 +264,6 @@ def test_provisioner_create_forwards_supported_extra_mounts(monkeypatch):
             ("/state/users/alice/threads/thread-1/user-data/workspace", "/mnt/user-data/workspace", False),
             ("/skills", "/mnt/skills", True),
             ("/state/users/alice/skills/integrations", "/mnt/skills/integrations", True),
-            ("/state/users/alice/integrations/lark-cli/config", "/mnt/integrations/lark-cli/config", False),
         ],
         user_id="alice",
     )
@@ -325,66 +311,6 @@ def test_provisioner_create_forwards_custom_skills_root_and_all_policy_mounts(
     assert {mount["container_path"] for mount in captured["extra_mounts"]} == {f"/custom-skills/{category}" for category in categories}
 
 
-def test_provisioner_create_strips_runtime_mount_when_init_container_enabled(monkeypatch):
-    backend = RemoteSandboxBackend("http://provisioner:8002")
-    monkeypatch.setattr(remote_backend_mod, "user_should_see_legacy_skills", lambda user_id: False)
-
-    captured: dict = {}
-
-    def mock_post(url: str, json: dict, timeout: int, headers=None):
-        captured.update(json)
-        return _StubResponse(payload={"sandbox_id": "abc123", "sandbox_url": "http://k3s:31001"})
-
-    monkeypatch.setattr(requests, "post", mock_post)
-
-    backend._provisioner_create(
-        "thread-1",
-        "abc123",
-        extra_mounts=[
-            ("/state/users/alice/integrations/lark-cli/config", "/mnt/integrations/lark-cli/config", False),
-            ("/state/users/alice/integrations/lark-cli/data", "/mnt/integrations/lark-cli/data", False),
-            ("/state/integrations/lark-cli/sandbox-cli", "/mnt/integrations/lark-cli/runtime", True),
-        ],
-        user_id="alice",
-        provision_lark_cli_runtime=True,
-    )
-
-    assert captured["provision_lark_cli_runtime"] is True
-    container_paths = {mount["container_path"] for mount in captured["extra_mounts"]}
-    # The init container supplies the runtime, so its mount is dropped, but the
-    # per-user credential mounts are still forwarded.
-    assert "/mnt/integrations/lark-cli/runtime" not in container_paths
-    assert "/mnt/integrations/lark-cli/config" in container_paths
-    assert "/mnt/integrations/lark-cli/data" in container_paths
-
-
-def test_provisioner_create_keeps_runtime_mount_when_init_container_disabled(monkeypatch):
-    backend = RemoteSandboxBackend("http://provisioner:8002")
-    monkeypatch.setattr(remote_backend_mod, "user_should_see_legacy_skills", lambda user_id: False)
-
-    captured: dict = {}
-
-    def mock_post(url: str, json: dict, timeout: int, headers=None):
-        captured.update(json)
-        return _StubResponse(payload={"sandbox_id": "abc123", "sandbox_url": "http://k3s:31001"})
-
-    monkeypatch.setattr(requests, "post", mock_post)
-
-    backend._provisioner_create(
-        "thread-1",
-        "abc123",
-        extra_mounts=[
-            ("/state/integrations/lark-cli/sandbox-cli", "/mnt/integrations/lark-cli/runtime", True),
-        ],
-        user_id="alice",
-        provision_lark_cli_runtime=False,
-    )
-
-    assert captured["provision_lark_cli_runtime"] is False
-    container_paths = {mount["container_path"] for mount in captured["extra_mounts"]}
-    assert "/mnt/integrations/lark-cli/runtime" in container_paths
-
-
 def test_provisioner_create_accepts_anonymous_thread_id(monkeypatch):
     backend = RemoteSandboxBackend("http://provisioner:8002")
     monkeypatch.setattr(remote_backend_mod, "user_should_see_legacy_skills", lambda user_id: False)
@@ -397,8 +323,6 @@ def test_provisioner_create_accepts_anonymous_thread_id(monkeypatch):
             "user_id": "test-user-autouse",
             "include_legacy_skills": False,
             "skills_container_path": "/mnt/skills",
-            "provision_lark_cli_runtime": False,
-            "provision_lark_cli_broker": False,
         }
         assert timeout == 30
         return _StubResponse(payload={"sandbox_id": "anon123", "sandbox_url": "http://k3s:31002"})

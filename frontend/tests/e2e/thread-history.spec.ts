@@ -862,12 +862,12 @@ test.describe("Thread history", () => {
       threads: [
         {
           thread_id: MOCK_THREAD_ID,
-          title: "Feishu conversation",
+          title: "Custom channel conversation",
           updated_at: "2025-06-03T12:00:00Z",
           metadata: {
             channel_source: {
               type: "im_channel",
-              provider: "feishu",
+              provider: "custom",
               chat_id: "oc_mock",
             },
           },
@@ -881,16 +881,18 @@ test.describe("Thread history", () => {
       `a[href='/workspace/chats/${MOCK_THREAD_ID}']`,
     );
     await expect(sidebarThread).toBeVisible({ timeout: 15_000 });
-    await expect(sidebarThread.getByLabel("Feishu channel")).toBeVisible();
+    await expect(sidebarThread.getByLabel("custom channel")).toBeVisible();
 
     await page.goto("/workspace/chats");
 
     const mainThread = page
       .locator("main")
       .locator(`a[href='/workspace/chats/${MOCK_THREAD_ID}']`);
-    await expect(mainThread.getByText("Feishu conversation")).toBeVisible({
+    await expect(
+      mainThread.getByText("Custom channel conversation"),
+    ).toBeVisible({
       timeout: 15_000,
     });
-    await expect(mainThread.getByText("Feishu", { exact: true })).toBeVisible();
+    await expect(mainThread.getByText("custom", { exact: true })).toBeVisible();
   });
 });

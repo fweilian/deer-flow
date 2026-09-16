@@ -221,7 +221,7 @@ class SqlAgentStore(AgentStore):
         return "missing"
 
     def signature(self) -> Hashable:
-        # The GitHub registry uses this token to decide whether cached agent
+        # Registry consumers use this token to decide whether cached agent
         # bindings are still current. Timestamps alone are not sufficient
         # because two writes can reuse the same database timestamp.
         # Computing the digest reads the small agents table only on the

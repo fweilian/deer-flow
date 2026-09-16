@@ -18,8 +18,7 @@ DeerFlow (**D**eep **E**xploration and **E**fficient **R**esearch **Flow**) is a
 open-source **super-agent harness** built on LangGraph. A single "lead agent" orchestrates
 **sub-agents**, **persistent memory**, **sandboxed code execution**, and **extensible
 skills/tools** — all isolated per conversation thread. The frontend is a Next.js chat UI;
-external IM platforms (Feishu, Slack, Telegram, Discord, DingTalk) bridge into the *same*
-agent through the Gateway.
+future custom Channel transports bridge into the *same* agent through the Gateway.
 
 ---
 
@@ -175,7 +174,7 @@ These span both layers and require reading multiple files to understand:
 - **Run-context trust boundary**: run context reaches the agent from two client-writable
   surfaces — `body.context` and the free-form `body.config` — so every server-produced key
   is gated on both. `non_interactive`, `disable_clarification`, and `github_token` are
-  honored only for internally-authenticated callers (the scheduler and IM/webhook channel
+  honored only for internally-authenticated callers (the scheduler and Channel
   policies) and scrubbed from a non-internal caller's config; identity and sandbox
   lifecycle fields are cleared unconditionally and restamped from auth state.
 - **Loopback-by-default ingress**: nginx is the only published surface; the Gateway's `8001`

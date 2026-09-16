@@ -189,7 +189,6 @@ def _extract_skill_name_from_skills_path(path: str) -> str | None:
     /mnt/skills/public/bootstrap/SKILL.md → "bootstrap"
     /mnt/skills/custom/my-skill/SKILL.md → "my-skill"
     /mnt/skills/legacy/my-skill/references/... → "my-skill"
-    /mnt/skills/integrations/lark-cli/lark-doc/SKILL.md → "lark-doc"
     /mnt/skills/public/bootstrap/ → "bootstrap"
     Returns None if the path doesn't contain a recognizable skill name pattern.
     """
@@ -214,7 +213,7 @@ def _extract_skill_name_from_skills_path(path: str) -> str | None:
         # Category root like /mnt/skills/custom — not a skill path.
         return None
     if len(parts) == 2 and parts[0] == "integrations":
-        # Provider root like /mnt/skills/integrations/lark-cli.
+        # Provider root like /mnt/skills/integrations/provider.
         return None
     if len(parts) >= 1:
         # Direct path like /mnt/skills/my-skill/SKILL.md
@@ -1888,8 +1887,8 @@ def _truncate_ls_output(output: str, max_chars: int) -> str:
     return f"{output[:kept]}{marker}"
 
 
-# Fixed env var exposing the IM-channel platform user id (Feishu open_id,
-# Slack Uxxx, ...) to sandbox commands, so skills can act on the current end
+# Fixed env var exposing the external-channel user id to sandbox commands, so
+# skills can act on the current end
 # user's channel identity (#3914). An identifier, not a secret.
 CHANNEL_USER_ID_ENV = "DEERFLOW_CHANNEL_USER_ID"
 
@@ -1937,80 +1936,6 @@ def _channel_identity_prefix(runtime: Runtime) -> str | None:
     return f"unset {CHANNEL_USER_ID_ENV}; "
 
 
-def _github_env_from_runtime(runtime: Runtime) -> dict[str, str] | None:
-    """Build a per-call env overlay carrying a GitHub App installation token.
-
-    The GitHub channel mints a short-lived installation token in the
-    ``ChannelManager`` (app layer) and threads it through ``run_context``
-    so it lands in ``runtime.context["github_token"]``. We expose it to
-    the agent's bash as both ``GH_TOKEN`` (what the ``gh`` CLI reads) and
-    ``GITHUB_TOKEN`` (the conventional name). Returning ``None`` when no
-    token is present keeps non-GitHub runs identical to before.
-
-    The value at ``runtime.context["github_token"]`` may be either:
-
-    * a ``str`` — the captured token, the simple shape used by tests and
-      by older code paths that don't need refresh; or
-    * a zero-arg sync callable returning ``str`` — a provider that re-mints
-      transparently when the underlying installation token's 1h TTL is
-      nearing expiry. The provider's cache logic lives app-side (see
-      ``app.gateway.github.app_auth.mint_installation_token`` for the
-      cache + leeway semantics); the harness just calls it.
-
-    The callable path is what lets long autonomous runs survive past the
-    60-minute installation-token life: every bash invocation re-asks the
-    provider, which returns the cached token until ~55 min, then mints a
-    fresh one. Without this, a coder agent doing a multi-hour refactor
-    would do most of the work and then 401 on the final ``git push``.
-
-    The token still crosses the harness/app boundary as opaque data — the
-    harness never imports the app-layer minting code, preserving the
-    dependency firewall enforced by ``tests/test_harness_boundary.py``.
-    """
-    context = runtime.context if runtime.context is not None else None
-    value = context.get("github_token") if context else None
-    if callable(value):
-        try:
-            token = value()
-        except Exception:
-            logger.warning("github_token provider raised; skipping env overlay", exc_info=True)
-            return None
-    else:
-        token = value
-    if not isinstance(token, str) or not token:
-        return None
-    return {"GH_TOKEN": token, "GITHUB_TOKEN": token}
-
-
-_LARK_CLI_COMMAND_RE = re.compile(r"(?<![A-Za-z0-9_.-])lark-cli(?![A-Za-z0-9_.-])")
-
-
-def _lark_cli_env_from_runtime(runtime: Runtime, command: str, *, sandbox_paths: bool) -> dict[str, str] | None:
-    """Expose Settings-page Lark auth to sandbox ``lark-cli`` commands.
-
-    Settings authorizes ``lark-cli`` under DeerFlow's per-user integration
-    config/data directories. Agent conversations invoke ``lark-cli`` through the
-    sandbox, so lark commands must receive those same directories or they see an
-    unrelated unauthenticated profile. Keep this scoped to commands that
-    actually call ``lark-cli`` so ordinary bash calls do not switch AIO into the
-    env-bearing execution path.
-
-    In broker mode (Pattern B, issue #4338) a sidecar owns the credentials, so
-    the overlay carries only the broker URL + runtime PATH — the config/data
-    directories are never injected into the sandbox.
-    """
-    if not _LARK_CLI_COMMAND_RE.search(command):
-        return None
-    try:
-        from deerflow.integrations.lark_cli import lark_cli_env_overlay, sandbox_lark_broker_active
-
-        broker = sandbox_paths and sandbox_lark_broker_active()
-        return lark_cli_env_overlay(resolve_runtime_user_id(runtime), sandbox_paths=sandbox_paths, broker=broker)
-    except Exception:
-        logger.warning("Could not build Lark CLI env overlay; running command without managed auth", exc_info=True)
-        return None
-
-
 @tool("bash", parse_docstring=True)
 def bash_tool(runtime: Runtime, command: str, description: str = "") -> str:
     """Execute a bash command in the configured execution environment.
@@ -2036,18 +1961,10 @@ def bash_tool(runtime: Runtime, command: str, description: str = "") -> str:
     """
     try:
         sandbox = ensure_sandbox_initialized(runtime)
-        # Request-scoped secrets resolved for the active skill (#3861), plus a
-        # short-lived GitHub App installation token threaded through by the
-        # GitHub channel. Both are injected as per-call env into the subprocess,
-        # never placed in the command string.
+        # Request-scoped secrets resolved for the active skill (#3861) are
+        # injected as per-call env into the subprocess, never into the command.
         injected_env = read_active_secrets(getattr(runtime, "context", None)) or None
         identity_prefix = _channel_identity_prefix(runtime)
-        github_env = _github_env_from_runtime(runtime)
-        lark_cli_env = _lark_cli_env_from_runtime(runtime, command, sandbox_paths=not is_local_sandbox(runtime))
-        if github_env:
-            injected_env = {**(injected_env or {}), **github_env}
-        if lark_cli_env:
-            injected_env = {**(injected_env or {}), **lark_cli_env}
         if is_local_sandbox(runtime):
             if not is_host_bash_allowed():
                 return f"Error: {LOCAL_HOST_BASH_DISABLED_MESSAGE}"

@@ -9,7 +9,6 @@ from __future__ import annotations
 import yaml
 from wizard import ui as wizard_ui
 from wizard.providers import LLM_PROVIDERS, LLMProvider, with_thinking_support
-from wizard.steps import channels as channels_step
 from wizard.steps import llm as llm_step
 from wizard.writer import (
     build_minimal_config,
@@ -309,44 +308,6 @@ class TestBuildMinimalConfig:
         assert model["when_thinking_enabled"]["extra_body"]["thinking"]["type"] == "enabled"
         assert model["when_thinking_disabled"]["extra_body"]["thinking"]["type"] == "disabled"
 
-    def test_can_enable_selected_channel_connections(self):
-        content = build_minimal_config(
-            provider_use="langchain_openai:ChatOpenAI",
-            model_name="gpt-4o",
-            display_name="OpenAI",
-            api_key_field="api_key",
-            env_var="OPENAI_API_KEY",
-            channel_connection_providers=["feishu", "slack"],
-        )
-
-        data = yaml.safe_load(content)
-        channel_connections = data["channel_connections"]
-
-        assert channel_connections["enabled"] is True
-        assert channel_connections["feishu"]["enabled"] is True
-        assert channel_connections["slack"]["enabled"] is True
-        assert channel_connections["telegram"]["enabled"] is False
-        assert channel_connections["discord"]["enabled"] is False
-        assert channel_connections["dingtalk"]["enabled"] is False
-        assert channel_connections["wechat"]["enabled"] is False
-        assert channel_connections["wecom"]["enabled"] is False
-
-    def test_channel_connections_disabled_when_no_channels_selected(self):
-        content = build_minimal_config(
-            provider_use="langchain_openai:ChatOpenAI",
-            model_name="gpt-4o",
-            display_name="OpenAI",
-            api_key_field="api_key",
-            env_var="OPENAI_API_KEY",
-            channel_connection_providers=[],
-        )
-
-        data = yaml.safe_load(content)
-        channel_connections = data["channel_connections"]
-
-        assert channel_connections["enabled"] is False
-        assert all(not config["enabled"] for provider, config in channel_connections.items() if provider != "enabled")
-
 
 class TestThinkingSupport:
     def test_other_provider_requests_thinking_prompt(self):
@@ -487,28 +448,6 @@ class TestLLMStep:
 
         assert result.provider.extra_config["supports_thinking"] is False
         assert "when_thinking_enabled" not in result.provider.extra_config
-
-
-class TestChannelsStep:
-    def test_returns_selected_channel_keys(self, monkeypatch):
-        monkeypatch.setattr(channels_step, "print_header", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(channels_step, "print_info", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(channels_step, "print_success", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(channels_step, "ask_multi_choice", lambda *_args, **_kwargs: [0, 3, 6])
-
-        result = channels_step.run_channels_step()
-
-        assert result.enabled_providers == ["telegram", "feishu", "wecom"]
-
-    def test_empty_selection_disables_channel_connections(self, monkeypatch):
-        monkeypatch.setattr(channels_step, "print_header", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(channels_step, "print_info", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(channels_step, "print_success", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(channels_step, "ask_multi_choice", lambda *_args, **_kwargs: [])
-
-        result = channels_step.run_channels_step()
-
-        assert result.enabled_providers == []
 
 
 class TestWizardUi:

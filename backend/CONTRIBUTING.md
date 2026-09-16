@@ -94,7 +94,7 @@ backend/
     ├── gateway/                # Gateway API
     │   ├── app.py              # FastAPI application
     │   └── routers/            # Route handlers (threads, models, mcp, skills, uploads, …)
-    └── channels/               # IM channel integrations (Feishu, Slack, Telegram, …)
+    └── channels/               # Provider-neutral Channel runtime and extensions
 ```
 
 See [AGENTS.md](AGENTS.md) for the full module-by-module breakdown.

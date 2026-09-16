@@ -19,7 +19,7 @@ directories as root, the build client eventually cannot read them and the build
 fails outright::
 
     target gateway: failed to solve: error from sender:
-    open .../.deer-flow/users/<uuid>/integrations/lark-cli: permission denied
+        open .../.deer-flow/users/<uuid>/integrations/custom-pack: permission denied
 
 None of these paths has tracked content, so excluding them costs the build nothing.
 """

@@ -160,15 +160,12 @@ def test_csrf_is_enforced_for_routes_mounted_under_the_webhook_prefix():
     assert "CSRF token missing" in response.json()["detail"]
 
 
-# ── CSRF predicates read the same projection ─────────────────────────────────
-
-
 def test_csrf_exemptions_follow_the_projection():
     # Genuine host webhook: no mount, exempt.
-    assert should_check_csrf(_request("/api/webhooks/github", method="POST")) is False
-    # Same wire path, but the router is matching "/github" inside a mount --
+    assert should_check_csrf(_request("/api/webhooks/custom", method="POST")) is False
+    # Same wire path, but the router is matching "/custom" inside a mount --
     # not the host's webhook namespace, so CSRF still applies.
-    assert should_check_csrf(_request("/api/webhooks/github", "/api/webhooks", method="POST")) is True
+    assert should_check_csrf(_request("/api/webhooks/custom", "/api/webhooks", method="POST")) is True
 
 
 def test_auth_endpoint_detection_follows_the_projection():

@@ -20,8 +20,6 @@ import httpx
 from fastapi import HTTPException
 from langgraph_sdk.errors import ConflictError
 
-from app.channels import buzz_run_policy as _buzz_run_policy  # noqa: F401
-from app.channels import feishu_run_policy as _feishu_run_policy  # noqa: F401
 from app.channels.commands import KNOWN_CHANNEL_COMMANDS
 from app.channels.dedupe_store import InboundDedupeStore, MemoryInboundDedupeStore
 from app.channels.message_bus import (
@@ -91,32 +89,8 @@ BOUND_IDENTITY_UNAVAILABLE_MESSAGE = "Channel connection verification is tempora
 # provider's own automatic retry or an operator resend — without keeping a
 # growing ledger.
 #
-# For GitHub specifically: GitHub does NOT automatically retry or redeliver
-# a failed delivery (non-2xx response, timeout, or connection error) — it
-# is simply recorded as failed. See GitHub's own documentation:
-# https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries.
-# Every redelivery of the same ``X-GitHub-Delivery`` GUID is therefore an
-# explicit action — the repo/App "Redeliver" button, the REST API, or an
-# operator's own scheduled recovery script polling the failed-deliveries
-# endpoint (the pattern GitHub's own docs recommend) — never an automatic
-# GitHub-side retry. This TTL exists to absorb exactly those explicit
-# near-term replays.
-#
-# At the boundary: a manual redelivery (e.g. GitHub's "Redeliver" button)
-# clicked *after* the TTL has elapsed, or any redelivery following a Gateway
-# restart, is no longer recognized as a duplicate — the key has already been
-# evicted, or never existed in the new process — so the agent runs again
-# and may repeat a real side effect (e.g. a duplicate PR comment on
-# GitHub). This is parity with every other IM channel's dedupe (same
-# mechanism, same TTL), not a channel-specific gap. True idempotency against
-# a late/manual redelivery would require persisting the dedupe key in
-# ``ChannelStore`` instead, which is not implemented here.
-# Follow-up buffering for busy fire_and_forget threads (issue #4121 Slice 2).
-# A ConflictError on a channel opted into ChannelRunPolicy.buffer_followups_on_busy
-# buffers the triggering message per-thread instead of only logging it; a
-# background watcher drains the buffer into a coalesced follow-up run once the
-# busy run completes through the Gateway join endpoint. See _buffer_followup,
-# _drain_followups_for_thread, and _watch_run_and_drain_followups below.
+# Follow-up buffering is a generic opt-in for extension-provided asynchronous
+# Channels; no built-in Channel enables it.
 FOLLOWUP_BUFFER_MAX_PER_THREAD = 20
 FOLLOWUP_DRAIN_BATCH_SIZE = 10
 FOLLOWUP_BLOCK_TAG = "followups-while-busy"
@@ -124,23 +98,8 @@ FOLLOWUP_BLOCK_TAG = "followups-while-busy"
 # client_id) are not guaranteed identical across a provider's own redelivery, so
 # keying dedupe on them would miss exactly the retries we want to absorb.
 INBOUND_DEDUPE_METADATA_KEYS = ("event_id", "message_id", "msg_id")
-# Providers that persist connection.workspace_id = chat_id (telegram / feishu /
-# wechat upsert_connection). Unbound inbound has no connection, so msg.workspace_id
-# is unset; chat_id is still the tenant scope and is safe for the dedupe key.
-# Slack is intentionally excluded: its channel ids are not globally unique.
-CHAT_SCOPED_WORKSPACE_CHANNELS = frozenset({"telegram", "feishu", "wechat"})
-
-CHANNEL_CAPABILITIES = {
-    "buzz": {"supports_streaming": True},
-    "dingtalk": {"supports_streaming": False},
-    "discord": {"supports_streaming": False},
-    "feishu": {"supports_streaming": True},
-    "github": {"supports_streaming": False},
-    "slack": {"supports_streaming": False},
-    "telegram": {"supports_streaming": True},
-    "wechat": {"supports_streaming": False},
-    "wecom": {"supports_streaming": True},
-}
+# Extension Channels may use workspace_id for tenant-scoped deduplication.
+CHAT_SCOPED_WORKSPACE_CHANNELS: frozenset[str] = frozenset()
 
 InboundFileReader = Callable[[dict[str, Any], httpx.AsyncClient], Awaitable[bytes | None]]
 
@@ -167,44 +126,6 @@ async def _read_http_inbound_file(file_info: dict[str, Any], client: httpx.Async
     resp = await client.get(url)
     resp.raise_for_status()
     return resp.content
-
-
-async def _read_wecom_inbound_file(file_info: dict[str, Any], client: httpx.AsyncClient) -> bytes | None:
-    data = await _read_http_inbound_file(file_info, client)
-    if data is None:
-        return None
-
-    aeskey = file_info.get("aeskey") if isinstance(file_info.get("aeskey"), str) else None
-    if not aeskey:
-        return data
-
-    try:
-        from aibot.crypto_utils import decrypt_file
-    except Exception:
-        logger.exception("[Manager] failed to import WeCom decrypt_file")
-        return None
-
-    return decrypt_file(data, aeskey)
-
-
-async def _read_wechat_inbound_file(file_info: dict[str, Any], client: httpx.AsyncClient) -> bytes | None:
-    raw_path = file_info.get("path")
-    if isinstance(raw_path, str) and raw_path.strip():
-        try:
-            return await asyncio.to_thread(Path(raw_path).read_bytes)
-        except OSError:
-            logger.exception("[Manager] failed to read WeChat inbound file from local path: %s", raw_path)
-            return None
-
-    full_url = file_info.get("full_url")
-    if isinstance(full_url, str) and full_url.strip():
-        return await _read_http_inbound_file({"url": full_url}, client)
-
-    return None
-
-
-register_inbound_file_reader("wecom", _read_wecom_inbound_file)
-register_inbound_file_reader("wechat", _read_wechat_inbound_file)
 
 
 class InvalidChannelSessionConfigError(ValueError):
@@ -244,19 +165,29 @@ class _SerializedThreadRunState:
 
 @dataclass(slots=True)
 class _FollowupEntry:
-    """One inbound message's text, buffered because its thread was busy.
-
-    Routing/policy identity (channel_name, metadata, owner headers) for the
-    eventual drained run comes from a separate ``carrier_msg`` — see
-    ``ChannelManager._drain_followups_for_thread`` — not from a per-entry
-    message, since every buffered entry for one thread_id shares that
-    identity already (thread_id is itself derived deterministically from
-    (repo, number, agent_name) for GitHub). Only the text needs to survive
-    per entry.
-    """
-
     dedupe_key: str
     text: str
+
+
+def _followup_dedupe_key(msg: InboundMessage) -> str:
+    metadata = msg.metadata or {}
+    for key in INBOUND_DEDUPE_METADATA_KEYS:
+        value = metadata.get(key)
+        if value:
+            return f"{key}:{value}"
+    return f"__no_id__:{id(msg)}:{msg.created_at}"
+
+
+def _format_followup_block(entries: list[_FollowupEntry]) -> str:
+    lines = [
+        f"<{FOLLOWUP_BLOCK_TAG}>",
+        "Messages received while the previous run was busy:",
+        "",
+    ]
+    for idx, entry in enumerate(entries, start=1):
+        lines.append(f"{idx}. {escape(entry.text, quote=False)}")
+    lines.append(f"</{FOLLOWUP_BLOCK_TAG}>")
+    return "\n".join(lines)
 
 
 def _is_thread_busy_error(exc: BaseException | None) -> bool:
@@ -265,59 +196,6 @@ def _is_thread_busy_error(exc: BaseException | None) -> bool:
     if isinstance(exc, ConflictError):
         return True
     return "already running a task" in str(exc)
-
-
-def _followup_dedupe_key(msg: InboundMessage) -> str:
-    """Best-effort stable identifier for a buffered follow-up comment.
-
-    Mirrors ``_inbound_dedupe_key``'s provider-id preference order (a GitHub
-    webhook delivery id first, then the generic provider-message-id metadata
-    keys), but scoped to one thread's follow-up buffer rather than the
-    global cross-channel inbound dedupe map, and always returns a usable key
-    — falling back to an object-identity key — since the follow-up buffer
-    must still accept an entry even when a provider omits every known id
-    field (unlike ``_inbound_dedupe_key``, which returns ``None`` to skip
-    dedupe entirely in that case).
-    """
-    metadata = msg.metadata or {}
-    gh = metadata.get("github")
-    if isinstance(gh, dict):
-        delivery_id = gh.get("delivery_id")
-        if delivery_id:
-            return f"github:delivery:{delivery_id}"
-
-    for key in INBOUND_DEDUPE_METADATA_KEYS:
-        value = metadata.get(key)
-        if value:
-            return f"{key}:{value}"
-
-    raw_message = metadata.get("raw_message")
-    if isinstance(raw_message, Mapping):
-        for key in INBOUND_DEDUPE_METADATA_KEYS:
-            value = raw_message.get(key)
-            if value:
-                return f"{key}:{value}"
-
-    # No stable provider id available: fall back to a per-message key so the
-    # entry is still buffered (just never deduped against a redelivery).
-    return f"__no_id__:{id(msg)}:{msg.created_at}"
-
-
-def _format_followup_block(entries: list[_FollowupEntry]) -> str:
-    """Coalesce buffered follow-up entries into one templated input block."""
-    lines = [
-        f"<{FOLLOWUP_BLOCK_TAG}>",
-        "The following messages arrived on this thread while a previous run was still in progress. They were queued and are now delivered together as one turn:",
-        "",
-    ]
-    for idx, entry in enumerate(entries, start=1):
-        escaped_text = escape(entry.text, quote=False).replace(
-            "\n",
-            "\n   ",
-        )
-        lines.append(f"{idx}. {escaped_text}")
-    lines.append(f"</{FOLLOWUP_BLOCK_TAG}>")
-    return "\n".join(lines)
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -601,8 +479,9 @@ def _is_assistant_stream_type(payload_type: str) -> bool:
     turn into a new ``HumanMessage``, and ``DurableContextMiddleware`` injects a
     hidden ``<durable_context_data>`` ``HumanMessage``.  LangGraph fans state
     writes out on the ``messages-tuple`` stream, so all of those reached the
-    channel as if they were the assistant's reply -- proved live on a Buzz
-    relay, where each streaming update is an immutable public Nostr event and a
+    channel as if they were the assistant's reply -- a regression once
+    observed on an external relay, where each streaming update is an immutable
+    public event and a
     later corrective edit cannot unpublish the leaked one.
 
     The accepted spellings are the ones assistant output actually carries:
@@ -1090,7 +969,7 @@ class ChannelManager:
             channel = service.get_channel(channel_name)
             if channel is not None:
                 return channel.supports_streaming
-        return CHANNEL_CAPABILITIES.get(channel_name, {}).get("supports_streaming", False)
+        return False
 
     def _resolve_session_layer(self, msg: InboundMessage) -> tuple[dict[str, Any], dict[str, Any]]:
         channel_layer = _as_dict(self._channel_sessions.get(msg.channel_name))
@@ -1261,8 +1140,8 @@ class ChannelManager:
         """Watch *run_id* until it ends, then attempt to drain thread_id's buffer.
 
         Joins the Gateway SSE run stream using the same SDK as channel runs. Runs
-        for as long as the underlying run does — GitHub coding runs
-        routinely take several minutes, so this deliberately does not apply
+        for as long as the underlying run does — autonomous coding runs may
+        take several minutes, so this deliberately does not apply
         an artificial timeout, mirroring why the dispatch path itself uses
         ``runs.create`` instead of ``runs.wait`` in the first place. Draining
         is a no-op when the buffer is empty, which is the common case (most
@@ -1295,8 +1174,8 @@ class ChannelManager:
         ``carrier_msg`` supplies routing/policy identity (channel_name,
         metadata, owner headers) for the drained run — it is safe to reuse
         across an entire drain chain because every buffered entry for one
-        thread_id shares that identity (thread_id itself is derived
-        deterministically from (repo, number, agent_name) for GitHub).
+        thread_id shares that identity (thread_id itself may be derived
+        deterministically by an adapter).
 
         A batch larger than ``FOLLOWUP_DRAIN_BATCH_SIZE`` is intentionally
         NOT drained in one shot: only the oldest batch is popped here, and
@@ -1394,7 +1273,7 @@ class ChannelManager:
     def _resolve_run_params(self, msg: InboundMessage, thread_id: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
         channel_layer, user_layer = self._resolve_session_layer(msg)
 
-        # Per-message agent override (e.g. GitHub webhook fan-out: multiple
+        # Per-message agent override (e.g. an extension fan-out: multiple
         # agents may bind the same repo, each gets its own inbound message
         # with its own agent_name in metadata).  Honors the same shape as
         # channel/user session config: the bare agent name routes through
@@ -1434,8 +1313,7 @@ class ChannelManager:
         run_context_identity: dict[str, Any] = {"thread_id": thread_id}
         # ``channel_name`` lets in-graph code (e.g. ``_make_lead_agent``)
         # decide whether a tool is safe to expose for this run. Webhook
-        # channels carry untrusted external prompts (GitHub comments,
-        # Telegram chats from non-owners, etc.), so admin-shaped tools
+        # channels carry untrusted external prompts, so admin-shaped tools
         # like ``update_agent`` are dropped when the run was triggered
         # via one. See ``_make_lead_agent`` for the gate.
         run_context_identity["channel_name"] = msg.channel_name
@@ -1474,21 +1352,11 @@ class ChannelManager:
             # while silently routing elsewhere.
             _apply_explicit_agent_choice(run_config, run_context, None)
 
-        # Apply per-channel run policy (recursion_limit bump for webhook
-        # channels, etc.). Looking the policy up by channel_name keeps
-        # GitHub-specific knobs out of this method — adding the next
-        # webhook channel is a one-row CHANNEL_RUN_POLICY entry, not a
-        # new if-branch here.
+        # Apply an extension-provided per-channel run policy, if one exists.
         policy = CHANNEL_RUN_POLICY.get(msg.channel_name)
         if policy is not None and policy.default_recursion_limit is not None:
-            # Per-message override (via msg.metadata[channel_name]) honors
-            # the operator's explicit per-agent recursion_limit verbatim —
-            # including values below the channel default. A safety-conscious
-            # ``github.recursion_limit: 50`` on a review-only agent now halts
-            # at 50 super-steps as documented in GitHubAgentConfig, instead
-            # of being silently clamped up to the channel default. When no
-            # override is present, the channel default acts as a floor over
-            # whatever session config supplied (the higher value wins).
+            # Per-message overrides honor the operator's explicit value;
+            # otherwise the extension policy acts as a floor.
             channel_meta = (msg.metadata or {}).get(msg.channel_name, {})
             override = channel_meta.get("recursion_limit") if isinstance(channel_meta, dict) else None
             if isinstance(override, int) and override > 0:
@@ -1508,10 +1376,7 @@ class ChannelManager:
           ``ClarificationMiddleware`` would otherwise dead-end a webhook
           run waiting for a synchronous reply that only arrives as a
           later, separate webhook delivery.
-        * Channel-specific credentials provider — e.g. the GitHub channel
-          installs a token-mint callable so ``bash_tool`` can resolve a
-          fresh installation token on every invocation (longer than the
-          1h GitHub TTL).
+        * Extension-provided channel credentials or other run context.
 
         ``recursion_limit`` is applied inside :meth:`_resolve_run_params`
         instead because it lives on ``run_config`` (not ``run_context``)
@@ -1786,14 +1651,14 @@ class ChannelManager:
             return None
 
         # Fail closed: without a workspace/team/guild identifier we cannot tell two
-        # workspaces apart (e.g. Slack channel ids are not globally unique), so
+        # workspaces apart (external channel ids are not globally unique), so
         # skip dedupe rather than risk collapsing distinct workspaces' messages.
         # Both fallbacks are appended last and gated on every earlier source being
         # absent, so they can only turn "no key" into a key — never change one.
         # A conversation_id not reused across a provider's own redelivery would
         # degrade to today's no-dedupe behaviour, never collapse two conversations
         # (chat_id and message_id stay in the tuple). conversation_id covers
-        # DingTalk (group + P2P); chat-scoped providers fall back to chat_id.
+        # Group and P2P transports; chat-scoped providers fall back to chat_id.
         workspace_id = msg.workspace_id or metadata.get("workspace_id") or metadata.get("team_id") or metadata.get("guild_id") or metadata.get("aibotid") or metadata.get("conversation_id")
         if not workspace_id and msg.channel_name in CHAT_SCOPED_WORKSPACE_CHANNELS:
             workspace_id = msg.chat_id or None
@@ -1897,12 +1762,9 @@ class ChannelManager:
         """
         if not self._require_bound_identity:
             return None
-        # Webhook-authenticated channels (GitHub) opt out via
-        # ChannelRunPolicy.requires_bound_identity=False. Authenticity is
-        # enforced at the webhook route by HMAC, and the "sender → DeerFlow
-        # user" binding is encoded in the agent's config.yaml ownership, not
-        # in the channel-connections table — there is no per-sender
-        # /connect handshake to perform.
+        # An extension may opt out via
+        # ChannelRunPolicy.requires_bound_identity=False when it owns its own
+        # authenticated identity binding.
         policy = CHANNEL_RUN_POLICY.get(msg.channel_name)
         if policy is not None and not policy.requires_bound_identity:
             return None
@@ -2034,10 +1896,9 @@ class ChannelManager:
             if agent_name != DEFAULT_ASSISTANT_ID:
                 metadata[THREAD_AGENT_METADATA_KEY] = agent_name
         owner_headers = _owner_headers(msg)
-        # Some channels (notably GitHub) supply a deterministic preferred
-        # thread id so a (repo, PR/issue number) always lands on the same
-        # LangGraph thread, even after a store wipe. When absent, Gateway
-        # mints a random id as before.
+        # An extension may supply a deterministic preferred thread id so a
+        # transport conversation remains stable after a store wipe. When
+        # absent, Gateway mints a random id as before.
         meta = msg.metadata if isinstance(msg.metadata, dict) else {}
         preferred_thread_id = meta.get("preferred_thread_id")
         create_kwargs: dict[str, Any] = {"metadata": metadata}
@@ -2165,8 +2026,8 @@ class ChannelManager:
         storage_user_id = _channel_storage_user_id(msg)
 
         # Look up the existing DeerFlow thread, creating one if this is the
-        # first message for the chat. topic_id may be None (e.g. Telegram
-        # private chats) — the store handles this by using the "channel:chat_id"
+        # first message for the chat. topic_id may be None for transports with
+        # private chats — the store handles this by using the "channel:chat_id"
         # key without a topic suffix.
         thread_id, created = await self._get_or_create_thread(client, msg)
         if not created:
@@ -2220,11 +2081,8 @@ class ChannelManager:
 
         assistant_id, run_config, run_context = self._resolve_run_params(msg, thread_id)
 
-        # Apply per-channel policy: credentials provider (e.g. GitHub
-        # installation-token mint) and the non-interactive flag for
-        # webhook channels. Driven by CHANNEL_RUN_POLICY so each new
-        # webhook channel is a one-row registration, not a fresh
-        # if-branch here.
+        # Apply the optional extension-provided run policy. Keeping this hook
+        # generic means new adapters do not require manager changes.
         policy = await self._apply_channel_policy(msg, run_context)
 
         # If the inbound message contains file attachments, let the channel
@@ -2269,9 +2127,8 @@ class ChannelManager:
 
         if policy is not None and policy.fire_and_forget:
             # Fire-and-forget path: the channel does its own outbound
-            # during the run (GitHub agents post to the issue/PR via the
-            # ``gh`` CLI from inside the sandbox), so there is nothing
-            # for the manager to ferry back. Use ``runs.create`` — a
+            # during the run), so there is nothing for the manager to ferry
+            # back. Use ``runs.create`` — a
             # short POST that returns once the run is ``pending`` — to
             # avoid the SDK's 300s ``httpx.ReadTimeout`` on legitimately
             # long autonomous runs, and the false "internal error"

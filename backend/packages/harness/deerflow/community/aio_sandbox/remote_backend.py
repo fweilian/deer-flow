@@ -32,13 +32,7 @@ from .sandbox_info import SandboxInfo
 
 logger = logging.getLogger(__name__)
 
-_PROVISIONER_EXTRA_MOUNT_PATHS = {
-    "/mnt/acp-workspace",
-    "/mnt/integrations/lark-cli/config",
-    "/mnt/integrations/lark-cli/config/locks",
-    "/mnt/integrations/lark-cli/data",
-    "/mnt/integrations/lark-cli/runtime",
-}
+_PROVISIONER_EXTRA_MOUNT_PATHS = {"/mnt/acp-workspace"}
 _MANAGED_SKILL_CATEGORY_NAMES = (
     "public",
     "custom",
@@ -48,12 +42,7 @@ _MANAGED_SKILL_CATEGORY_NAMES = (
 _RESERVED_SANDBOX_MOUNT_PATHS = (
     "/mnt/user-data",
     "/mnt/acp-workspace",
-    "/mnt/integrations/lark-cli",
 )
-
-_LARK_CLI_RUNTIME_CONTAINER_PATH = "/mnt/integrations/lark-cli/runtime"
-_LARK_CLI_CONFIG_CONTAINER_PATH = "/mnt/integrations/lark-cli/config"
-_LARK_CLI_DATA_CONTAINER_PATH = "/mnt/integrations/lark-cli/data"
 
 
 def _normalize_skills_container_path(container_path: str) -> str:
@@ -85,37 +74,15 @@ def _provisioner_extra_mounts_payload(
     extra_mounts: list[tuple[str, str, bool]] | None,
     *,
     skills_container_path: str = DEFAULT_SKILLS_CONTAINER_PATH,
-    provision_lark_cli_runtime: bool = False,
-    provision_lark_cli_broker: bool = False,
 ) -> list[dict[str, object]]:
-    """Return only extra mounts the provisioner knows how to recreate safely.
-
-    When ``provision_lark_cli_runtime`` is set, the provisioner supplies the
-    lark-cli runtime via an init container + emptyDir, so the runtime extra mount
-    is dropped here to avoid a colliding hostPath/PVC mount at the same path. The
-    per-user config/locks/data mounts are still forwarded (they are mounted into
-    the sandbox in Pattern A). The config root remains read-only while its
-    nested locks mount is writable for lark-cli's coordination files.
-
-    When ``provision_lark_cli_broker`` is set (Pattern B, issue #4338), the
-    provisioner runs a broker sidecar that holds the credentials, so the
-    config/locks/data mounts are **forwarded** (the provisioner wires them into
-    the sidecar, not the sandbox) while the runtime mount is dropped. Nothing
-    changes in this payload beyond keeping those credential-related mounts
-    available for the provisioner to place; the runtime entry is dropped in
-    both modes.
-    """
+    """Return only extra mounts the provisioner knows how to recreate safely."""
     allowed_paths = _PROVISIONER_EXTRA_MOUNT_PATHS | _managed_skill_category_mount_paths(skills_container_path)
     if not extra_mounts:
         return []
 
-    drop_runtime = provision_lark_cli_runtime or provision_lark_cli_broker
-
     payload: list[dict[str, object]] = []
     for host_path, container_path, read_only in extra_mounts:
         if container_path not in allowed_paths:
-            continue
-        if drop_runtime and container_path == _LARK_CLI_RUNTIME_CONTAINER_PATH:
             continue
         payload.append(
             {
@@ -170,8 +137,6 @@ class RemoteSandboxBackend(SandboxBackend):
         *,
         user_id: str | None = None,
         skills_container_path: str = DEFAULT_SKILLS_CONTAINER_PATH,
-        provision_lark_cli_runtime: bool = False,
-        provision_lark_cli_broker: bool = False,
     ) -> SandboxInfo:
         """Create a sandbox Pod + Service via the provisioner.
 
@@ -184,8 +149,6 @@ class RemoteSandboxBackend(SandboxBackend):
             extra_mounts,
             user_id=user_id,
             skills_container_path=skills_container_path,
-            provision_lark_cli_runtime=provision_lark_cli_runtime,
-            provision_lark_cli_broker=provision_lark_cli_broker,
         )
 
     def destroy(self, info: SandboxInfo) -> None:
@@ -258,8 +221,6 @@ class RemoteSandboxBackend(SandboxBackend):
         *,
         user_id: str | None = None,
         skills_container_path: str = DEFAULT_SKILLS_CONTAINER_PATH,
-        provision_lark_cli_runtime: bool = False,
-        provision_lark_cli_broker: bool = False,
     ) -> SandboxInfo:
         """POST /api/sandboxes → create Pod + Service."""
         effective_user_id = user_id or get_effective_user_id()
@@ -271,14 +232,10 @@ class RemoteSandboxBackend(SandboxBackend):
             "user_id": effective_user_id,
             "include_legacy_skills": include_legacy_skills,
             "skills_container_path": normalized_skills_container_path,
-            "provision_lark_cli_runtime": provision_lark_cli_runtime,
-            "provision_lark_cli_broker": provision_lark_cli_broker,
         }
         provisioner_extra_mounts = _provisioner_extra_mounts_payload(
             extra_mounts,
             skills_container_path=normalized_skills_container_path,
-            provision_lark_cli_runtime=provision_lark_cli_runtime,
-            provision_lark_cli_broker=provision_lark_cli_broker,
         )
         if provisioner_extra_mounts:
             payload["extra_mounts"] = provisioner_extra_mounts

@@ -7,7 +7,6 @@ import {
   listChannelProviders,
 } from "@/core/channels/api";
 import { fetchFeatures } from "@/core/features/api";
-import { loadLarkIntegrationStatus } from "@/core/integrations/lark/api";
 import { loadMCPConfig } from "@/core/mcp/api";
 import { loadMemory } from "@/core/memory/api";
 import {
@@ -96,19 +95,14 @@ describe("static website API requests", () => {
     await expect(loadSkills()).resolves.toEqual([]);
     network.mockResolvedValueOnce(Response.json({ mcp_servers: {} }));
     await expect(loadMCPConfig()).resolves.toEqual({ mcp_servers: {} });
-    network.mockResolvedValueOnce(Response.json({ installed: false }));
-    await expect(loadLarkIntegrationStatus()).resolves.toMatchObject({
-      installed: false,
-    });
     expect(network.mock.calls.map(([url]) => url)).toEqual([
       "http://127.0.0.1:3000/mock/api/skills",
       "http://127.0.0.1:3000/mock/api/mcp/config",
-      "http://127.0.0.1:3000/mock/api/integrations/lark/status",
     ]);
     await expect(fetchFeatures()).resolves.toMatchObject({
       agents_api: { enabled: false },
     });
-    expect(network).toHaveBeenCalledTimes(3);
+    expect(network).toHaveBeenCalledTimes(2);
   });
 
   it("rejects writes and unsupported endpoints locally instead of reporting fake success", async () => {

@@ -990,7 +990,7 @@ For the AIO provider (including the Kubernetes provisioner) and E2B,
 `skills.container_path` is captured when the provider starts and must be one
 canonical absolute, non-root POSIX path. Do not use redundant separators,
 `.`/`..`, or a path that contains or sits below DeerFlow's reserved mounts
-(`/mnt/user-data`, `/mnt/acp-workspace`, or `/mnt/integrations/lark-cli`).
+(`/mnt/user-data` or `/mnt/acp-workspace`).
 Restart the Gateway after changing it so sandbox identities and mounts use the
 same root. E2B also records the root in remote metadata and refuses to adopt a
 VM created for another root.

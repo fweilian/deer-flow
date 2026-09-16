@@ -797,7 +797,7 @@ async def test_legacy_backfill_duplicate_channel_connections_does_not_crash(
                         "(id, owner_user_id, provider, status, external_account_id, "
                         "workspace_id, scopes_json, capabilities_json, metadata_json, "
                         "created_at, updated_at) "
-                        "VALUES (:cid, :owner, 'slack', 'active', 'ext-1', 'ws-1', "
+                        "VALUES (:cid, :owner, 'custom', 'active', 'ext-1', 'ws-1', "
                         "'[]', '{}', '{}', :created_at, :updated_at)"
                     ),
                     {

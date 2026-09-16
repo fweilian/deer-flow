@@ -180,7 +180,7 @@ def reset_user_skill_storage(user_id: str | None = None) -> None:
 
     ``user_id`` is normalised via :func:`make_safe_user_id` so that the
     cache key matches the one used by :func:`get_or_new_user_skill_storage`.
-    Without normalisation, IM-channel user IDs (e.g. ``feishu:xxx``) would
+    Without normalisation, external-channel user IDs (e.g. ``provider:xxx``) would
     fail to clear their stale cache entries.
 
     Args:

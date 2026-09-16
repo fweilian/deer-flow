@@ -417,7 +417,7 @@ def test_get_memory_honors_bound_owner_header() -> None:
 def test_get_memory_sanitizes_unsafe_owner_header() -> None:
     from deerflow.config.paths import make_safe_user_id
 
-    raw_owner = "feishu|ou_AbC/123"
+    raw_owner = "custom|ou_AbC/123"
     seen: dict[str, str] = {}
 
     def fake_get_memory(*, user_id: str) -> dict:

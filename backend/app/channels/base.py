@@ -1,4 +1,4 @@
-"""Abstract base class for IM channels."""
+"""Abstract base class for extension-provided Channels."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ class Channel(ABC):
     1. Receives messages, wraps them as InboundMessage, publishes to the bus.
     2. Subscribes to outbound messages and sends replies back to the platform.
 
-    Subclasses must implement ``start``, ``stop``, and ``send``.
+    Extensions implement ``start``, ``stop``, and ``send``.
     """
 
     def __init__(self, name: str, bus: MessageBus, config: dict[str, Any]) -> None:
@@ -278,7 +278,7 @@ class Channel(ABC):
         Adapters MUST consult this **before** applying their ``allowed_users`` /
         ``_check_user`` gate, so a browser-initiated bind can bootstrap an external
         identity that the platform bot has never seen and is therefore not yet
-        authorized. (Telegram uses its deep-link ``/start <token>`` flow instead.)
+        authorized. Concrete adapters may choose their own binding command.
         """
         if self._connection_repo is None:
             return None
@@ -377,7 +377,7 @@ class Channel(ABC):
         Optionally process and materialize inbound file attachments for this channel.
 
         By default, this method does nothing and simply returns the original message.
-        Subclasses (e.g. FeishuChannel) may override this to download files (images, documents, etc)
+        Extensions may override this to download files (images, documents, etc)
         referenced in msg.files, save them to the sandbox, and update msg.text to include
         the sandbox file paths for downstream model consumption.
 

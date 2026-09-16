@@ -456,13 +456,7 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
             _apply_model_behavior(updated, request, existing=agent_cfg)
 
             # Carry forward every top-level AgentConfig field this route does
-            # not manage (currently ``github:``, plus any future field added
-            # to :class:`AgentConfig`). The harness ``update_agent`` tool uses
-            # the same helper, so an operator editing the agent description
-            # from the Web UI does not silently strip a hand-authored
-            # ``github:`` binding — which would otherwise leave the next
-            # webhook delivery unable to find the agent in the registry and
-            # silently no-op.
+            # not manage so future config fields survive edits.
             for key, value in preserve_non_managed_fields(agent_cfg).items():
                 updated.setdefault(key, value)
 

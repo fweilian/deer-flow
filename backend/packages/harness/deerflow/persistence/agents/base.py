@@ -9,7 +9,7 @@ Two implementations:
 
 The store is deliberately **synchronous**. Its consumers — the LangGraph graph
 factory (``make_lead_agent``), the ``setup_agent`` / ``update_agent`` tools, and
-the GitHub agent registry — are synchronous and may run on the event loop or in
+the agent registry — are synchronous and may run on the event loop or in
 a separate process from the gateway, where an async engine cannot be driven.
 Async HTTP routes call the store via ``asyncio.to_thread`` (the same pattern the
 agents router already uses for filesystem work).
@@ -106,7 +106,7 @@ class AgentStore(abc.ABC):
     def list_all(self) -> list[tuple[str, AgentConfig]]:
         """Return ``(user_id, config)`` for every agent across all owners.
 
-        Used by the GitHub registry, which scans all users' agents for repo
+        Used by registry consumers, which scan all users' agents for
         bindings. Ordering is deterministic (by ``user_id`` then name).
         """
 
@@ -139,8 +139,8 @@ class AgentStore(abc.ABC):
     def signature(self) -> Hashable:
         """Return an opaque change token for cache invalidation.
 
-        Equal tokens mean "nothing changed since last read". The GitHub registry
-        keys its cache off this instead of ``stat()`` so it works for both
+        Equal tokens mean "nothing changed since last read". Registry consumers
+        key their cache off this instead of ``stat()`` so it works for both
         backends (mtime triples for ``file``; a deterministic digest of stored
         agent contents for ``db``).
         """

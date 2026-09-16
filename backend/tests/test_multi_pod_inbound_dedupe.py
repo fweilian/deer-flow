@@ -85,7 +85,7 @@ async def test_two_stores_share_dedupe_state_across_pods():
     store_a = PostgresInboundDedupeStore(session_factory=sf)
     store_b = PostgresInboundDedupeStore(session_factory=sf)
     unique = uuid.uuid4().hex
-    key = ("github", "repo", "repo", f"d-{unique}:uA:agentX")
+    key = ("custom", "repo", "repo", f"d-{unique}:uA:agentX")
     try:
         # First pod records the delivery and proceeds.
         assert await store_a.try_record(key) is False
@@ -111,7 +111,7 @@ async def test_manager_injects_shared_store_and_dedupes_cross_pod():
     manager_b = ChannelManager(bus=MessageBus(), store=ChannelStore(), inbound_dedupe_store=shared_store)
 
     msg = InboundMessage(
-        channel_name="github",
+        channel_name="custom",
         chat_id="repo",
         user_id="alice",
         text="@bot review",
@@ -145,7 +145,7 @@ async def test_expired_unreleased_row_is_reclaimed_on_next_redelivery():
 
     store = PostgresInboundDedupeStore(session_factory=sf)
     unique = uuid.uuid4().hex
-    channel, workspace_id, chat_id, message_id = ("github", "repo", "repo", f"d-{unique}:expired")
+    channel, workspace_id, chat_id, message_id = ("custom", "repo", "repo", f"d-{unique}:expired")
     key = (channel, workspace_id, chat_id, message_id)
     try:
         # Seed an already-expired, unreleased row for this key.

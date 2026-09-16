@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 import os
-from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from app.channels.base import Channel
@@ -21,37 +21,56 @@ if TYPE_CHECKING:
     from deerflow.config.app_config import AppConfig
     from deerflow.config.channel_connections_config import ChannelConnectionsConfig
 
-# Channel name → import path for lazy loading
-_CHANNEL_REGISTRY: dict[str, str] = {
-    "buzz": "app.channels.buzz:BuzzChannel",
-    "dingtalk": "app.channels.dingtalk:DingTalkChannel",
-    "discord": "app.channels.discord:DiscordChannel",
-    "feishu": "app.channels.feishu:FeishuChannel",
-    "github": "app.channels.github:GitHubChannel",
-    "slack": "app.channels.slack:SlackChannel",
-    "telegram": "app.channels.telegram:TelegramChannel",
-    "wechat": "app.channels.wechat:WechatChannel",
-    "wecom": "app.channels.wecom:WeComChannel",
-}
 
-# Keys that indicate a user has configured credentials for a channel.
-_CHANNEL_CREDENTIAL_KEYS: dict[str, list[str]] = {
-    "buzz": ["private_key"],
-    "dingtalk": ["client_id", "client_secret"],
-    "discord": ["bot_token"],
-    "feishu": ["app_id", "app_secret"],
-    "slack": ["bot_token", "app_token"],
-    "telegram": ["bot_token"],
-    "wecom": ["bot_id", "bot_secret"],
-    "wechat": ["bot_token"],
-}
+@dataclass(frozen=True, slots=True)
+class ChannelRegistration:
+    """Lazy Channel implementation and browser connection metadata."""
+
+    import_path: str
+    display_name: str
+    auth_mode: str = "binding_code"
+    credential_fields: tuple[dict[str, str], ...] = ()
+    runtime_requirements: tuple[str, ...] = ()
+
+
+# Built-in adapters are intentionally absent. Trusted extensions can register
+# a Channel before the service starts and reuse the same lifecycle and APIs.
+_CHANNEL_REGISTRY: dict[str, ChannelRegistration] = {}
+
+
+def register_channel(
+    name: str,
+    import_path: str,
+    *,
+    display_name: str | None = None,
+    auth_mode: str = "binding_code",
+    credential_fields: tuple[dict[str, str], ...] = (),
+    runtime_requirements: tuple[str, ...] = (),
+) -> None:
+    """Register a trusted, lazy-loaded Channel implementation."""
+    if not name or not import_path:
+        raise ValueError("channel name and import path are required")
+    _CHANNEL_REGISTRY[name] = ChannelRegistration(
+        import_path=import_path,
+        display_name=display_name or name,
+        auth_mode=auth_mode,
+        credential_fields=credential_fields,
+        runtime_requirements=runtime_requirements,
+    )
+
+
+def get_channel_registrations() -> dict[str, ChannelRegistration]:
+    """Return a snapshot of registered Channel implementations."""
+    return dict(_CHANNEL_REGISTRY)
+
 
 _CHANNELS_LANGGRAPH_URL_ENV = "DEER_FLOW_CHANNELS_LANGGRAPH_URL"
 _CHANNELS_GATEWAY_URL_ENV = "DEER_FLOW_CHANNELS_GATEWAY_URL"
 
 
 def _channel_has_credentials(name: str, channel_config: dict[str, Any]) -> bool:
-    cred_keys = _CHANNEL_CREDENTIAL_KEYS.get(name, [])
+    registration = _CHANNEL_REGISTRY.get(name)
+    cred_keys = registration.runtime_requirements if registration else ()
     return any(not isinstance(channel_config.get(key), bool) and channel_config.get(key) is not None and str(channel_config[key]).strip() for key in cred_keys)
 
 
@@ -385,7 +404,7 @@ class ChannelService:
         otherwise the bus keeps a strong reference to the dead listener and
         every future outbound for this channel name fans out to it, while
         repeated attempts accumulate more stale listeners the service can no
-        longer clean up (the instances are untracked by then). Discord's
+        longer clean up (the instances are untracked by then). A
         fail-fast ``is_running`` makes this reachable for a client thread that
         dies immediately (invalid token); the same hygiene applies to any
         channel that subscribes before its transport is confirmed.
@@ -416,8 +435,8 @@ class ChannelService:
 
     async def _start_channel(self, name: str, config: dict[str, Any]) -> bool:
         """Instantiate and start a single channel."""
-        import_path = _CHANNEL_REGISTRY.get(name)
-        if not import_path:
+        registration = _CHANNEL_REGISTRY.get(name)
+        if not registration:
             logger.warning("Unknown channel type")
             return False
 
@@ -435,7 +454,7 @@ class ChannelService:
         try:
             from deerflow.reflection import resolve_class
 
-            channel_cls = resolve_class(import_path, base_class=None)
+            channel_cls = resolve_class(registration.import_path, base_class=None)
         except Exception:
             logger.exception("Failed to import channel class")
             return False
@@ -444,17 +463,9 @@ class ChannelService:
         try:
             config = dict(config)
             config["channel_store"] = self.store
-            if name == "buzz" and "seen_event_store_path" not in config:
-                # Durable processed-event ids for the Buzz connector's replay
-                # guard. Wired here (like channel_store) rather than defaulted
-                # inside the connector so that directly constructed channels
-                # (tests, tooling) stay free of filesystem side effects.
-                from deerflow.config.paths import get_paths
-
-                config["seen_event_store_path"] = str(Path(get_paths().base_dir) / "channels" / "buzz_seen_events.json")
             if self._connection_repo is not None:
                 config["connection_repo"] = self._connection_repo
-            channel = channel_cls(bus=self.bus, config=config)
+            channel = channel_cls(name=name, bus=self.bus, config=config)
             self._channels[name] = channel
             await channel.start()
             if not channel.is_running:
@@ -498,10 +509,7 @@ class ChannelService:
         :meth:`configure_channel` updates when the UI flips the
         enabled flag — so callers that read this between requests get
         the current effective setting without re-reading config.yaml.
-        Used by the GitHub webhook router as a fan-out kill-switch:
-        ``channels.github.enabled: false`` skips dispatch even though
-        the webhook route itself remains mounted (which is governed by
-        ``GITHUB_WEBHOOK_SECRET``, not this flag).
+        Used by registered Channel implementations and extension routes.
         """
         config = self._config.get(name)
         if not isinstance(config, dict):

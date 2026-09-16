@@ -70,7 +70,7 @@ class TestValidateIntegrationId:
     def test_accepts_dotted_integration_id(self):
         from deerflow.config.paths import _validate_integration_id
 
-        assert _validate_integration_id("lark-cli") == "lark-cli"
+        assert _validate_integration_id("custom-pack") == "custom-pack"
         assert _validate_integration_id("some.integration") == "some.integration"
 
     @pytest.mark.parametrize("integration_id", [".", ".."])

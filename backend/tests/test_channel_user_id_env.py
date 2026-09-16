@@ -68,10 +68,10 @@ class TestGatewayChannelUserIdTrustBoundary:
         inject_authenticated_user_context(
             config,
             self._request("internal"),
-            request_context={"channel_user_id": "ou_feishu_123"},
+            request_context={"channel_user_id": "external-user-123"},
         )
 
-        assert config["context"]["channel_user_id"] == "ou_feishu_123"
+        assert config["context"]["channel_user_id"] == "external-user-123"
         # Never into configurable: that mapping is checkpointed with the thread.
         assert "channel_user_id" not in config["configurable"]
 
@@ -105,10 +105,10 @@ class TestBashToolChannelIdentityPrefix:
         """The id rides the command string; env must stay None so AioSandbox
         keeps the legacy persistent-shell path (regression guard for the
         #3921/#3922 bash.exec capability gap)."""
-        sandbox = _run_bash(monkeypatch, _aio_runtime({"channel_user_id": "ou_feishu_123"}))
+        sandbox = _run_bash(monkeypatch, _aio_runtime({"channel_user_id": "external-user-123"}))
 
         assert len(sandbox.calls) == 1
-        assert sandbox.calls[0]["command"] == f"export {CHANNEL_USER_ID_ENV}=ou_feishu_123; cd /mnt/user-data/workspace; echo hi"
+        assert sandbox.calls[0]["command"] == f"export {CHANNEL_USER_ID_ENV}=external-user-123; cd /mnt/user-data/workspace; echo hi"
         assert sandbox.calls[0]["env"] is None
 
     def test_no_channel_user_id_omits_identity_prefix(self, monkeypatch):

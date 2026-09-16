@@ -6,11 +6,11 @@ import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
 from app.channels import service as service_module
+from app.channels.base import Channel
 from app.channels.manager import ChannelManager
 from app.channels.message_bus import (
     InboundMessage,
@@ -20,14 +20,25 @@ from app.channels.message_bus import (
     MessageBus,
 )
 from app.channels.service import ChannelService
-from app.channels.slack import SlackChannel
 from app.channels.store import ChannelStore
+
+
+class GenericTestChannel(Channel):
+    async def start(self) -> None:
+        self._running = True
+
+    async def stop(self) -> None:
+        await self._close_and_drain_threadsafe_futures()
+        self._running = False
+
+    async def send(self, msg) -> None:
+        del msg
 
 
 def _message(index: int, *, with_dedupe_identity: bool = False) -> InboundMessage:
     metadata = {"team_id": "T1", "message_id": f"m-{index}"} if with_dedupe_identity else {}
     return InboundMessage(
-        channel_name="slack",
+        channel_name="generic",
         chat_id="C1",
         user_id="U1",
         text=f"message-{index}",
@@ -57,7 +68,7 @@ def test_shutdown_invalidates_provider_side_reservations() -> None:
     bus = MessageBus(inbound_queue_maxsize=2)
     direct_reservation = bus.reserve_inbound(_message(1))
     adapter_reservation = bus.reserve_inbound(_message(2))
-    channel = SlackChannel(bus=bus, config={})
+    channel = GenericTestChannel("generic", bus=bus, config={})
 
     assert bus.close_inbound() == 2
     with pytest.raises(InboundReservationExpiredError):
@@ -87,31 +98,6 @@ def test_provider_thread_reservations_share_one_hard_capacity_limit() -> None:
     assert len(admitted) == capacity
     for reservation in admitted:
         reservation.release()
-
-
-@pytest.mark.asyncio
-async def test_realtime_provider_drops_before_ack_when_queue_is_full() -> None:
-    bus = MessageBus(inbound_queue_maxsize=1)
-    await bus.publish_inbound(_message(0))
-    channel = SlackChannel(bus=bus, config={})
-    channel._loop = MagicMock()
-    channel._loop.is_running.return_value = True
-    channel._add_reaction = MagicMock()
-    channel._send_running_reply = MagicMock()
-
-    channel._handle_message_event(
-        {
-            "user": "U1",
-            "text": "overloaded",
-            "channel": "C1",
-            "ts": "1710000000.000100",
-        }
-    )
-
-    channel._add_reaction.assert_not_called()
-    channel._send_running_reply.assert_not_called()
-    channel._loop.call_soon_threadsafe.assert_not_called()
-    assert bus.inbound_queue.qsize() == 1
 
 
 @pytest.mark.asyncio
@@ -360,17 +346,8 @@ async def test_outer_shutdown_cancellation_does_not_start_an_unbounded_second_jo
 
 @pytest.mark.asyncio
 async def test_provider_stop_drains_cross_thread_preparation_futures() -> None:
-    from app.channels.dingtalk import DingTalkChannel
-    from app.channels.feishu import FeishuChannel
-    from app.channels.telegram import TelegramChannel
-
     loop = asyncio.get_running_loop()
-    providers = (
-        FeishuChannel(MessageBus(), config={}),
-        DingTalkChannel(MessageBus(), config={}),
-        TelegramChannel(MessageBus(), config={}),
-        SlackChannel(MessageBus(), config={}),
-    )
+    providers = (GenericTestChannel("generic", MessageBus(), config={}),)
 
     for channel in providers:
         started = asyncio.Event()
@@ -417,7 +394,7 @@ async def test_provider_stop_drains_cross_thread_preparation_futures() -> None:
 
 @pytest.mark.asyncio
 async def test_shutdown_closes_cross_thread_submission_before_task_start() -> None:
-    channel = SlackChannel(MessageBus(), config={})
+    channel = GenericTestChannel("generic", MessageBus(), config={})
     channel._open_threadsafe_future_intake()
     coroutine_started = False
 
@@ -441,7 +418,7 @@ async def test_shutdown_closes_cross_thread_submission_before_task_start() -> No
 
 @pytest.mark.asyncio
 async def test_cancelled_cross_thread_drain_remains_retryable() -> None:
-    channel = SlackChannel(MessageBus(), config={})
+    channel = GenericTestChannel("generic", MessageBus(), config={})
     channel._open_threadsafe_future_intake()
     started = asyncio.Event()
     cancellation_seen = asyncio.Event()

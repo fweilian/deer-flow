@@ -169,7 +169,7 @@ def test_list_dir_on_user_data_root_does_not_duplicate_subdir_mounts(provider):
 
 
 def test_update_file_with_virtual_path_for_remote_sync_scenario(provider):
-    """This is the exact code path used by ``uploads.py:282`` and ``feishu.py:389``.
+    """This is the shared virtual-path code path used by file attachments.
 
     They build a ``virtual_path`` like ``/mnt/user-data/uploads/foo.pdf`` and hand
     raw bytes to the sandbox. Before this fix LocalSandbox would try to write to

@@ -193,7 +193,7 @@ class FileAgentStore(AgentStore):
 
         A legacy shared-layout agent is attributed to ``DEFAULT_USER_ID`` and is
         shadowed only by a ``users/default/`` agent of the same name — not by an
-        agent another user happens to own — matching the GitHub registry's
+        agent another user happens to own — matching registry consumers'
         historical discovery (``load_agent_config(name)`` resolves a legacy agent
         under ``DEFAULT_USER_ID``).
         """

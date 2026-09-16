@@ -39,8 +39,6 @@ from deerflow.community.warm_pool_lifecycle import (
 from deerflow.config import get_app_config
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX, get_paths, join_host_path
 from deerflow.constants import DEFAULT_SKILLS_CONTAINER_PATH
-from deerflow.integrations.lark_cli import INTEGRATION_ID as LARK_CLI_INTEGRATION_ID
-from deerflow.integrations.lark_cli import LARK_CLI_SANDBOX_CONFIG_DIR, LARK_CLI_SANDBOX_DATA_DIR, LARK_CLI_SANDBOX_LOCKS_DIR, LARK_CLI_SANDBOX_RUNTIME_DIR, ensure_lark_cli_credential_tree, lark_skills_installed
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.sandbox.acquire_serialization import AcquireSerializer
 from deerflow.sandbox.identity import derive_sandbox_scope_token
@@ -916,11 +914,6 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             mounts.extend(user_skill_mounts)
             logger.info(f"Adding user skill mounts: {user_skill_mounts}")
 
-        lark_cli_mounts = self._get_lark_cli_runtime_mounts(user_id=user_id)
-        if lark_cli_mounts:
-            mounts.extend(lark_cli_mounts)
-            logger.info(f"Adding Lark CLI runtime mounts: {lark_cli_mounts}")
-
         return self._dedupe_mounts_by_container_path(mounts)
 
     def _local_config_mount_exclusion_root(
@@ -1133,88 +1126,6 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             ]
         except Exception as e:
             logger.warning(f"Could not setup user skill mounts: {e}")
-            return []
-
-    @staticmethod
-    def _lark_integration_active(user_id: str | None = None) -> bool:
-        """Whether the managed Lark skill pack is installed for this user.
-
-        Drives whether a sandbox requests the lark-cli runtime (init container /
-        Gateway-download mount). Independent of whether a local ``sandbox-cli``
-        dir exists, so remote/K8s can opt in without a Gateway-side download.
-        """
-        try:
-            effective_user_id = AioSandboxProvider._effective_acquire_user_id(user_id)
-            return lark_skills_installed(effective_user_id)
-        except Exception as e:  # pragma: no cover - defensive
-            logger.warning(f"Could not determine Lark integration state: {e}")
-            return False
-
-    @staticmethod
-    def _lark_broker_active(user_id: str | None = None) -> bool:
-        """Whether this user's sandbox should use the lark-cli broker (Pattern B).
-
-        True only when the Lark pack is installed AND the remote provisioner
-        reports a configured broker image. When true, the provisioner keeps the
-        credentials in a sidecar and the sandbox gets only a shim, so the
-        Gateway-side credential-mount overlay must not run either.
-        """
-        try:
-            if not AioSandboxProvider._lark_integration_active(user_id):
-                return False
-            from deerflow.integrations.lark_cli import sandbox_lark_broker_active
-
-            return sandbox_lark_broker_active()
-        except Exception as e:  # pragma: no cover - defensive
-            logger.warning(f"Could not determine Lark broker state: {e}")
-            return False
-
-    @staticmethod
-    def _get_lark_cli_runtime_mounts(*, user_id: str | None = None) -> list[tuple[str, str, bool]]:
-        """Mount the per-user lark-cli config/data dirs used by Settings auth.
-
-        Settings endpoints run ``lark-cli`` on the Gateway with
-        ``LARKSUITE_CLI_CONFIG_DIR`` / ``DATA_DIR`` pointing at
-        ``users/{user}/integrations/lark-cli``. Agent conversations run
-        ``lark-cli`` inside the sandbox, so those same directories must be
-        mounted into the container or the CLI sees a separate unauthenticated
-        profile.
-
-        The ``config`` dir holds the long-lived Lark ``appSecret`` (written by
-        ``lark-cli config init`` on the Gateway, never in-sandbox), so it is
-        mounted **read-only**: sandbox processes only need to read it, and a
-        read-only bind stops a compromised agent from tampering with or
-        replacing the app credentials. Newer ``lark-cli`` versions coordinate
-        API calls through ``config/locks``, so that empty subdirectory is
-        over-mounted writable without exposing the rest of ``config`` to
-        writes. The ``data`` dir holds refreshable OAuth tokens that
-        ``lark-cli auth`` updates in-sandbox, so it stays writable.
-        This is defense-in-depth only — both dirs remain readable to arbitrary
-        sandbox processes until the auth-proxy follow-up (issue #4338) lands.
-        See the sandbox trust-boundary note in ``backend/AGENTS.md``.
-        """
-        try:
-            paths = get_paths()
-            effective_user_id = AioSandboxProvider._effective_acquire_user_id(user_id)
-            ensure_lark_cli_credential_tree(effective_user_id, paths=paths)
-            config_dir = paths.host_user_integration_config_dir(effective_user_id, LARK_CLI_INTEGRATION_ID)
-            mounts = [
-                (config_dir, LARK_CLI_SANDBOX_CONFIG_DIR, True),
-                (join_host_path(config_dir, "locks"), LARK_CLI_SANDBOX_LOCKS_DIR, False),
-                (paths.host_user_integration_data_dir(effective_user_id, LARK_CLI_INTEGRATION_ID), LARK_CLI_SANDBOX_DATA_DIR, False),
-            ]
-            runtime_dir = paths.base_dir / "integrations" / LARK_CLI_INTEGRATION_ID / "sandbox-cli"
-            if runtime_dir.is_dir():
-                mounts.append(
-                    (
-                        join_host_path(str(paths.host_base_dir), "integrations", LARK_CLI_INTEGRATION_ID, "sandbox-cli"),
-                        LARK_CLI_SANDBOX_RUNTIME_DIR,
-                        True,
-                    )
-                )
-            return mounts
-        except Exception as e:
-            logger.warning(f"Could not setup Lark CLI runtime mounts: {e}")
             return []
 
     # ── Idle timeout management ──────────────────────────────────────────
@@ -2220,8 +2131,6 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
         """
         effective_user_id = self._effective_acquire_user_id(user_id)
         extra_mounts = self._get_extra_mounts(thread_id, user_id=effective_user_id)
-        provision_lark_cli_runtime = self._lark_integration_active(effective_user_id)
-        provision_lark_cli_broker = self._lark_broker_active(effective_user_id)
         config_mount_exclusion_root = self._local_config_mount_exclusion_root(
             thread_id,
             user_id=effective_user_id,
@@ -2244,8 +2153,6 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             sandbox_id,
             extra_mounts=extra_mounts or None,
             user_id=effective_user_id,
-            provision_lark_cli_runtime=provision_lark_cli_runtime,
-            provision_lark_cli_broker=provision_lark_cli_broker,
             **create_kwargs,
         )
 
@@ -2265,8 +2172,6 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
         """Async counterpart to ``_create_sandbox``."""
         effective_user_id = self._effective_acquire_user_id(user_id)
         extra_mounts = await asyncio.to_thread(self._get_extra_mounts, thread_id, user_id=effective_user_id)
-        provision_lark_cli_runtime = await asyncio.to_thread(self._lark_integration_active, effective_user_id)
-        provision_lark_cli_broker = await asyncio.to_thread(self._lark_broker_active, effective_user_id)
         config_mount_exclusion_root = await asyncio.to_thread(
             self._local_config_mount_exclusion_root,
             thread_id,
@@ -2291,8 +2196,6 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             sandbox_id,
             extra_mounts=extra_mounts or None,
             user_id=effective_user_id,
-            provision_lark_cli_runtime=provision_lark_cli_runtime,
-            provision_lark_cli_broker=provision_lark_cli_broker,
             **create_kwargs,
         )
 

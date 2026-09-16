@@ -267,7 +267,7 @@ Runtime attribution fields are optional. Providers that need richer policy conte
 | `run_id` | Link a decision back to one execution run |
 | `tool_call_id` | Identify the exact tool call that was allowed or denied |
 
-These fields are populated by the Gateway from server-side auth state (the run worker always sets `thread_id`/`run_id`). For web-authenticated runs, `inject_authenticated_user_context` writes `user_id`/`user_role`/`oauth_provider`/`oauth_id` from `request.state.user`. For trusted IM / internal-auth runs (Slack, Discord, Telegram, Feishu, DingTalk, and other internal callers that provide a trusted owner header), the Gateway resolves the owner user server-side and writes the same attribution fields from that owner. Client-supplied values cannot override them — the server-side assignment wins.
+These fields are populated by the Gateway from server-side auth state (the run worker always sets `thread_id`/`run_id`). For web-authenticated runs, `inject_authenticated_user_context` writes `user_id`/`user_role`/`oauth_provider`/`oauth_id` from `request.state.user`. For trusted IM / internal-auth runs, including custom Channel callers that provide a trusted owner header, the Gateway resolves the owner user server-side and writes the same attribution fields from that owner. Client-supplied values cannot override them — the server-side assignment wins.
 
 If a trusted internal caller does not resolve to an owner user, the Gateway strips client-supplied `user_role`/`oauth_provider`/`oauth_id` from the run context instead of treating them as authoritative. Any `user_id` already present is left in place for legacy channel storage behavior, but role/oauth-based policy is only applied when the owner user was resolved server-side.
 

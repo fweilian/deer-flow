@@ -20,10 +20,10 @@ test("starts closed on the default section", () => {
 });
 
 test("openSettingsDialog opens on the requested section", () => {
-  openSettingsDialog("integrations");
+  openSettingsDialog("channels");
   expect(getSettingsDialogSnapshot()).toEqual({
     open: true,
-    section: "integrations",
+    section: "channels",
   });
 });
 
@@ -42,9 +42,9 @@ test("notifies subscribers only on real state changes", () => {
     notifications += 1;
   });
 
-  openSettingsDialog("integrations");
+  openSettingsDialog("channels");
   // Opening again on the same section is a no-op and must not re-notify.
-  openSettingsDialog("integrations");
+  openSettingsDialog("channels");
   expect(notifications).toBe(1);
 
   openSettingsDialog("memory");

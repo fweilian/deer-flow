@@ -9,8 +9,8 @@ import type { ChannelProvider } from "@/core/channels/types";
 
 function makeProvider(overrides: Partial<ChannelProvider>): ChannelProvider {
   return {
-    provider: "slack",
-    display_name: "Slack",
+    provider: "custom",
+    display_name: "Custom",
     enabled: true,
     configured: true,
     connectable: true,

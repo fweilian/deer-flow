@@ -71,10 +71,6 @@
    fixed page size and an explicit load-more control; full results remain available
    only through JSONL export. The panel must not infer batch mode from prompt text
    or inject the complete result set into chat state.
-   Settings > Integrations uses a local generation only to suppress stale React
-   callbacks; server-issued Lark flow generations must be passed through every
-   config/auth completion and across switch-or-register to authorization chains
-   so backend cross-tab ordering remains authoritative.
    Settings > Subagents reads one catalog for built-in, config, and managed
    definitions. Only administrators see managed-definition mutation controls;
    Custom Agent settings consume the same query and preserve stale selected names

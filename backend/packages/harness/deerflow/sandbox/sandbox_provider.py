@@ -134,7 +134,7 @@ class SandboxProvider(ABC):
 
 _default_sandbox_provider: SandboxProvider | None = None
 # Guards every read and write of `_default_sandbox_provider`. The singleton is
-# reachable from more than one OS thread (e.g. the main event loop and the Feishu
+# reachable from more than one OS thread (e.g. the main event loop and an adapter
 # channel thread, which runs its own loop), so a bare check-then-create can double
 # initialize the provider, and an unsynchronized reset/shutdown racing a get can
 # hand a caller `None` or a torn instance. Every access to the global below takes

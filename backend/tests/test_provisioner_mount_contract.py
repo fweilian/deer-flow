@@ -31,6 +31,4 @@ def test_gateway_and_provisioner_extra_mount_contracts_match() -> None:
     assert gateway_categories == provisioner_categories
     assert gateway_reserved == provisioner_reserved
     assert _literal_assignment(provisioner_path, "DEFAULT_SKILLS_CONTAINER_PATH") == "/mnt/skills"
-    assert "/mnt/integrations/lark-cli/runtime" in gateway_paths
-    assert "/mnt/integrations/lark-cli/config/locks" in gateway_paths
     assert _literal_assignment(provisioner_path, "MAX_EXTRA_MOUNTS") == 10

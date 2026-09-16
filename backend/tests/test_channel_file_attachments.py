@@ -286,7 +286,7 @@ class TestInboundFileIngestion:
         uploads_dir = tmp_path / "uploads"
         uploads_dir.mkdir()
         msg = InboundMessage(
-            channel_name="telegram",
+            channel_name="custom",
             chat_id="chat-1",
             user_id="user-1",
             text="see attachment",

@@ -1,63 +1,29 @@
-"""Configuration for user-owned IM channel connections."""
+"""Configuration for user-owned connections to registered Channels."""
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class SlackChannelConnectionConfig(BaseModel):
+class ChannelConnectionProviderConfig(BaseModel):
+    """Operator settings for one extension-provided Channel."""
+
     enabled: bool = False
-
-    @property
-    def configured(self) -> bool:
-        return True
-
-
-class TelegramChannelConnectionConfig(BaseModel):
-    enabled: bool = False
-    bot_username: str = ""
-
-    @property
-    def configured(self) -> bool:
-        return bool(self.bot_username)
-
-
-class DiscordChannelConnectionConfig(BaseModel):
-    enabled: bool = False
-
-    @property
-    def configured(self) -> bool:
-        return True
-
-
-class BindingCodeChannelConnectionConfig(BaseModel):
-    enabled: bool = False
-
-    @property
-    def configured(self) -> bool:
-        return True
+    settings: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChannelConnectionsConfig(BaseModel):
-    """Top-level config for browser-connectable IM channels."""
+    """Top-level config for browser-connectable, extension-provided Channels."""
 
     enabled: bool = False
     require_bound_identity: bool = True
-    slack: SlackChannelConnectionConfig = Field(default_factory=SlackChannelConnectionConfig)
-    telegram: TelegramChannelConnectionConfig = Field(default_factory=TelegramChannelConnectionConfig)
-    discord: DiscordChannelConnectionConfig = Field(default_factory=DiscordChannelConnectionConfig)
-    feishu: BindingCodeChannelConnectionConfig = Field(default_factory=BindingCodeChannelConnectionConfig)
-    dingtalk: BindingCodeChannelConnectionConfig = Field(default_factory=BindingCodeChannelConnectionConfig)
-    wechat: BindingCodeChannelConnectionConfig = Field(default_factory=BindingCodeChannelConnectionConfig)
-    wecom: BindingCodeChannelConnectionConfig = Field(default_factory=BindingCodeChannelConnectionConfig)
-    buzz: BindingCodeChannelConnectionConfig = Field(default_factory=BindingCodeChannelConnectionConfig)
+    providers: dict[str, ChannelConnectionProviderConfig] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="ignore")
 
     def provider_status(self, provider: str) -> dict[str, bool]:
-        config = getattr(self, provider, None)
+        config = self.providers.get(provider)
         if config is None:
             return {"enabled": False, "configured": False}
-        enabled = bool(config.enabled)
-        return {
-            "enabled": enabled,
-            "configured": enabled and bool(config.configured),
-        }
+        return {"enabled": bool(config.enabled), "configured": bool(config.enabled)}

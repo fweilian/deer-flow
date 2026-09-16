@@ -1789,7 +1789,7 @@ skill_evolution:
 #                  UV_EXTRAS=postgres
 #              Multiple extras (`postgres,ollama`) supported here too — see
 #              docker/dev-entrypoint.sh.
-#   Docker img build-arg `UV_EXTRAS=postgres,discord docker compose build`
+#   Docker image build-arg `UV_EXTRAS=postgres docker compose build`
 #              supports comma- or whitespace-separated extras at build time
 #              (backend/Dockerfile expands them to repeated `--extra` flags).
 #
@@ -2092,190 +2092,28 @@ run_ownership:
 # or fallback to the in-memory bridge. Run Redis with HA / a restart policy.
 
 # ============================================================================
-# User-Owned IM Channel Connections
-# ============================================================================
-# Lets logged-in users connect their own IM accounts from the DeerFlow frontend
-# while reusing the existing `channels` runtime configuration below.
-#
-# Security notes:
-# - No public IP, OAuth callback URL, or provider webhook is required.
-# - Provider bot/app credentials stay under `channels.*`.
-# - `channel_connections` stores per-user bindings and one-time connect codes.
-# - Telegram uses a deep link when `bot_username` is configured.
-# - Slack, Discord, Feishu, DingTalk, WeChat, and WeCom use `/connect <code>`
-#   through the already-running bot/app.
+# Generic Channel framework
+# ------------------------
+# The Gateway keeps the Channel contract, MessageBus, connection store and
+# inbound/outbound routing available for extension-provided adapters. No
+# built-in provider is enabled in this distribution.
 #
 # channel_connections:
 #   enabled: false
-#   # Security: keep this enabled unless you intentionally want legacy open-bot behavior.
-#   # Disabling it lets unbound external IM users create DeerFlow threads/runs.
 #   require_bound_identity: true
+#   providers: {}
 #
-#   telegram:
-#     enabled: false
-#     bot_username: $TELEGRAM_BOT_USERNAME
-#
-#   slack:
-#     enabled: false
-#
-#   discord:
-#     enabled: false
-#
-#   feishu:
-#     enabled: false
-#
-#   dingtalk:
-#     enabled: false
-#
-#   wechat:
-#     enabled: false
-#
-#   wecom:
-#     enabled: false
-#
-#   buzz:
-#     enabled: false
-
-# ============================================================================
-# IM Channels Configuration
-# ============================================================================
-# Connect DeerFlow to external messaging platforms.
-# All channels use outbound connections (WebSocket or polling) — no public IP required.
-
 # channels:
-#   # LangGraph-compatible Gateway API base URL for thread/message management (default: http://localhost:8001/api)
-#   # For Docker deployments, use the Docker service name instead of localhost:
-#   #   langgraph_url: http://gateway:8001/api
-#   #   gateway_url: http://gateway:8001
 #   langgraph_url: http://localhost:8001/api
-#   # Gateway API URL for auxiliary queries like /models, /memory (default: http://localhost:8001)
 #   gateway_url: http://localhost:8001
-#   # Maximum queued or provider-reserved inbound messages. Must be a positive integer.
 #   inbound_queue_maxsize: 1000
-#   # Fixed number of long-lived inbound handler workers. Must be a positive integer.
 #   max_concurrency: 5
-#   # Seconds to drain accepted inbound work before cancelling active handlers.
-#   # Must be a non-negative finite number. Cancelled handlers are awaited; the Gateway's
-#   # outer shutdown timeout remains the process-level bound for incomplete cleanup.
 #   shutdown_grace_period_seconds: 3
-#   #
-#   # Docker Compose note:
-#   # If channels run inside the gateway container, use container DNS names instead
-#   # of localhost, for example:
-#   # langgraph_url: http://gateway:8001/api
-#   # gateway_url: http://gateway:8001
-#   # You can also set DEER_FLOW_CHANNELS_LANGGRAPH_URL / DEER_FLOW_CHANNELS_GATEWAY_URL.
 #
-#   # Optional: default mobile/session settings for all IM channels
-#   session:
-#     assistant_id: lead_agent  # or a custom agent name; custom agents route via lead_agent + agent_name
-#     config:
-#       recursion_limit: 100
-#     context:
-#       thinking_enabled: true
-#       is_plan_mode: false
-#       subagent_enabled: false
-#
-#   feishu:
-#     enabled: false
-#     app_id: $FEISHU_APP_ID
-#     app_secret: $FEISHU_APP_SECRET
-#     # domain: https://open.feishu.cn       # China (default)
-#     # domain: https://open.larksuite.com   # International
-#
-#   slack:
-#     enabled: false
-#     bot_token: $SLACK_BOT_TOKEN     # xoxb-...
-#     app_token: $SLACK_APP_TOKEN     # xapp-... (Socket Mode)
-#     allowed_users: []               # empty = allow all; can also be a single Slack user ID string, e.g. U123456, but list form is recommended
-#
-#   telegram:
-#     enabled: false
-#     bot_token: $TELEGRAM_BOT_TOKEN
-#     allowed_users: []               # empty = allow all
-#     rich_messages: false             # Bot API 10.1 Rich Messages for final Markdown responses
-#
-#   wechat:
-#     enabled: false
-#     bot_token: $WECHAT_BOT_TOKEN
-#     ilink_bot_id: $WECHAT_ILINK_BOT_ID
-#     # Optional: allow first-time QR bootstrap when bot_token is absent
-#     qrcode_login_enabled: true
-#     # Optional: sent as iLink-App-Id header when provided
-#     ilink_app_id: ""
-#     # Optional: sent as SKRouteTag header when provided
-#     route_tag: ""
-#     allowed_users: []               # empty = allow all
-#     # Optional: timing values must be positive finite seconds
-#     polling_timeout: 35
-#     polling_retry_delay: 5
-#     # QR poll interval when qrcode_login_enabled is true
-#     qrcode_poll_interval: 2
-#     # QR bootstrap timeout
-#     qrcode_poll_timeout: 180
-#     # Optional: persist getupdates cursor under the gateway container volume
-#     state_dir: ./.deer-flow/wechat/state
-#     # Optional: max inbound image size in bytes before skipping download
-#     max_inbound_image_bytes: 20971520
-#     # Optional: max outbound image size in bytes before skipping upload
-#     max_outbound_image_bytes: 20971520
-#     # Optional: max inbound file size in bytes before skipping download
-#     max_inbound_file_bytes: 52428800
-#     # Optional: max outbound file size in bytes before skipping upload
-#     max_outbound_file_bytes: 52428800
-#     # Optional: allowed file extensions for regular file receive/send
-#     allowed_file_extensions: [".txt", ".md", ".pdf", ".csv", ".json", ".yaml", ".yml", ".xml", ".html", ".log", ".zip", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".rtf"]
-#
-#     # Optional: channel-level session overrides
-#     session:
-#       assistant_id: mobile-agent  # custom agent names are supported here too
-#       context:
-#         thinking_enabled: false
-#
-#       # Optional: per-user overrides by user_id
-#       users:
-#         "123456789":
-#           assistant_id: vip-agent
-#           config:
-#             recursion_limit: 150
-#           context:
-#             thinking_enabled: true
-#             subagent_enabled: true
-#   wecom:
-#     enabled: false
-#     bot_id: $WECOM_BOT_ID
-#     bot_secret: $WECOM_BOT_SECRET
-#
-#   dingtalk:
-#     enabled: false
-#     client_id: $DINGTALK_CLIENT_ID
-#     client_secret: $DINGTALK_CLIENT_SECRET
-#     allowed_users: []               # empty = allow all
-#     card_template_id: ""            # Optional: AI Card template ID for streaming updates
-#
-#   discord:
-#     enabled: false
-#     bot_token: $DISCORD_BOT_TOKEN
-#     allowed_guilds: []              # empty = allow all guilds; can also be a single guild ID
-#     mention_only: false             # If true, only respond when the bot is mentioned
-#     allowed_channels: []              # Optional: channel IDs exempt from mention_only (bot responds without mention)
-#     thread_mode: false               # If true, group a channel conversation into a thread
-#
-#   # Buzz (https://github.com/block/buzz) — Nostr-relay team workspace.
-#   # DeerFlow joins as a member identity; generate a keypair and register it as
-#   # a relay member, then @mention or DM DeerFlow in Buzz. Requires the `buzz`
-#   # dependency extra (uv sync --extra buzz).
-#   buzz:
-#     enabled: false
-#     relay_url: wss://buzz.example.com
-#     private_key: $BUZZ_PRIVATE_KEY        # hex or nsec1…
-#     allowed_users: []                     # pubkeys (hex or npub) allowed to trigger runs.
-#                                           # DENY-BY-DEFAULT (unlike other channels): empty
-#                                           # means nobody, and DeerFlow logs a startup warning.
-#     require_mention: true                 # @mention needed in channels
-#     mention_free_channels: []             # channel UUIDs that respond to every message
-
-# ============================================================================
+# Extensions may register a Channel and add a provider entry under
+# channel_connections.providers. The adapter maps external events to
+# InboundMessage, publishes them to MessageBus, and sends OutboundMessage
+# values through Channel.send(). See backend/app/channels/base.py.
 # Guardrails Configuration
 # ============================================================================
 # Optional pre-execution authorization for tool calls.

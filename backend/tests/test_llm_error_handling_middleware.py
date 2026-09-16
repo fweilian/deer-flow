@@ -1032,7 +1032,7 @@ def test_async_index_error_exhausted_returns_user_fallback(
     middleware must still produce a user-facing fallback AIMessage (with
     ``deerflow_error_fallback=True``) instead of letting the IndexError
     propagate out of the agent loop and ending the run in ``error``
-    status with no GitHub-side reply.
+    status with no external-channel reply.
     """
     middleware = _build_middleware(retry_max_attempts=2, retry_base_delay_ms=10, retry_cap_delay_ms=10)
 

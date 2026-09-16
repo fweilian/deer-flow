@@ -84,56 +84,11 @@ class ChannelRuntimeConfigRequest(BaseModel):
     values: dict[str, str] = Field(default_factory=dict)
 
 
-_PROVIDER_META: dict[str, dict[str, str]] = {
-    "telegram": {"display_name": "Telegram", "auth_mode": "deep_link"},
-    "slack": {"display_name": "Slack", "auth_mode": "binding_code"},
-    "discord": {"display_name": "Discord", "auth_mode": "binding_code"},
-    "feishu": {"display_name": "Feishu", "auth_mode": "binding_code"},
-    "dingtalk": {"display_name": "DingTalk", "auth_mode": "binding_code"},
-    "wechat": {"display_name": "WeChat", "auth_mode": "binding_code"},
-    "wecom": {"display_name": "WeCom", "auth_mode": "binding_code"},
-    "buzz": {"display_name": "Buzz", "auth_mode": "binding_code"},
-}
+def _provider_registry() -> dict[str, Any]:
+    """Return metadata for trusted Channel registrations."""
+    from app.channels.service import get_channel_registrations
 
-_CREDENTIAL_FIELDS: dict[str, tuple[dict[str, str], ...]] = {
-    "telegram": (
-        {"name": "bot_token", "label": "Bot token", "type": "password"},
-        {"name": "bot_username", "label": "Bot username", "type": "text"},
-    ),
-    "slack": (
-        {"name": "bot_token", "label": "Bot token", "type": "password"},
-        {"name": "app_token", "label": "App token", "type": "password"},
-    ),
-    "discord": ({"name": "bot_token", "label": "Bot token", "type": "password"},),
-    "feishu": (
-        {"name": "app_id", "label": "App ID", "type": "text"},
-        {"name": "app_secret", "label": "App secret", "type": "password"},
-    ),
-    "dingtalk": (
-        {"name": "client_id", "label": "Client ID", "type": "text"},
-        {"name": "client_secret", "label": "Client secret", "type": "password"},
-    ),
-    "wechat": ({"name": "bot_token", "label": "Bot token", "type": "password"},),
-    "wecom": (
-        {"name": "bot_id", "label": "Bot ID", "type": "text"},
-        {"name": "bot_secret", "label": "Bot secret", "type": "password"},
-    ),
-    "buzz": (
-        {"name": "relay_url", "label": "Relay URL", "type": "text"},
-        {"name": "private_key", "label": "Private key (hex or nsec)", "type": "password"},
-    ),
-}
-
-_RUNTIME_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "telegram": ("bot_token",),
-    "slack": ("bot_token", "app_token"),
-    "discord": ("bot_token",),
-    "feishu": ("app_id", "app_secret"),
-    "dingtalk": ("client_id", "client_secret"),
-    "wechat": ("bot_token",),
-    "wecom": ("bot_id", "bot_secret"),
-    "buzz": ("relay_url", "private_key"),
-}
+    return get_channel_registrations()
 
 
 def _get_user_id(request: Request) -> str:
@@ -212,9 +167,9 @@ def _provider_config(config: ChannelConnectionsConfig, provider: str):
     # config attribute (e.g. the "enabled" / "require_bound_identity" bool
     # fields) slip past the 404 and return a non-provider value, which callers
     # then dereference as a provider config (AttributeError -> HTTP 500).
-    if provider not in _PROVIDER_META:
+    if provider not in _provider_registry():
         raise HTTPException(status_code=404, detail="Unknown channel provider")
-    provider_config = getattr(config, provider, None)
+    provider_config = config.providers.get(provider)
     if provider_config is None:
         raise HTTPException(status_code=404, detail="Unknown channel provider")
     return provider_config
@@ -224,18 +179,19 @@ def _runtime_channel_configured(provider: str, channels_config: dict[str, Any]) 
     runtime_config = channels_config.get(provider)
     if not isinstance(runtime_config, dict) or not runtime_config.get("enabled", False):
         return False
-    return all(str(runtime_config.get(key) or "").strip() for key in _RUNTIME_REQUIREMENTS[provider])
+    registration = _provider_registry().get(provider)
+    return bool(runtime_config.get("enabled", False)) and all(str(runtime_config.get(key) or "").strip() for key in registration.runtime_requirements)
 
 
 def _runtime_unavailable_reason(provider: str) -> str:
-    meta = _PROVIDER_META.get(provider)
-    display_name = meta["display_name"] if meta else provider
+    meta = _provider_registry().get(provider)
+    display_name = meta.display_name if meta else provider
     return f"Enter the required {display_name} credentials to connect this channel."
 
 
 def _runtime_not_running_reason(provider: str) -> str:
-    meta = _PROVIDER_META.get(provider)
-    display_name = meta["display_name"] if meta else provider
+    meta = _provider_registry().get(provider)
+    display_name = meta.display_name if meta else provider
     return f"{display_name} channel is configured but is not running. Check the credentials and service logs."
 
 
@@ -300,8 +256,6 @@ def _provider_unavailable_reason(
     provider_config = _provider_config(config, provider)
     if not provider_config.enabled:
         return None
-    if not provider_config.configured:
-        return _runtime_unavailable_reason(provider)
     if not _runtime_channel_configured(provider, channels_config):
         return _runtime_unavailable_reason(provider)
     if _runtime_channel_running(provider) is False:
@@ -351,21 +305,15 @@ async def _create_state(
 
 
 def _connect_instruction(provider: str, code: str) -> str:
-    if provider == "telegram":
-        return f"Send /start {code} to the DeerFlow Telegram bot."
-    meta = _PROVIDER_META.get(provider)
+    meta = _provider_registry().get(provider)
     if meta is None:
         raise HTTPException(status_code=404, detail="Unknown channel provider")
-    return f"Send /connect {code} to the DeerFlow {meta['display_name']} bot."
+    return f"Send /connect {code} to the DeerFlow {meta.display_name} channel."
 
 
 def _connect_url(config: ChannelConnectionsConfig, provider: str, code: str) -> str | None:
-    if provider == "telegram":
-        provider_config = _provider_config(config, provider)
-        return f"https://t.me/{provider_config.bot_username}?start={code}"
-    if _PROVIDER_META.get(provider, {}).get("auth_mode") == "binding_code":
-        return None
-    raise HTTPException(status_code=404, detail="Unknown channel provider")
+    del config, provider, code
+    return None
 
 
 def _connection_updated_at(connection: dict[str, Any]) -> datetime:
@@ -390,10 +338,10 @@ def _newest_connection_by_provider(connections: list[dict[str, Any]]) -> dict[st
 
 
 def _credential_fields(provider: str) -> list[ChannelCredentialFieldResponse]:
-    fields = _CREDENTIAL_FIELDS.get(provider)
-    if fields is None:
+    registration = _provider_registry().get(provider)
+    if registration is None:
         raise HTTPException(status_code=404, detail="Unknown channel provider")
-    return [ChannelCredentialFieldResponse(**field) for field in fields]
+    return [ChannelCredentialFieldResponse(**field) for field in registration.credential_fields]
 
 
 def _credential_values(provider: str, channels_config: dict[str, Any]) -> dict[str, str]:
@@ -414,7 +362,7 @@ def _provider_response(
     config: ChannelConnectionsConfig,
     channels_config: dict[str, Any],
     provider: str,
-    meta: dict[str, str],
+    meta: Any,
     connection: dict[str, Any] | None = None,
 ) -> ChannelProviderResponse:
     from app.gateway.auth_disabled import is_auth_disabled
@@ -438,18 +386,14 @@ def _provider_response(
     else:
         connection_status = "not_connected"
     credential_values = _credential_values(provider, channels_config)
-    if provider == "telegram" and not credential_values.get("bot_username"):
-        bot_username = str(_provider_config(config, provider).bot_username or "").strip()
-        if bot_username:
-            credential_values["bot_username"] = bot_username
     return ChannelProviderResponse(
         provider=provider,
-        display_name=meta["display_name"],
+        display_name=meta.display_name,
         enabled=status["enabled"],
         configured=status["configured"],
         connectable=status["enabled"] and status["configured"] and unavailable_reason is None,
         unavailable_reason=unavailable_reason,
-        auth_mode=meta["auth_mode"],
+        auth_mode=meta.auth_mode,
         connection_status=connection_status,
         credential_fields=_credential_fields(provider),
         credential_values=credential_values,
@@ -526,7 +470,8 @@ async def get_channel_providers(request: Request) -> ChannelProvidersResponse:
     connections = await repo.list_connections(owner_user_id) if repo is not None else []
     by_provider = _newest_connection_by_provider(connections)
 
-    enabled_providers = [provider for provider in _PROVIDER_META if config.provider_status(provider)["enabled"]]
+    registry = _provider_registry()
+    enabled_providers = [provider for provider in registry if config.provider_status(provider)["enabled"]]
     # Readiness reconciliation is independent per provider; run it
     # concurrently so one slow channel restart does not serialize the
     # whole /providers response.
@@ -537,7 +482,7 @@ async def get_channel_providers(request: Request) -> ChannelProvidersResponse:
     providers: list[ChannelProviderResponse] = []
     for provider in enabled_providers:
         connection = by_provider.get(provider)
-        providers.append(_provider_response(config, channels_config, provider, _PROVIDER_META[provider], connection))
+        providers.append(_provider_response(config, channels_config, provider, registry[provider], connection))
     return ChannelProvidersResponse(enabled=config.enabled, providers=providers)
 
 
@@ -591,7 +536,7 @@ async def disconnect_channel_provider_runtime(provider: str, request: Request) -
 
     stopped = await _sync_runtime_channel_after_removal(provider, candidate_channels_config)
     if stopped is False:
-        display_name = _PROVIDER_META[provider]["display_name"]
+        display_name = _provider_registry()[provider].display_name
         raise HTTPException(status_code=400, detail=f"Failed to stop {display_name} channel. Try again.")
 
     # Revoke the DB connection rows before committing the store/cache so a repo
@@ -611,7 +556,7 @@ async def disconnect_channel_provider_runtime(provider: str, request: Request) -
     live_channels_config.pop(provider, None)
     request.app.state.channels_config = live_channels_config
 
-    return _provider_response(config, live_channels_config, provider, _PROVIDER_META[provider])
+    return _provider_response(config, live_channels_config, provider, _provider_registry()[provider])
 
 
 @router.post("/{provider}/connect", response_model=ChannelConnectResponse)
@@ -641,7 +586,7 @@ async def connect_channel_provider(provider: str, request: Request) -> ChannelCo
     )
     return ChannelConnectResponse(
         provider=provider,
-        mode=_PROVIDER_META[provider]["auth_mode"],
+        mode=_provider_registry()[provider].auth_mode,
         url=_connect_url(config, provider, code),
         code=code,
         instruction=_connect_instruction(provider, code),
@@ -670,22 +615,15 @@ async def configure_channel_provider_runtime(
     values = _required_runtime_values(provider, body.values, runtime_config)
     runtime_config["enabled"] = True
 
-    for key in _RUNTIME_REQUIREMENTS[provider]:
+    for key in _provider_registry()[provider].runtime_requirements:
         runtime_config[key] = values[key]
-
-    if provider == "telegram":
-        # The deep-link username is persisted with the runtime channel config
-        # (set_provider_config below) and applied to future requests via
-        # apply_runtime_connection_config; never mutate the config instance
-        # cached by get_app_config().
-        runtime_config["bot_username"] = values["bot_username"]
 
     candidate_channels_config = dict(channels_config)
     candidate_channels_config[provider] = runtime_config
 
     started = await _restart_runtime_channel_if_available(provider, runtime_config)
     if started is False:
-        display_name = _PROVIDER_META[provider]["display_name"]
+        display_name = _provider_registry()[provider].display_name
         raise HTTPException(status_code=400, detail=f"Failed to start {display_name} channel. Check the values and try again.")
 
     store = await _get_runtime_config_store(request)
@@ -698,4 +636,4 @@ async def configure_channel_provider_runtime(
     live_channels_config[provider] = runtime_config
     request.app.state.channels_config = live_channels_config
 
-    return _provider_response(config, live_channels_config, provider, _PROVIDER_META[provider])
+    return _provider_response(config, live_channels_config, provider, _provider_registry()[provider])

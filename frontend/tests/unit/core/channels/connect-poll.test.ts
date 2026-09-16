@@ -31,14 +31,14 @@ afterEach(() => {
 describe("startConnectionPoll", () => {
   test("polls connections until the provider is connected, then resolves once", async () => {
     const responses: ChannelConnection[][] = [
-      [connection("telegram", "pending")],
-      [connection("telegram", "connected")],
+      [connection("custom", "pending")],
+      [connection("custom", "connected")],
     ];
     const fetchConnections = rs.fn(async () => responses.shift() ?? []);
     const onConnected = rs.fn();
 
     startConnectionPoll({
-      provider: "telegram",
+      provider: "custom",
       expiresInSeconds: 600,
       fetchConnections,
       onConnected,
@@ -60,10 +60,10 @@ describe("startConnectionPoll", () => {
 
   test("cancel() stops scheduled polling and fires no further fetches", async () => {
     const fetchConnections = rs.fn(async () => [
-      connection("telegram", "pending"),
+      connection("custom", "pending"),
     ]);
     const handle = startConnectionPoll({
-      provider: "telegram",
+      provider: "custom",
       expiresInSeconds: 600,
       fetchConnections,
       onConnected: rs.fn(),
@@ -80,11 +80,11 @@ describe("startConnectionPoll", () => {
 
   test("a non-finite expires_in falls back to a finite deadline and terminates", async () => {
     const fetchConnections = rs.fn(async () => [
-      connection("telegram", "pending"),
+      connection("custom", "pending"),
     ]);
     let nowValue = 0;
     startConnectionPoll({
-      provider: "telegram",
+      provider: "custom",
       expiresInSeconds: Number.NaN,
       fetchConnections,
       onConnected: rs.fn(),

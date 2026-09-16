@@ -65,7 +65,7 @@ test("routes an IM-selected thread to its custom agent from search metadata", ()
       // Thread-search results do not include run context. The channel manager
       // therefore persists both its restart key and this canonical routing key.
       metadata: {
-        channel_source: { type: "im_channel", provider: "telegram" },
+        channel_source: { type: "im_channel", provider: "custom" },
         channel_agent_name: "coder",
         agent_name: "coder",
       },
@@ -127,32 +127,32 @@ test("reads IM channel source metadata", () => {
       metadata: {
         channel_source: {
           type: "im_channel",
-          provider: "feishu",
+          provider: "custom",
           chat_id: "oc_123",
         },
       },
     }),
   ).toEqual({
     type: "im_channel",
-    provider: "feishu",
-    label: "Feishu",
+    provider: "custom",
+    label: "custom",
   });
 });
 
-test("formats the Buzz channel source label", () => {
+test("formats a generic channel source label", () => {
   expect(
     channelSourceOfThread({
       metadata: {
         channel_source: {
           type: "im_channel",
-          provider: "buzz",
+          provider: "custom",
         },
       },
     }),
   ).toEqual({
     type: "im_channel",
-    provider: "buzz",
-    label: "Buzz",
+    provider: "custom",
+    label: "custom",
   });
 });
 
@@ -168,7 +168,7 @@ test("ignores threads without valid IM channel source metadata", () => {
       metadata: {
         channel_source: {
           type: "other",
-          provider: "feishu",
+          provider: "custom",
         },
       },
     }),

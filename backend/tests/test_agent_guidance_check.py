@@ -31,7 +31,6 @@ EXPECTED_GUIDANCE_PATHS = {
     "backend/packages/harness/deerflow/subagents/AGENTS.md",
     "backend/packages/harness/deerflow/tools/AGENTS.md",
     "backend/packages/harness/deerflow/tracing/AGENTS.md",
-    "backend/packages/harness/deerflow/tui/AGENTS.md",
     "backend/packages/harness/deerflow/utils/AGENTS.md",
     "frontend/src/AGENTS.md",
     "scripts/AGENTS.md",
@@ -116,7 +115,7 @@ def test_discovery_uses_exact_agents_basename() -> None:
         PurePosixPath("AGENTS.md"),
         PurePosixPath("backend/AGENTS.md"),
         PurePosixPath("backend/CLAUDE.md"),
-        PurePosixPath("backend/docs/GITHUB_AGENTS.md"),
+        PurePosixPath("backend/docs/legacy-guidance.md"),
     ]
 
     assert checker.guidance_paths(paths) == {
@@ -145,7 +144,7 @@ def test_repository_guidance_stays_below_hard_budgets_and_avoids_doc_indexes() -
 def test_local_guidance_files_contain_the_split_original_sections() -> None:
     expected_headings = {
         "backend/app/gateway/AGENTS.md": "### Gateway API (`app/gateway/`)",
-        "backend/app/channels/AGENTS.md": "### IM Channels System (`app/channels/`)",
+        "backend/app/channels/AGENTS.md": "### Generic Channel System (`app/channels/`)",
         "backend/packages/harness/deerflow/agents/AGENTS.md": "### Agent System",
         "backend/packages/harness/deerflow/agents/middlewares/AGENTS.md": "### Middleware Chain",
         "backend/packages/harness/deerflow/agents/memory/AGENTS.md": "### Memory System",
@@ -161,7 +160,6 @@ def test_local_guidance_files_contain_the_split_original_sections() -> None:
         "backend/packages/harness/deerflow/subagents/AGENTS.md": "### Subagent System",
         "backend/packages/harness/deerflow/tools/AGENTS.md": "### Tool System",
         "backend/packages/harness/deerflow/tracing/AGENTS.md": "### Tracing System",
-        "backend/packages/harness/deerflow/tui/AGENTS.md": "### Terminal Workbench / TUI",
         "frontend/src/AGENTS.md": "### Data Flow",
     }
 

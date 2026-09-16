@@ -28,13 +28,7 @@ dependencies = [
     # diff; tests/test_gateway_request_path.py pins the agreement itself.
     "starlette>=1.3.1,<2",
     "uvicorn[standard]>=0.34.0",
-    "lark-oapi>=1.4.0",
-    "slack-sdk>=3.33.0",
-    "python-telegram-bot>=21.0",
     "langgraph-sdk>=0.1.51",
-    "markdown-to-mrkdwn>=0.3.1",
-    "wecom-aibot-python-sdk>=0.1.6",
-    "dingtalk-stream>=0.24.3",
     "bcrypt>=4.0.0",
     "pyjwt>=2.13.0",
     "email-validator>=2.0.0",
@@ -43,8 +37,6 @@ dependencies = [
 [project.optional-dependencies]
 postgres = ["deerflow-harness[postgres]"]
 redis = ["deerflow-harness[redis]"]
-discord = ["discord.py>=2.7.0"]
-buzz = ["coincurve>=20.0.0"]
 monocle = ["deerflow-harness[monocle]"]
 ollama = ["deerflow-harness[ollama]"]
 browser = ["deerflow-harness[browser]"]
@@ -84,23 +76,6 @@ markers = [
 [tool.uv]
 index-url = "https://pypi.org/simple"
 default-groups = ["dev", "extensions"]
-# langgraph-sdk 0.4.2 (pulled in by langgraph 1.2.9 for DeltaChannel) pins
-# `websockets<16,>=14`, silently downgrading websockets 16.0 -> 15.0.1. The
-# pin is not grounded in any API incompatibility: websockets 16's only
-# breaking change is requiring Python >=3.10 (we require >=3.12), the sdk
-# only imports `websockets.asyncio.client`/`websockets.exceptions` (both
-# 16-compatible), and DeerFlow never uses the sdk's WebSocket transport
-# (httpx/SSE only). DeerFlow does have one direct consumer of its own: the Buzz
-# channel (`app/channels/buzz.py`) imports the top-level `websockets` package and
-# calls `websockets.connect()`, which in 16.0 is the same asyncio client the sdk
-# uses, re-exported at the package root -- so it is covered by the same
-# compatibility argument. Pin the exact pre-upgrade 16.0 for that plus the IM
-# channel integrations (dingtalk-stream, python-telegram-bot, etc.) that ran on
-# it before. Remove once langgraph-sdk relaxes the pin upstream. Note: enabling
-# the `openai[realtime]` or `slack-sdk[optional]` extras would conflict (they
-# also cap websockets<16).
-override-dependencies = ["websockets==16.0"]
-
 [tool.uv.workspace]
 members = ["packages/harness", "packages/extension-api"]
 
