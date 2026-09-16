@@ -8,9 +8,11 @@ import threading
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
+
+from app.inbound_message import InboundMessage
+from app.inbound_message import InboundMessageType as InboundMessageType
 
 logger = logging.getLogger(__name__)
 
@@ -26,54 +28,6 @@ INBOUND_FILE_CONTENT_KEY = "_content"
 # ---------------------------------------------------------------------------
 # Message types
 # ---------------------------------------------------------------------------
-
-
-class InboundMessageType(StrEnum):
-    """Types of messages arriving from IM channels."""
-
-    CHAT = "chat"
-    COMMAND = "command"
-
-
-@dataclass
-class InboundMessage:
-    """A message arriving from an IM channel toward the agent dispatcher.
-
-    Attributes:
-        channel_name: Name of the source channel (e.g. "feishu", "slack").
-        chat_id: Platform-specific chat/conversation identifier.
-        user_id: Platform-specific user identifier.
-        text: The message text.
-        msg_type: Whether this is a regular chat message or a command.
-        thread_ts: Optional platform thread identifier (for threaded replies).
-        topic_id: Conversation topic identifier used to map to a DeerFlow thread.
-            Messages sharing the same ``topic_id`` within a ``chat_id`` will
-            reuse the same DeerFlow thread.  When ``None``, each message
-            creates a new thread (one-shot Q&A).
-        connection_id: Optional DeerFlow channel connection id. When present,
-            conversation mapping is scoped by the connection instead of the
-            legacy global ``channel_name:chat_id[:topic_id]`` key.
-        owner_user_id: DeerFlow user id that owns the channel connection.
-            Platform user ids stay in ``user_id``.
-        workspace_id: Optional external workspace/guild/team id.
-        files: Optional list of file attachments (platform-specific dicts).
-        metadata: Arbitrary extra data from the channel.
-        created_at: Unix timestamp when the message was created.
-    """
-
-    channel_name: str
-    chat_id: str
-    user_id: str
-    text: str
-    msg_type: InboundMessageType = InboundMessageType.CHAT
-    thread_ts: str | None = None
-    topic_id: str | None = None
-    connection_id: str | None = None
-    owner_user_id: str | None = None
-    workspace_id: str | None = None
-    files: list[dict[str, Any]] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: float = field(default_factory=time.time)
 
 
 @dataclass

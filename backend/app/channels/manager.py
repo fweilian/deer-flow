@@ -36,15 +36,10 @@ from app.channels.message_bus import (
 from app.channels.run_policy import CHANNEL_RUN_POLICY, ChannelRunPolicy
 from app.channels.store import ChannelStore
 from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
-
-# Import built-in channel run-policy registrars eagerly so direct
-# ChannelManager construction sees the same policy map as gateway bootstrap.
-from app.gateway.github import run_policy as _github_run_policy  # noqa: F401
 from app.gateway.internal_auth import create_internal_auth_headers
 from app.gateway.path_utils import resolve_outputs_confined_path
 from deerflow.config.agents_config import list_custom_agents, load_agent_config
-from deerflow.config.paths import make_safe_user_id
-from deerflow.runtime import END_SENTINEL, StreamBridge
+from deerflow.config.paths import get_paths, make_safe_user_id
 from deerflow.runtime.goal import parse_goal_command
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.skills.slash import parse_slash_skill_reference
@@ -120,7 +115,7 @@ BOUND_IDENTITY_UNAVAILABLE_MESSAGE = "Channel connection verification is tempora
 # A ConflictError on a channel opted into ChannelRunPolicy.buffer_followups_on_busy
 # buffers the triggering message per-thread instead of only logging it; a
 # background watcher drains the buffer into a coalesced follow-up run once the
-# busy run's StreamBridge stream reaches END_SENTINEL. See _buffer_followup,
+# busy run completes through the Gateway join endpoint. See _buffer_followup,
 # _drain_followups_for_thread, and _watch_run_and_drain_followups below.
 FOLLOWUP_BUFFER_MAX_PER_THREAD = 20
 FOLLOWUP_DRAIN_BATCH_SIZE = 10
@@ -916,15 +911,15 @@ async def _ingest_inbound_files(thread_id: str, msg: InboundMessage, *, user_id:
     from deerflow.uploads.manager import (
         UnsafeUploadPathError,
         claim_unique_filename,
-        ensure_uploads_dir,
         normalize_filename,
         write_upload_file_no_symlink,
     )
 
     def _prepare_uploads_dir() -> tuple[Path, set[str]]:
-        # Worker thread: ensure_uploads_dir's mkdir and the iterdir enumeration are
-        # blocking filesystem IO that must stay off the event loop.
-        target = ensure_uploads_dir(thread_id, user_id=user_id)
+        # Keep channel ownership at the adapter boundary; the shared upload
+        # helpers use the authenticated runtime identity.
+        target = get_paths().sandbox_uploads_dir(thread_id, user_id=user_id or get_effective_user_id())
+        target.mkdir(parents=True, exist_ok=True)
         existing = {entry.name for entry in target.iterdir() if entry.is_file()}
         return target, existing
 
@@ -1025,7 +1020,6 @@ class ChannelManager:
         connection_repo: Any | None = None,
         require_bound_identity: bool = False,
         inbound_dedupe_store: InboundDedupeStore | None = None,
-        get_stream_bridge: Callable[[], StreamBridge | None] | None = None,
     ) -> None:
         if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int) or max_concurrency <= 0:
             raise ValueError("max_concurrency must be a positive integer")
@@ -1042,14 +1036,6 @@ class ChannelManager:
         self._channel_sessions = dict(channel_sessions or {})
         self._connection_repo = connection_repo
         self._require_bound_identity = require_bound_identity
-        # Zero-arg accessor for the FastAPI app's StreamBridge singleton,
-        # threaded in from app.py's lifespan via start_channel_service() ->
-        # ChannelService.__init__ (mirrors how ScheduledTaskService gets a
-        # launch_run closure over `app` in the same lifespan function). None
-        # when not wired (e.g. a ChannelManager constructed directly in
-        # tests) — follow-up buffering still works, but no watcher is
-        # spawned to auto-drain it (see _maybe_spawn_followup_watcher).
-        self._get_stream_bridge = get_stream_bridge
         self._client = None  # lazy init — langgraph_sdk async client
         self._channel_metadata_synced: set[str] = set()
         # Explicit /agent selections are pinned to the newly-created thread.
@@ -1150,16 +1136,6 @@ class ChannelManager:
 
     # -- follow-up buffering for busy fire_and_forget threads (issue #4121) --
 
-    def _resolve_stream_bridge(self) -> StreamBridge | None:
-        """Resolve the current StreamBridge via the injected accessor, if any."""
-        if self._get_stream_bridge is None:
-            return None
-        try:
-            return self._get_stream_bridge()
-        except Exception:
-            logger.exception("[Manager] get_stream_bridge callable raised; follow-up watch disabled for this run")
-            return None
-
     def _enforce_followup_cap(self, thread_id: str, buffer: OrderedDict[str, _FollowupEntry]) -> None:
         """Drop the OLDEST buffered entries once *buffer* exceeds the per-thread cap.
 
@@ -1250,13 +1226,9 @@ class ChannelManager:
         run_result: Any,
         carrier_msg: InboundMessage,
     ) -> None:
-        """Spawn a background watcher for a just-created run, if wired up.
+        """Spawn a background watcher for a just-created run.
 
-        No-ops (spawns nothing) when no ``get_stream_bridge`` accessor was
-        threaded in — e.g. a ``ChannelManager`` constructed directly without
-        going through ``start_channel_service()`` — so tests and any
-        not-yet-wired deployment never see a dangling background task for
-        this. When wired, mirrors the worker-task error-reporting pattern:
+        Mirrors the worker-task error-reporting pattern:
         ``asyncio.create_task`` + ``add_done_callback(self._log_task_error)``
         so an unexpected watcher failure is surfaced in the logs instead of
         silently vanishing. The task is also tracked in
@@ -1264,7 +1236,7 @@ class ChannelManager:
         so ``stop()`` can cancel+await any watcher still in flight instead of
         leaving it to fire a follow-up run after shutdown.
         """
-        if self._get_stream_bridge is None or self._stopped:
+        if self._stopped:
             return
 
         run_id = run_result.get("run_id") if isinstance(run_result, dict) else None
@@ -1288,8 +1260,7 @@ class ChannelManager:
     ) -> None:
         """Watch *run_id* until it ends, then attempt to drain thread_id's buffer.
 
-        Subscribes to the StreamBridge the same way existing consumers do
-        (``entry is END_SENTINEL``, see ``app/gateway/services.py``). Runs
+        Joins the Gateway SSE run stream using the same SDK as channel runs. Runs
         for as long as the underlying run does — GitHub coding runs
         routinely take several minutes, so this deliberately does not apply
         an artificial timeout, mirroring why the dispatch path itself uses
@@ -1297,19 +1268,12 @@ class ChannelManager:
         is a no-op when the buffer is empty, which is the common case (most
         runs never hit a busy-thread conflict).
         """
-        stream_bridge = self._resolve_stream_bridge()
-        if stream_bridge is None:
-            logger.warning(
-                "[Manager] no stream bridge available; cannot watch run_id=%s for thread_id=%s follow-up drain (any buffered follow-ups will be drained by a later watched run on this thread)",
-                run_id,
-                thread_id,
-            )
-            return
-
+        client = self._get_client()
         try:
-            async for entry in stream_bridge.subscribe(run_id):
-                if entry is END_SENTINEL:
-                    break
+            async for event in client.runs.join_stream(thread_id, run_id, headers=_owner_headers(carrier_msg)):
+                if event.event == "gap":
+                    logger.warning("[Manager] run stream gap for run_id=%s; follow-up drain deferred", run_id)
+                    return
         except Exception:
             logger.exception(
                 "[Manager] error watching run_id=%s for thread_id=%s follow-up drain",
@@ -1318,7 +1282,6 @@ class ChannelManager:
             )
             return
 
-        client = self._get_client()
         await self._drain_followups_for_thread(client, thread_id, carrier_msg)
 
     async def _drain_followups_for_thread(
@@ -1467,8 +1430,7 @@ class ChannelManager:
 
         # ``user_id`` drives DeerFlow-owned memory, files, and thread buckets.
         # For browser-connected IM channels, prefer the DeerFlow account that
-        # owns the connection. Preserve the raw platform user under
-        # ``channel_user_id`` for platform-facing lookups and audits.
+        # owns the connection.
         run_context_identity: dict[str, Any] = {"thread_id": thread_id}
         # ``channel_name`` lets in-graph code (e.g. ``_make_lead_agent``)
         # decide whether a tool is safe to expose for this run. Webhook
@@ -1483,8 +1445,6 @@ class ChannelManager:
         run_user_id = _channel_storage_user_id(msg)
         if run_user_id:
             run_context_identity["user_id"] = run_user_id
-        if msg.user_id:
-            run_context_identity["channel_user_id"] = msg.user_id
 
         run_context = _merge_dicts(
             DEFAULT_RUN_CONTEXT,
@@ -2325,7 +2285,7 @@ class ChannelManager:
             try:
                 # Capturing the return value is new (issue #4121 Slice 2):
                 # it carries ``run_id``, which the follow-up watcher below
-                # needs to subscribe to this run's StreamBridge stream. When
+                # needs to join this run through the Gateway API. When
                 # ``buffer_followups_on_busy`` is off this is otherwise
                 # behaviorally identical to the previous bare ``await``.
                 result = await client.runs.create(thread_id, assistant_id, **run_kwargs)

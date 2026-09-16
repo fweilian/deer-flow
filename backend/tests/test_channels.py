@@ -3828,7 +3828,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == "123456"
-        assert run_context["channel_user_id"] == "123456"
+        assert "channel_user_id" not in run_context
 
     def test_resolve_run_params_plumbs_channel_name_into_run_context(self):
         """``channel_name`` must land on ``run_context`` so in-graph code can
@@ -3890,7 +3890,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == "deerflow-user-1"
-        assert run_context["channel_user_id"] == "U-platform"
+        assert "channel_user_id" not in run_context
 
     def test_github_channel_gets_raised_recursion_limit(self):
         """Autonomous GitHub coding runs (clone → edit → test → push → PR) need
@@ -4014,7 +4014,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == AUTH_DISABLED_USER_ID
-        assert run_context["channel_user_id"] == "U-platform"
+        assert "channel_user_id" not in run_context
 
         from app.channels.manager import _owner_headers
 
@@ -4038,7 +4038,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == AUTH_DISABLED_USER_ID
-        assert run_context["channel_user_id"] == "U-platform"
+        assert "channel_user_id" not in run_context
 
     def test_unbound_channel_messages_keep_platform_user_id_when_auth_is_enabled(self, monkeypatch):
         from app.channels.manager import _owner_headers
@@ -4050,7 +4050,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == "U-platform"
-        assert run_context["channel_user_id"] == "U-platform"
+        assert "channel_user_id" not in run_context
         assert _owner_headers(msg) is None
 
     def test_unsafe_user_id_is_normalized_but_raw_preserved(self, monkeypatch):
@@ -4065,7 +4065,7 @@ class TestResolveRunParamsUserId:
 
         assert run_context["user_id"] == make_safe_user_id(raw)
         assert run_context["user_id"] != raw
-        assert run_context["channel_user_id"] == raw
+        assert "channel_user_id" not in run_context
 
     def test_unsafe_user_id_migrates_unique_legacy_bucket(self, tmp_path, monkeypatch):
         from deerflow.config.paths import Paths, make_safe_user_id
@@ -4350,7 +4350,7 @@ class TestGithubFollowupBuffer:
     point of view. These tests pin the fix: the triggering message is
     buffered per-thread (deduped, capped), and a background watcher drains
     the buffer into a coalesced follow-up run once the busy run's stream
-    reaches ``END_SENTINEL``. Reactions/acknowledgment are intentionally
+    finishes through ``runs.join_stream()``. Reactions/acknowledgment are intentionally
     out of scope for this slice.
     """
 
@@ -4760,24 +4760,23 @@ class TestGithubFollowupBuffer:
 
         _run(go())
 
-    def test_run_watcher_drains_buffer_on_end_sentinel(self):
+    def test_run_watcher_drains_buffer_after_join(self):
         """End-to-end mechanism test: a busy-thread follow-up gets buffered,
-        and once the ORIGINAL run's stream reaches END_SENTINEL, the watcher
+        and once the ORIGINAL run's join completes, the watcher
         drains the buffer into a new coalesced runs.create call. That
         drained run is itself watched too, so an empty buffer at its own
-        END_SENTINEL is a clean no-op (the chain terminates)."""
+        completion is a clean no-op (the chain terminates)."""
         import httpx
         from langgraph_sdk.errors import ConflictError
 
         import app.gateway.github.run_policy  # noqa: F401 — register policy
         from app.channels.manager import FOLLOWUP_BLOCK_TAG, ChannelManager
-        from deerflow.runtime import MemoryStreamBridge
 
         async def go():
             bus = MessageBus()
             store = ChannelStore(path=Path(tempfile.mkdtemp()) / "store.json")
-            bridge = MemoryStreamBridge()
-            manager = ChannelManager(bus=bus, store=store, get_stream_bridge=lambda: bridge)
+            manager = ChannelManager(bus=bus, store=store)
+            completed = {"run-1": asyncio.Event(), "run-2": asyncio.Event()}
 
             request = httpx.Request("POST", "http://127.0.0.1:2024/threads/gh-thread-watch/runs")
             response = httpx.Response(409, request=request)
@@ -4791,6 +4790,12 @@ class TestGithubFollowupBuffer:
                     {"run_id": "run-2", "status": "pending"},
                 ]
             )
+
+            async def join_stream(_thread_id, run_id, *, headers=None):
+                await completed[run_id].wait()
+                yield SimpleNamespace(event="end")
+
+            mock_client.runs.join_stream = join_stream
             manager._client = mock_client
 
             # First message: no active run yet -> succeeds, watcher spawned for run-1.
@@ -4818,8 +4823,8 @@ class TestGithubFollowupBuffer:
 
             assert len(manager._followup_buffers["gh-thread-watch"]) == 1
 
-            # The busy run completes -> watcher observes END_SENTINEL -> drains.
-            await bridge.publish_end("run-1")
+            # The busy run completes -> join returns -> watcher drains.
+            completed["run-1"].set()
             await _wait_for(lambda: mock_client.runs.create.call_count == 3, timeout=2.0)
 
             drain_call = mock_client.runs.create.call_args_list[2]
@@ -4832,7 +4837,7 @@ class TestGithubFollowupBuffer:
 
             # The drained run (run-2) also gets watched. Ending it with an
             # empty buffer must be a clean no-op — no 4th runs.create call.
-            await bridge.publish_end("run-2")
+            completed["run-2"].set()
             await asyncio.sleep(0.2)
             assert mock_client.runs.create.call_count == 3
 
@@ -4845,13 +4850,11 @@ class TestGithubFollowupBuffer:
         shutdown would still fire a brand new runs.create() into a manager
         that has already been stopped."""
         from app.channels.manager import ChannelManager
-        from deerflow.runtime import MemoryStreamBridge
 
         async def go():
             bus = MessageBus()
             store = ChannelStore(path=Path(tempfile.mkdtemp()) / "store.json")
-            bridge = MemoryStreamBridge()
-            manager = ChannelManager(bus=bus, store=store, get_stream_bridge=lambda: bridge)
+            manager = ChannelManager(bus=bus, store=store)
 
             carrier_msg = InboundMessage(
                 channel_name="github",
@@ -4876,12 +4879,18 @@ class TestGithubFollowupBuffer:
 
             mock_client = _make_mock_langgraph_client(thread_id=thread_id)
             mock_client.runs.create = AsyncMock(return_value={"run_id": "run-should-not-fire", "status": "pending"})
+
+            async def wait_join(*_args, **_kwargs):
+                await asyncio.Event().wait()
+                yield SimpleNamespace(event="end")
+
+            mock_client.runs.join_stream = wait_join
             manager._client = mock_client
 
             await manager.start()
 
-            # Spawn a watcher for a run whose stream never ends -- it sits
-            # suspended awaiting stream_bridge.subscribe(), exactly like a
+            # Spawn a watcher for a run whose join never ends -- it sits
+            # suspended awaiting runs.join_stream(), exactly like a
             # real in-flight watcher for a long-running GitHub coding run.
             manager._maybe_spawn_followup_watcher(thread_id, {"run_id": "run-being-watched"}, carrier_msg)
             await asyncio.sleep(0.05)
@@ -4896,9 +4905,7 @@ class TestGithubFollowupBuffer:
             assert watcher_task.cancelled()
             assert watcher_task not in manager._followup_watcher_tasks
 
-            # A late "run completed" signal for the (cancelled) watched run
-            # must not resurrect a drain -- nothing is subscribed anymore.
-            await bridge.publish_end("run-being-watched")
+            # A cancelled join cannot resurrect a drain.
             await asyncio.sleep(0.1)
             mock_client.runs.create.assert_not_called()
 
@@ -4950,47 +4957,6 @@ class TestGithubFollowupBuffer:
             assert len(manager._followup_buffers[thread_id]) == 1
 
         _run(go())
-
-    def test_channel_manager_get_stream_bridge_threaded_from_service(self):
-        """The app.py -> service.py -> manager.py plumbing: ChannelService
-        must forward get_stream_bridge through to its ChannelManager."""
-        from app.channels.service import ChannelService
-
-        sentinel = object()
-        service = ChannelService(channels_config={}, get_stream_bridge=lambda: sentinel)
-
-        assert service.manager._get_stream_bridge() is sentinel
-
-    def test_start_channel_service_forwards_get_stream_bridge(self):
-        """The module-level singleton entrypoint must also thread the
-        callable through to ChannelService.from_app_config."""
-        import app.channels.service as service_module
-
-        captured: dict[str, object] = {}
-
-        class _FakeService:
-            async def start(self):
-                return None
-
-            def get_status(self):
-                return {}
-
-        def fake_from_app_config(app_config=None, *, get_stream_bridge=None):
-            captured["get_stream_bridge"] = get_stream_bridge
-            return _FakeService()
-
-        async def go():
-            service_module._channel_service = None
-            with patch.object(service_module.ChannelService, "from_app_config", staticmethod(fake_from_app_config)):
-                sentinel = object()
-                await service_module.start_channel_service(get_stream_bridge=lambda: sentinel)
-
-            assert captured["get_stream_bridge"]() is sentinel
-
-        try:
-            _run(go())
-        finally:
-            service_module._channel_service = None
 
 
 class _BoundIdentityRepo:
@@ -5190,7 +5156,7 @@ class TestChannelManagerBoundIdentityPolicy:
             mock_client.runs.wait.assert_called_once()
             run_context = mock_client.runs.wait.call_args.kwargs["context"]
             assert run_context["user_id"] == "deerflow-user-1"
-            assert run_context["channel_user_id"] == "U-platform"
+            assert "channel_user_id" not in run_context
 
         _run(go())
 
@@ -5318,7 +5284,7 @@ class TestChannelManagerBoundIdentityPolicy:
             mock_client.runs.wait.assert_called_once()
             run_context = mock_client.runs.wait.call_args.kwargs["context"]
             assert run_context["user_id"] == AUTH_DISABLED_USER_ID
-            assert run_context["channel_user_id"] == "U-platform"
+            assert "channel_user_id" not in run_context
 
         _run(go())
 
@@ -5347,7 +5313,7 @@ class TestChannelManagerBoundIdentityPolicy:
             mock_client.runs.wait.assert_called_once()
             run_context = mock_client.runs.wait.call_args.kwargs["context"]
             assert run_context["user_id"] == "U-platform"
-            assert run_context["channel_user_id"] == "U-platform"
+            assert "channel_user_id" not in run_context
 
         _run(go())
 
@@ -5551,9 +5517,9 @@ class TestChannelManagerConnectionRouting:
             first_context = mock_client.runs.wait.call_args_list[0].kwargs["context"]
             second_context = mock_client.runs.wait.call_args_list[1].kwargs["context"]
             assert first_context["user_id"] == "alice"
-            assert first_context["channel_user_id"] == "U-alice"
+            assert "channel_user_id" not in first_context
             assert second_context["user_id"] == "bob"
-            assert second_context["channel_user_id"] == "U-bob"
+            assert "channel_user_id" not in second_context
 
             first_create_headers = mock_client.threads.create.call_args_list[0].kwargs["headers"]
             second_create_headers = mock_client.threads.create.call_args_list[1].kwargs["headers"]

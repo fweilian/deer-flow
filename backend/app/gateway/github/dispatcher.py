@@ -28,11 +28,11 @@ import asyncio
 import logging
 from typing import Any
 
-from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus
 from app.gateway.github.identity import extract_target, resolve_thread_id
 from app.gateway.github.prompts import build_prompt
 from app.gateway.github.registry import build_github_agent_registry, lookup_agents
 from app.gateway.github.triggers import event_should_fire
+from app.inbound_message import InboundMessage, InboundMessageType
 from deerflow.config.agents_config import GitHubAgentConfig, GitHubTriggerConfig
 
 logger = logging.getLogger(__name__)
@@ -186,7 +186,7 @@ def _is_redundant_review_comment(payload: dict[str, Any]) -> bool:
 
 
 async def fanout_event(
-    bus: MessageBus,
+    bus: Any,
     event: str,
     delivery_id: str,
     payload: dict[str, Any],

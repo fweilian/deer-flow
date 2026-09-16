@@ -524,7 +524,7 @@ _CONTEXT_INTERNAL_CALLER_KEYS: frozenset[str] = frozenset({"non_interactive"})
 # authenticated internal request channel, or reserved for LangGraph Server.
 #   ``is_internal``             — derived from ``request.state.auth_source``
 #   ``authz_attributes``        — Phase 1A has no Gateway-side producer; cleared.
-#   ``channel_user_id``         — accepted only from trusted internal context.
+#   ``channel_user_id``         — legacy context field; cleared, never injected.
 #   ``langgraph_auth_user*``    — populated only by LangGraph Server auth.
 #   ``sandbox_*_id``           — created only inside the run/subagent lifecycle.
 _SERVER_OWNED_RUNTIME_CONTEXT_KEYS: frozenset[str] = (
@@ -663,7 +663,6 @@ def inject_authenticated_user_context(
     request: Request,
     *,
     internal_owner_user: Any | None = None,
-    request_context: Mapping[str, Any] | None = None,
 ) -> None:
     """Stamp the authenticated user into the run context for background tools.
 
@@ -671,9 +670,6 @@ def inject_authenticated_user_context(
     that persist user-scoped files should not rely only on ambient ContextVars.
     The value comes from server-side auth state, never from client context.
 
-    ``request_context.channel_user_id`` is the sole exception: it is honored
-    only after ``request.state.auth_source`` proves the caller is internal.
-    Values copied through the free-form RunnableConfig are always cleared.
     """
 
     # --- Server-owned authorization and sandbox lifecycle identity fields ---
@@ -703,10 +699,6 @@ def inject_authenticated_user_context(
         if isinstance(configurable, dict):
             configurable.pop("user_id", None)
     runtime_context["is_internal"] = auth_source == AUTH_SOURCE_INTERNAL
-    if auth_source == AUTH_SOURCE_INTERNAL and request_context is not None:
-        channel_user_id = request_context.get("channel_user_id")
-        if channel_user_id is not None:
-            runtime_context["channel_user_id"] = channel_user_id
 
     user = getattr(request.state, "user", None)
     user_id = getattr(user, "id", None)
@@ -1589,7 +1581,6 @@ async def start_run(
             config,
             request,
             internal_owner_user=internal_owner_user,
-            request_context=getattr(body, "context", None),
         )
 
         conversation_references = list(getattr(body, "conversation_references", None) or [])

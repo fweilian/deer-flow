@@ -26,7 +26,6 @@ from deerflow.uploads.manager import (
     delete_file_safe,
     enrich_file_listing,
     ensure_uploads_dir,
-    get_uploads_dir,
     list_files_in_dir,
     normalize_filename,
     upload_artifact_url,
@@ -235,7 +234,7 @@ def _sync_upload_to_sandbox(sandbox, file_path: os.PathLike[str] | str, virtual_
 
 
 def _list_uploaded_files_for_thread(thread_id: str, user_id: str) -> dict:
-    uploads_dir = get_uploads_dir(thread_id, user_id=user_id)
+    uploads_dir = get_paths().sandbox_uploads_dir(thread_id, user_id=user_id)
     result = list_files_in_dir(uploads_dir)
     enrich_file_listing(result, thread_id)
 
@@ -246,7 +245,7 @@ def _list_uploaded_files_for_thread(thread_id: str, user_id: str) -> dict:
 
 
 def _delete_uploaded_file_for_thread(thread_id: str, filename: str, user_id: str) -> dict:
-    uploads_dir = get_uploads_dir(thread_id, user_id=user_id)
+    uploads_dir = get_paths().sandbox_uploads_dir(thread_id, user_id=user_id)
     return delete_file_safe(uploads_dir, filename, convertible_extensions=CONVERTIBLE_EXTENSIONS)
 
 
@@ -322,7 +321,7 @@ async def upload_files(
 
     try:
         effective_user_id = get_effective_user_id()
-        uploads_dir = await run_file_io(ensure_uploads_dir, thread_id, user_id=effective_user_id)
+        uploads_dir = await run_file_io(ensure_uploads_dir, thread_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     sandbox_uploads = uploads_dir

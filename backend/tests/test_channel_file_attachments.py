@@ -293,7 +293,7 @@ class TestInboundFileIngestion:
             files=[{"type": "file", "filename": "report.pdf", "_content": b"pdf bytes"}],
         )
 
-        with patch("deerflow.uploads.manager.ensure_uploads_dir", return_value=uploads_dir):
+        with patch("app.channels.manager.get_paths", return_value=MagicMock(sandbox_uploads_dir=lambda *_a, **_k: uploads_dir)):
             result = _run(manager._ingest_inbound_files("thread-1", msg))
 
         assert result == [
@@ -327,7 +327,7 @@ class TestInboundFileIngestion:
             return b"attacker data"
 
         with (
-            patch("deerflow.uploads.manager.ensure_uploads_dir", return_value=uploads_dir),
+            patch("app.channels.manager.get_paths", return_value=MagicMock(sandbox_uploads_dir=lambda *_a, **_k: uploads_dir)),
             patch.dict(manager.INBOUND_FILE_READERS, {"test-channel": fake_reader}, clear=False),
         ):
             result = _run(manager._ingest_inbound_files("thread-1", msg))
@@ -356,7 +356,7 @@ class TestInboundFileIngestion:
             return b"attacker data"
 
         with (
-            patch("deerflow.uploads.manager.ensure_uploads_dir", return_value=uploads_dir),
+            patch("app.channels.manager.get_paths", return_value=MagicMock(sandbox_uploads_dir=lambda *_a, **_k: uploads_dir)),
             patch.dict(manager.INBOUND_FILE_READERS, {"test-channel": fake_reader}, clear=False),
         ):
             result = _run(manager._ingest_inbound_files("thread-1", msg))
@@ -386,7 +386,7 @@ class TestInboundFileIngestion:
             return b"new attachment data"
 
         with (
-            patch("deerflow.uploads.manager.ensure_uploads_dir", return_value=uploads_dir),
+            patch("app.channels.manager.get_paths", return_value=MagicMock(sandbox_uploads_dir=lambda *_a, **_k: uploads_dir)),
             patch.dict(manager.INBOUND_FILE_READERS, {"test-channel": fake_reader}, clear=False),
         ):
             result = _run(manager._ingest_inbound_files("thread-1", msg))

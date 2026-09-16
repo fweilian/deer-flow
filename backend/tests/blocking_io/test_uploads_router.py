@@ -12,8 +12,9 @@ from _router_auth_helpers import call_unwrapped
 from fastapi import UploadFile
 
 from app.gateway.routers import uploads
+from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id
-from deerflow.uploads.manager import ensure_uploads_dir, get_uploads_dir
+from deerflow.uploads.manager import ensure_uploads_dir
 
 pytestmark = pytest.mark.asyncio
 
@@ -86,7 +87,7 @@ async def test_upload_endpoint_mounted_provider_does_not_block_event_loop(tmp_pa
     )
 
     user_id = get_effective_user_id()
-    target = await asyncio.to_thread(lambda: get_uploads_dir("t-mounted", user_id=user_id) / "notes.txt")
+    target = await asyncio.to_thread(lambda: get_paths().sandbox_uploads_dir("t-mounted", user_id=user_id) / "notes.txt")
     assert result.success is True
     assert result.files[0].filename == "notes.txt"
     assert await asyncio.to_thread(target.read_bytes) == b"hello uploads"

@@ -17,7 +17,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from app.channels.message_bus import InboundMessage
+    from app.inbound_message import InboundMessage
 
 logger = logging.getLogger(__name__)
 

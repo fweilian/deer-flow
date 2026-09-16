@@ -89,8 +89,8 @@ class ChannelRunPolicy:
             :meth:`ChannelManager._handle_chat_on_thread`) does more than
             log + reply with the generic busy message: the triggering
             message is appended to a per-thread follow-up buffer, and a
-            background watcher subscribes to the active run's
-            ``StreamBridge`` stream so it can coalesce the buffer into a
+            background watcher joins the active run through the Gateway
+            API so it can coalesce the buffer into a
             follow-up run as soon as that run ends. This targets
             ``fire_and_forget`` channels whose ``send`` is otherwise the
             only feedback a busy sender gets (e.g. GitHub, where ``send``

@@ -6,7 +6,6 @@ import asyncio
 import logging
 import math
 import os
-from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -21,7 +20,6 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from deerflow.config.app_config import AppConfig
     from deerflow.config.channel_connections_config import ChannelConnectionsConfig
-    from deerflow.runtime import StreamBridge
 
 # Channel name → import path for lazy loading
 _CHANNEL_REGISTRY: dict[str, str] = {
@@ -124,7 +122,6 @@ class ChannelService:
         connection_repo: Any | None = None,
         require_bound_identity: bool = False,
         app_config: AppConfig | None = None,
-        get_stream_bridge: Callable[[], StreamBridge | None] | None = None,
     ) -> None:
         config = dict(channels_config or {})
         inbound_queue_maxsize = _resolve_positive_int(config, "inbound_queue_maxsize", DEFAULT_INBOUND_QUEUE_MAXSIZE)
@@ -133,7 +130,6 @@ class ChannelService:
         self.bus = MessageBus(inbound_queue_maxsize=inbound_queue_maxsize)
         self.store = ChannelStore()
         self._connection_repo = connection_repo
-        self._get_stream_bridge = get_stream_bridge
         langgraph_url = _resolve_service_url(config, "langgraph_url", _CHANNELS_LANGGRAPH_URL_ENV, DEFAULT_LANGGRAPH_URL)
         gateway_url = _resolve_service_url(config, "gateway_url", _CHANNELS_GATEWAY_URL_ENV, DEFAULT_GATEWAY_URL)
         default_session = config.pop("session", None)
@@ -152,7 +148,6 @@ class ChannelService:
             connection_repo=connection_repo,
             require_bound_identity=require_bound_identity,
             inbound_dedupe_store=make_inbound_dedupe_store(app_config),
-            get_stream_bridge=get_stream_bridge,
         )
         self._channels: dict[str, Any] = {}  # name -> Channel instance
         self._config = config
@@ -160,19 +155,8 @@ class ChannelService:
         self._readiness_locks: dict[str, asyncio.Lock] = {}
 
     @classmethod
-    def from_app_config(
-        cls,
-        app_config: AppConfig | None = None,
-        *,
-        get_stream_bridge: Callable[[], StreamBridge | None] | None = None,
-    ) -> ChannelService:
-        """Create a ChannelService from the application config.
-
-        ``get_stream_bridge`` is threaded straight through to the
-        ``ChannelManager`` (see its docstring); it is optional so direct
-        callers (including most tests) that don't need follow-up-buffer
-        auto-draining can omit it.
-        """
+    def from_app_config(cls, app_config: AppConfig | None = None) -> ChannelService:
+        """Create a ChannelService from the application config."""
         if app_config is None:
             from deerflow.config.app_config import get_app_config
 
@@ -191,7 +175,6 @@ class ChannelService:
             connection_repo=_make_connection_repo(connection_config),
             require_bound_identity=require_bound_identity,
             app_config=app_config,
-            get_stream_bridge=get_stream_bridge,
         )
 
     async def start(self) -> None:
@@ -553,27 +536,15 @@ def get_channel_service() -> ChannelService | None:
     return _channel_service
 
 
-async def start_channel_service(
-    app_config: AppConfig | None = None,
-    *,
-    get_stream_bridge: Callable[[], StreamBridge | None] | None = None,
-) -> ChannelService:
-    """Create and start the global ChannelService from app config.
-
-    ``get_stream_bridge`` is threaded through to ``ChannelService.from_app_config``
-    -> ``ChannelManager`` so fire_and_forget channels that opt into
-    ``ChannelRunPolicy.buffer_followups_on_busy`` (currently GitHub) can watch
-    a run's completion and auto-drain buffered follow-ups. ``app.py``'s
-    lifespan passes a closure over ``app.state.stream_bridge`` here, the same
-    pattern it already uses for ``ScheduledTaskService``'s ``launch_run``.
-    """
+async def start_channel_service(app_config: AppConfig | None = None) -> ChannelService:
+    """Create and start the global ChannelService from app config."""
     global _channel_service
     if _channel_service is not None:
         return _channel_service
     # from_app_config reads the JSON channel store and runtime config files;
     # keep that disk IO off the event loop. asyncio.to_thread forwards both
     # args and kwargs to the target callable.
-    _channel_service = await asyncio.to_thread(ChannelService.from_app_config, app_config, get_stream_bridge=get_stream_bridge)
+    _channel_service = await asyncio.to_thread(ChannelService.from_app_config, app_config)
     await _channel_service.start()
     return _channel_service
 
