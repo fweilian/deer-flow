@@ -2548,7 +2548,7 @@ def test_start_run_stamps_internal_owner_guardrail_attribution(_stub_app_config)
     assert context["user_role"] == "user"
     assert context["oauth_provider"] == "keycloak"
     assert context["oauth_id"] == "subject-123"
-    assert "channel_user_id" not in context
+    assert context["channel_user_id"] == "trusted-im-sender"
     assert context["is_internal"] is True
 
 
@@ -3361,7 +3361,7 @@ def _assemble_authz_run_config(request_config: dict, request, *, body_context: d
     merge_run_context_overrides(config, body_context, internal=is_internal)
     if not is_internal:
         strip_internal_context_keys(config)
-    inject_authenticated_user_context(config, request)
+    inject_authenticated_user_context(config, request, request_context=body_context)
     return config
 
 
@@ -3484,14 +3484,14 @@ class TestInjectAuthenticatedUserContextAuthz:
         assert "channel_user_id" not in config["context"]
         assert "channel_user_id" not in config["configurable"]
 
-    def test_internal_body_context_ignores_channel_user_id(self):
+    def test_internal_body_context_preserves_channel_user_id(self):
         request = _make_request_with_auth_source(AUTH_SOURCE_INTERNAL)
         config = _assemble_authz_run_config(
             {},
             request,
             body_context={"channel_user_id": "trusted-im-sender"},
         )
-        assert "channel_user_id" not in config["context"]
+        assert config["context"]["channel_user_id"] == "trusted-im-sender"
 
     def test_internal_config_sections_cannot_override_channel_user_id(self):
         request = _make_request_with_auth_source(AUTH_SOURCE_INTERNAL)
@@ -3503,7 +3503,7 @@ class TestInjectAuthenticatedUserContextAuthz:
             request,
             body_context={"channel_user_id": "trusted-im-sender"},
         )
-        assert "channel_user_id" not in config["context"]
+        assert config["context"]["channel_user_id"] == "trusted-im-sender"
         assert "channel_user_id" not in config["configurable"]
 
     def test_non_dict_context_raises_type_error(self):

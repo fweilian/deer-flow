@@ -3828,7 +3828,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == "123456"
-        assert "channel_user_id" not in run_context
+        assert run_context["channel_user_id"] == "123456"
 
     def test_resolve_run_params_plumbs_channel_name_into_run_context(self):
         """``channel_name`` must land on ``run_context`` so in-graph code can
@@ -3890,7 +3890,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == "deerflow-user-1"
-        assert "channel_user_id" not in run_context
+        assert run_context["channel_user_id"] == "U-platform"
 
     def test_github_channel_gets_raised_recursion_limit(self):
         """Autonomous GitHub coding runs (clone → edit → test → push → PR) need
@@ -4014,7 +4014,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == AUTH_DISABLED_USER_ID
-        assert "channel_user_id" not in run_context
+        assert run_context["channel_user_id"] == "U-platform"
 
         from app.channels.manager import _owner_headers
 
@@ -4038,7 +4038,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == AUTH_DISABLED_USER_ID
-        assert "channel_user_id" not in run_context
+        assert run_context["channel_user_id"] == "U-platform"
 
     def test_unbound_channel_messages_keep_platform_user_id_when_auth_is_enabled(self, monkeypatch):
         from app.channels.manager import _owner_headers
@@ -4050,7 +4050,7 @@ class TestResolveRunParamsUserId:
         _, _, run_context = manager._resolve_run_params(msg, "thread-1")
 
         assert run_context["user_id"] == "U-platform"
-        assert "channel_user_id" not in run_context
+        assert run_context["channel_user_id"] == "U-platform"
         assert _owner_headers(msg) is None
 
     def test_unsafe_user_id_is_normalized_but_raw_preserved(self, monkeypatch):
@@ -4065,7 +4065,7 @@ class TestResolveRunParamsUserId:
 
         assert run_context["user_id"] == make_safe_user_id(raw)
         assert run_context["user_id"] != raw
-        assert "channel_user_id" not in run_context
+        assert run_context["channel_user_id"] == raw
 
     def test_unsafe_user_id_migrates_unique_legacy_bucket(self, tmp_path, monkeypatch):
         from deerflow.config.paths import Paths, make_safe_user_id
@@ -5156,7 +5156,7 @@ class TestChannelManagerBoundIdentityPolicy:
             mock_client.runs.wait.assert_called_once()
             run_context = mock_client.runs.wait.call_args.kwargs["context"]
             assert run_context["user_id"] == "deerflow-user-1"
-            assert "channel_user_id" not in run_context
+            assert run_context["channel_user_id"] == "U-platform"
 
         _run(go())
 
@@ -5284,7 +5284,7 @@ class TestChannelManagerBoundIdentityPolicy:
             mock_client.runs.wait.assert_called_once()
             run_context = mock_client.runs.wait.call_args.kwargs["context"]
             assert run_context["user_id"] == AUTH_DISABLED_USER_ID
-            assert "channel_user_id" not in run_context
+            assert run_context["channel_user_id"] == "U-platform"
 
         _run(go())
 
@@ -5313,7 +5313,7 @@ class TestChannelManagerBoundIdentityPolicy:
             mock_client.runs.wait.assert_called_once()
             run_context = mock_client.runs.wait.call_args.kwargs["context"]
             assert run_context["user_id"] == "U-platform"
-            assert "channel_user_id" not in run_context
+            assert run_context["channel_user_id"] == "U-platform"
 
         _run(go())
 
@@ -5517,9 +5517,9 @@ class TestChannelManagerConnectionRouting:
             first_context = mock_client.runs.wait.call_args_list[0].kwargs["context"]
             second_context = mock_client.runs.wait.call_args_list[1].kwargs["context"]
             assert first_context["user_id"] == "alice"
-            assert "channel_user_id" not in first_context
+            assert first_context["channel_user_id"] == "U-alice"
             assert second_context["user_id"] == "bob"
-            assert "channel_user_id" not in second_context
+            assert second_context["channel_user_id"] == "U-bob"
 
             first_create_headers = mock_client.threads.create.call_args_list[0].kwargs["headers"]
             second_create_headers = mock_client.threads.create.call_args_list[1].kwargs["headers"]

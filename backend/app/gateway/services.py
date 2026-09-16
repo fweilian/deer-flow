@@ -663,6 +663,7 @@ def inject_authenticated_user_context(
     request: Request,
     *,
     internal_owner_user: Any | None = None,
+    request_context: Mapping[str, Any] | None = None,
 ) -> None:
     """Stamp the authenticated user into the run context for background tools.
 
@@ -670,6 +671,9 @@ def inject_authenticated_user_context(
     that persist user-scoped files should not rely only on ambient ContextVars.
     The value comes from server-side auth state, never from client context.
 
+    Only an internally authenticated channel caller may provide the raw
+    platform identity in the top-level request context. It is kept in the
+    runtime context, never in checkpointed ``configurable`` state.
     """
 
     # --- Server-owned authorization and sandbox lifecycle identity fields ---
@@ -699,6 +703,10 @@ def inject_authenticated_user_context(
         if isinstance(configurable, dict):
             configurable.pop("user_id", None)
     runtime_context["is_internal"] = auth_source == AUTH_SOURCE_INTERNAL
+    if auth_source == AUTH_SOURCE_INTERNAL and request_context is not None:
+        channel_user_id = request_context.get("channel_user_id")
+        if channel_user_id is not None:
+            runtime_context["channel_user_id"] = channel_user_id
 
     user = getattr(request.state, "user", None)
     user_id = getattr(user, "id", None)
@@ -1581,6 +1589,7 @@ async def start_run(
             config,
             request,
             internal_owner_user=internal_owner_user,
+            request_context=getattr(body, "context", None),
         )
 
         conversation_references = list(getattr(body, "conversation_references", None) or [])

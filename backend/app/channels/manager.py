@@ -1445,6 +1445,8 @@ class ChannelManager:
         run_user_id = _channel_storage_user_id(msg)
         if run_user_id:
             run_context_identity["user_id"] = run_user_id
+        if msg.user_id:
+            run_context_identity["channel_user_id"] = msg.user_id
 
         run_context = _merge_dicts(
             DEFAULT_RUN_CONTEXT,

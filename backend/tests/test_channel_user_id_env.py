@@ -2,7 +2,7 @@
 
 Two halves:
 - Gateway: only an internally authenticated caller's top-level ``body.context``
-  cannot supply the legacy ``channel_user_id`` runtime value.
+  may supply ``channel_user_id``; free-form RunnableConfig values are cleared.
 - Sandbox: ``bash_tool`` exposes the id as the fixed env var
   ``DEERFLOW_CHANNEL_USER_ID`` via an ``export`` prefix on the command string.
   It must NOT ride the ``env=`` parameter: on ``AioSandbox`` a non-empty env
@@ -61,7 +61,21 @@ class TestGatewayChannelUserIdTrustBoundary:
             )
         )
 
-    def test_legacy_channel_user_id_is_cleared(self):
+    def test_internal_channel_user_id_propagates_to_runtime_context_only(self):
+        from app.gateway.services import build_run_config, inject_authenticated_user_context
+
+        config = build_run_config("thread-1", None, None)
+        inject_authenticated_user_context(
+            config,
+            self._request("internal"),
+            request_context={"channel_user_id": "ou_feishu_123"},
+        )
+
+        assert config["context"]["channel_user_id"] == "ou_feishu_123"
+        # Never into configurable: that mapping is checkpointed with the thread.
+        assert "channel_user_id" not in config["configurable"]
+
+    def test_free_form_config_value_cannot_override_internal_sender(self):
         from app.gateway.services import build_run_config, inject_authenticated_user_context
 
         config = build_run_config(
@@ -69,10 +83,21 @@ class TestGatewayChannelUserIdTrustBoundary:
             {"context": {"channel_user_id": "forged-config-sender"}},
             None,
         )
-        inject_authenticated_user_context(config, self._request("internal"))
+        inject_authenticated_user_context(
+            config,
+            self._request("internal"),
+            request_context={"channel_user_id": "trusted-im-sender"},
+        )
 
-        assert "channel_user_id" not in config["context"]
-        assert "channel_user_id" not in config["configurable"]
+        assert config["context"]["channel_user_id"] == "trusted-im-sender"
+
+    def test_absent_channel_user_id_adds_nothing(self):
+        from app.gateway.services import build_run_config, inject_authenticated_user_context
+
+        config = build_run_config("thread-1", None, None)
+        inject_authenticated_user_context(config, self._request("internal"), request_context={"model_name": "gpt"})
+
+        assert "channel_user_id" not in config.get("context", {})
 
 
 class TestBashToolChannelIdentityPrefix:
