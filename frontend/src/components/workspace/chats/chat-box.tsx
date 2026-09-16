@@ -27,7 +27,6 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 
 import { useArtifacts } from "../artifacts/context";
-import { useMaybeBrowserView } from "../browser-view/context";
 import { useThread } from "../messages/context";
 import { useMaybeSidecar } from "../sidecar/context";
 
@@ -55,13 +54,6 @@ const ArtifactFileList = dynamic(
     ),
   { loading: RightPanelLoading },
 );
-const BrowserViewPanel = dynamic(
-  () =>
-    import("../browser-view/browser-view-panel").then(
-      (module) => module.BrowserViewPanel,
-    ),
-  { loading: RightPanelLoading },
-);
 const SidecarPanel = dynamic(
   () =>
     import("../sidecar/sidecar-panel").then((module) => module.SidecarPanel),
@@ -71,13 +63,12 @@ const SidecarPanel = dynamic(
 const RIGHT_PANEL_ANIMATION_MS = 280;
 const RIGHT_PANEL_DEFAULT_SIZE = "40%";
 
-type RightPanelKind = "sidecar" | "artifacts" | "browser";
+type RightPanelKind = "sidecar" | "artifacts";
 
 const ChatBox: React.FC<{
   children: React.ReactNode;
   threadId: string;
-  browserEnabled?: boolean;
-}> = ({ children, threadId, browserEnabled = true }) => {
+}> = ({ children, threadId }) => {
   const { thread } = useThread();
   const isMobile = useIsMobile();
   const pathname = usePathname();
@@ -94,8 +85,6 @@ const ChatBox: React.FC<{
   } = useArtifacts();
   const sidecar = useMaybeSidecar();
   const sidecarOpen = sidecar?.open ?? false;
-  const browserView = useMaybeBrowserView();
-  const browserViewOpen = browserEnabled && (browserView?.open ?? false);
 
   const [autoSelectFirstArtifact, setAutoSelectFirstArtifact] = useState(true);
   useEffect(() => {
@@ -154,11 +143,9 @@ const ChatBox: React.FC<{
 
   const activeRightPanel: RightPanelKind | null = sidecarOpen
     ? "sidecar"
-    : browserViewOpen
-      ? "browser"
-      : artifactPanelOpen
-        ? "artifacts"
-        : null;
+    : artifactPanelOpen
+      ? "artifacts"
+      : null;
   const rightPanelOpen = activeRightPanel !== null;
   const [renderedRightPanel, setRenderedRightPanel] =
     useState<RightPanelKind | null>(activeRightPanel);
@@ -210,13 +197,11 @@ const ChatBox: React.FC<{
       // that reaches the edge and then reverses before release.
       if (activeRightPanel === "sidecar") {
         sidecar?.close();
-      } else if (activeRightPanel === "browser") {
-        browserView?.close();
       } else if (activeRightPanel === "artifacts") {
         setArtifactsOpen(false);
       }
     },
-    [activeRightPanel, browserView, resizableIdBase, setArtifactsOpen, sidecar],
+    [activeRightPanel, resizableIdBase, setArtifactsOpen, sidecar],
   );
 
   useEffect(() => {
@@ -279,16 +264,7 @@ const ChatBox: React.FC<{
     }
   }, [artifactsOpen, setArtifactsOpen, sidecarOpen]);
 
-  useEffect(() => {
-    if (!browserEnabled && browserView?.open) {
-      browserView.close();
-    }
-  }, [browserEnabled, browserView]);
-
   const rightPanelContent = useMemo(() => {
-    if (renderedRightPanel === "browser") {
-      return <BrowserViewPanel threadId={threadId} className="size-full" />;
-    }
     if (renderedRightPanel === "sidecar") {
       return <SidecarPanel />;
     }
@@ -360,9 +336,6 @@ const ChatBox: React.FC<{
             if (sidecarOpen) {
               sidecar?.close();
             }
-            if (browserViewOpen) {
-              browserView?.close();
-            }
             if (artifactsOpen) {
               setArtifactsOpen(false);
             }
@@ -374,11 +347,7 @@ const ChatBox: React.FC<{
           >
             <SheetHeader className="sr-only">
               <SheetTitle>
-                {renderedRightPanel === "sidecar"
-                  ? "Sidecar"
-                  : renderedRightPanel === "browser"
-                    ? "Browser"
-                    : "Artifacts"}
+                {renderedRightPanel === "sidecar" ? "Sidecar" : "Artifacts"}
               </SheetTitle>
               <SheetDescription>
                 Browse the side panel for this conversation.

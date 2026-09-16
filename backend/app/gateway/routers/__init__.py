@@ -1,6 +1,5 @@
 from . import (
     artifacts,
-    browser,
     mcp,
     models,
     scheduled_tasks,
@@ -13,7 +12,6 @@ from . import (
 
 __all__ = [
     "artifacts",
-    "browser",
     "mcp",
     "models",
     "scheduled_tasks",

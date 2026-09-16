@@ -48,7 +48,6 @@ export async function staticApiResponse(
     case "features":
       data = {
         agents_api: { enabled: false },
-        browser_control: { enabled: false },
         mcp_tasks: { enabled: false },
         subagent_batches: {
           enabled: false,

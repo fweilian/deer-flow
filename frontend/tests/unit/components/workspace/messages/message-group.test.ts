@@ -318,49 +318,6 @@ describe("MessageGroup", () => {
     expect(html).not.toContain("Check how processing groups convert messages.");
   });
 
-  it("defers browser screenshot previews while the thread is loading", () => {
-    const messages = [
-      {
-        id: "ai-1",
-        type: "ai",
-        content: "",
-        tool_calls: [
-          {
-            id: "call-1",
-            name: "browser_navigate",
-            args: { url: "https://github.com/bytedance/deer-flow" },
-          },
-        ],
-      } as Message,
-      {
-        id: "tool-1",
-        type: "tool",
-        name: "browser_navigate",
-        tool_call_id: "call-1",
-        content: "Opened",
-        additional_kwargs: {
-          browser_view: {
-            screenshot: "/mnt/user-data/outputs/browser.png",
-            url: "https://github.com/bytedance/deer-flow",
-          },
-        },
-      } as Message,
-    ];
-
-    const visibleHtml = renderGroup(messages, {
-      threadId: "thread-1",
-      deferBrowserPreviews: false,
-    });
-    const deferredHtml = renderGroup(messages, {
-      threadId: "thread-1",
-      deferBrowserPreviews: true,
-    });
-
-    expect(visibleHtml).toContain("<img");
-    expect(visibleHtml).toContain('decoding="async"');
-    expect(deferredHtml).not.toContain("<img");
-  });
-
   it("keeps the first non-empty result for a tool call and skips task calls", () => {
     const html = renderGroup([
       {
@@ -406,66 +363,6 @@ describe("MessageGroup", () => {
     expect(html).toContain("First fetched title");
     expect(html).not.toContain("Later fetched title");
     expect(html).not.toContain("Do not render this subagent call");
-  });
-
-  it("keeps the first browser view that includes a screenshot", () => {
-    const html = renderGroup(
-      [
-        {
-          id: "ai-1",
-          type: "ai",
-          content: "",
-          tool_calls: [
-            {
-              id: "call-browser",
-              name: "browser_navigate",
-              args: { url: "https://example.com" },
-            },
-          ],
-        } as Message,
-        {
-          id: "tool-without-shot",
-          type: "tool",
-          name: "browser_navigate",
-          tool_call_id: "call-browser",
-          content: "Opened without a preview.",
-          additional_kwargs: {
-            browser_view: { url: "https://example.com" },
-          },
-        } as Message,
-        {
-          id: "tool-first-shot",
-          type: "tool",
-          name: "browser_navigate",
-          tool_call_id: "call-browser",
-          content: "Opened with the first preview.",
-          additional_kwargs: {
-            browser_view: {
-              screenshot: "/mnt/user-data/outputs/first-browser.png",
-              url: "https://example.com/first",
-            },
-          },
-        } as Message,
-        {
-          id: "tool-later-shot",
-          type: "tool",
-          name: "browser_navigate",
-          tool_call_id: "call-browser",
-          content: "Opened with a later preview.",
-          additional_kwargs: {
-            browser_view: {
-              screenshot: "/mnt/user-data/outputs/later-browser.png",
-              url: "https://example.com/later",
-            },
-          },
-        } as Message,
-      ],
-      { threadId: "thread-1" },
-    );
-
-    expect(html).toContain("first-browser.png");
-    expect(html).not.toContain("later-browser.png");
-    expect(html).toContain("https://example.com/first");
   });
 
   it("renders the earliest JSON tool result after an empty streamed update", () => {

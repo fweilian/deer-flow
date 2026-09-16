@@ -157,7 +157,6 @@ def test_archive_manifest_counts_only_verified_delivery_paths(tmp_path, monkeypa
         "/mnt/user-data/uploads/private.txt",
         "/mnt/user-data/outputs/../uploads/private.txt",
         "/mnt/user-data/outputs/.tool-results/raw.txt",
-        "/mnt/user-data/outputs/.browser-frames/frame.png",
     ],
 )
 def test_archive_rejects_paths_outside_public_outputs(

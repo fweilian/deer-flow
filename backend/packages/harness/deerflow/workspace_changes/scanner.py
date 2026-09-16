@@ -6,7 +6,7 @@ import os
 from codecs import BOM_UTF16_BE, BOM_UTF16_LE, getincrementaldecoder
 from pathlib import Path
 
-from deerflow.constants import BROWSER_FRAMES_DIRNAME, MCP_INTERNAL_DIRNAME, TOOL_RESULTS_DIRNAME
+from deerflow.constants import MCP_INTERNAL_DIRNAME, TOOL_RESULTS_DIRNAME
 
 from .types import (
     DiffUnavailableReason,
@@ -27,10 +27,6 @@ EXCLUDED_DIR_NAMES = {
     MCP_INTERNAL_DIRNAME,
     ".next",
     ".venv",
-    # Transient per-step browser screenshots: live progress feedback surfaced in
-    # the browser panel + inline thumbnails, not workspace deliverables. Shared
-    # constant with the browser tools so the name cannot drift out of sync.
-    BROWSER_FRAMES_DIRNAME,
     # Externalized oversized tool outputs (the tool-output budget middleware's
     # default storage_subdir): process feedback the model reads back via
     # read_file, not workspace deliverables — same intent as the browser frames

@@ -272,20 +272,6 @@ def test_scan_workspace_roots_skips_stdio_mcp_temp_files(tmp_path):
     assert "/mnt/user-data/workspace/project/.mcp/nested.json" not in snapshot.files
 
 
-def test_scan_workspace_roots_skips_browser_frames(tmp_path):
-    roots = _roots(tmp_path)
-    outputs = roots[1].host_path
-    (outputs / "report.md").write_text("keep", encoding="utf-8")
-    frames = outputs / ".browser-frames"
-    frames.mkdir()
-    (frames / "browser-navigate-1.png").write_bytes(b"\x89PNG\r\n\x1a\nshot")
-
-    snapshot = scan_workspace_roots(roots)
-
-    assert "/mnt/user-data/outputs/report.md" in snapshot.files
-    assert "/mnt/user-data/outputs/.browser-frames/browser-navigate-1.png" not in snapshot.files
-
-
 def test_scan_workspace_roots_skips_externalized_tool_results(tmp_path):
     roots = _roots(tmp_path)
     outputs = roots[1].host_path

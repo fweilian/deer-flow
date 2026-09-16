@@ -39,7 +39,6 @@ postgres = ["deerflow-harness[postgres]"]
 redis = ["deerflow-harness[redis]"]
 monocle = ["deerflow-harness[monocle]"]
 ollama = ["deerflow-harness[ollama]"]
-browser = ["deerflow-harness[browser]"]
 memory-zh = ["deerflow-harness[memory-zh]"]
 
 [dependency-groups]

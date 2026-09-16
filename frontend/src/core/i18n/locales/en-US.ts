@@ -60,8 +60,6 @@ export const enUS: Translations = {
       "Rerunning restores conversation state only. Files, memory, and external actions are not undone.",
     branch: "Branch conversation",
     showArtifacts: "Show artifacts of this conversation",
-    browser: "Browser",
-    showBrowser: "Open browser panel",
   },
 
   runDuration: {
@@ -823,15 +821,6 @@ export const enUS: Translations = {
     clickToViewContent: "Click to view file content",
     writeTodos: "Update to-do list",
     skillInstallTooltip: "Install skill and make it available to DeerFlow",
-    browserNavigate: (url: string) => `Open ${url} in browser`,
-    browserNavigateGeneric: "Open page in browser",
-    browserClick: "Click element in browser",
-    browserType: "Type into browser field",
-    browserSnapshot: "Read page in browser",
-    browserGetText: "Read page text in browser",
-    browserBack: "Go back in browser",
-    browserScreenshot: "Capture browser screenshot",
-    browserClose: "Close browser",
   },
 
   humanInput: {

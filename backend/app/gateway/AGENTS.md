@@ -65,7 +65,7 @@ owner-scoped assistant version selection remains enabled.
 | Router | Endpoints |
 |--------|-----------|
 | **Models** (`/api/models`) | `GET /` - list models; `GET /{name}` - model details |
-| **Features** (`/api/features`) | `GET /` - UI capabilities: hot-reloaded agents, guarded browser, startup MCP tasks, and separate batch repository/worker states so history stays readable without a worker |
+| **Features** (`/api/features`) | `GET /` - UI capabilities: hot-reloaded agents, startup MCP tasks, and separate batch repository/worker states so history stays readable without a worker |
 | **Console** (`/api/console`) | Read-only cross-thread observability for the current user (the data layer for an operations dashboard or external monitoring): `GET /stats` - headline counters (runs/threads/agents/tokens/cost); `GET /runs` - paginated run history joined with thread titles (per-run cost); `GET /usage` - zero-filled daily token series + per-model breakdown with spend. Queries `runs`/`threads_meta` directly as a reporting layer (no new `RunStore` methods); requires a SQL database backend — returns 503 on `database.backend: memory`. Real-cost estimation reads optional `models[*].pricing` (`currency`, `input_per_million`, `output_per_million`, `input_cache_hit_per_million`; `ModelConfig` is `extra="allow"`, so no schema change) and prices each run from its `token_usage_by_model` input/output split. Pricing is **cache-aware**: `RunJournal` accumulates prompt-cache hits from `usage_metadata.input_token_details.cache_read` into a sparse `cache_read_tokens` bucket key (also threaded through `SubagentTokenCollector` → `record_external_llm_usage_records`), and cache-hit input tokens are billed at `input_cache_hit_per_million` (omitted → billed at the miss price, a conservative upper bound). All priced models must use one currency; mixed currencies disable cost reporting and leave cost/currency fields null instead of producing invalid aggregates. Legacy rows fall back to run-level totals at `model_name`; unpriced models yield `cost: null` and cost fields are null when no pricing is configured |
 | **MCP** (`/api/mcp`) | GET /config - raw/masked; PUT /config - bulk; PATCH /config - toggle; POST /config/servers - add; PUT /config/server - replace; DELETE /config/servers/{server_name:path} - bodyless. Validate expanded, save raw; reload/reset; invalid -> 400. |
 | **MCP Tasks** (`/api/threads/{id}/mcp-tasks`) | `GET /` - current user's durable tasks for one owned thread; `GET /{task_id}` - bounded result/input/status-error/cancellation-error detail, including cancellation attempt count, without remote task IDs or driver configuration |
@@ -110,8 +110,7 @@ captures a pre-run and post-run snapshot of the thread-owned `workspace` and
 `workspace` when changes exist. Uploads are intentionally excluded. Text diffs
 are size-limited; binary, large, and sensitive-looking paths are persisted as
 metadata only. Internal process-feedback directories never count as changes:
-the scanner's `EXCLUDED_DIR_NAMES` drops `BROWSER_FRAMES_DIRNAME` (transient
-browser screenshots) and `TOOL_RESULTS_DIRNAME` (the tool-output budget
+the scanner's `EXCLUDED_DIR_NAMES` drops `TOOL_RESULTS_DIRNAME` (the tool-output budget
 middleware's default externalization subdir, `constants.py` is the shared
 source of truth for both writers and the scanner), and the worker threads the
 configured `tool_output.storage_subdir` through the snapshot capture as an

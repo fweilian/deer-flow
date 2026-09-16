@@ -9,13 +9,6 @@ CONVERSATION_TOOL_USE = "deerflow.tools.conversation:read_conversation"
 # The Gateway sizes reader pages by this tool's tool-output budget entry.
 CONVERSATION_TOOL_NAME = "read_conversation"
 
-# Hidden subdirectory (under a thread's outputs dir) that holds the browser
-# tools' per-step screenshots. These are transient live-progress frames, not
-# deliverables, so the workspace-changes scanner excludes this directory. Both
-# the browser tools (which write here) and the scanner (which ignores it) import
-# this single source of truth so the name cannot drift between them.
-BROWSER_FRAMES_DIRNAME = ".browser-frames"
-
 # Default subdirectory (under a thread's outputs dir) where the tool-output
 # budget middleware persists oversized tool outputs. These are process
 # feedback the model reads back via ``read_file`` (the budget preview carries

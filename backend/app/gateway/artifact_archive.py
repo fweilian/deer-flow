@@ -14,7 +14,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import BinaryIO
 
-from deerflow.constants import BROWSER_FRAMES_DIRNAME, TOOL_RESULTS_DIRNAME
+from deerflow.constants import TOOL_RESULTS_DIRNAME
 
 _VIRTUAL_PREFIX = "mnt/user-data/outputs/"
 _EDIT_TEMP_PREFIX = ".artifact-edit-"
@@ -240,7 +240,7 @@ def build_artifact_archive(
     if len(paths) > MAX_FILES:
         raise _too_large(f"An artifact archive can contain at most {MAX_FILES} files")
 
-    reserved = frozenset(name.casefold() for name in {BROWSER_FRAMES_DIRNAME, TOOL_RESULTS_DIRNAME, *extra_reserved_dir_names})
+    reserved = frozenset(name.casefold() for name in {TOOL_RESULTS_DIRNAME, *extra_reserved_dir_names})
     members = [_member(root, path, reserved, deadline, root_components) for path in paths]
     collision_keys = [unicodedata.normalize("NFC", member.entry).casefold() for member in members]
     if len(collision_keys) != len(set(collision_keys)):

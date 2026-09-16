@@ -130,14 +130,14 @@ def test_no_uv_extras_yields_empty_flags():
 def test_no_explicit_extras_uses_the_runtime_selected_config(tmp_path: Path):
     config_path = tmp_path / "deployment.yaml"
     config_path.write_text(
-        "database:\n  backend: postgres\ntools:\n  - name: browser_navigate\n",
+        "database:\n  backend: postgres\n",
         encoding="utf-8",
     )
 
     proc = _run(None, config_path=config_path)
 
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "--extra browser --extra postgres"
+    assert proc.stdout.strip() == "--extra postgres"
 
 
 def test_single_extra():
@@ -168,10 +168,10 @@ def test_explicit_extras_override_config_and_are_deduplicated(tmp_path: Path):
     config_path = tmp_path / "deployment.yaml"
     config_path.write_text("database:\n  backend: postgres\n", encoding="utf-8")
 
-    proc = _run("redis,redis browser redis", config_path=config_path)
+    proc = _run("redis,redis postgres redis", config_path=config_path)
 
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "--extra redis --extra browser"
+    assert proc.stdout.strip() == "--extra redis --extra postgres"
 
 
 def test_explicit_extras_keep_runtime_required_redis_without_duplicates():

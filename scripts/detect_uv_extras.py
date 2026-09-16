@@ -11,7 +11,6 @@ Order of resolution:
    - database.backend == postgres        -> postgres
    - checkpointer.type == postgres       -> postgres
    - stream_bridge.type == redis         -> redis
-   - tools[].name == browser_navigate    -> browser
    - sandbox.ownership.type == redis     -> redis
    - models[].use == langchain_ollama:*  -> ollama
 3. Runtime environment toggles that enable optional backends:
@@ -78,7 +77,6 @@ def find_config_file() -> Path | None:
 _SECTION_RE = re.compile(r"^([A-Za-z_][\w-]*)\s*:\s*$")
 _INDENTED_SECTION_RE = re.compile(r"^\s+([A-Za-z_][\w-]*)\s*:\s*$")
 _KEY_RE = re.compile(r"^\s+([A-Za-z_][\w-]*)\s*:\s*(\S.*?)\s*$")
-_LIST_ITEM_NAME_RE = re.compile(r"^\s*-\s+name\s*:\s*(\S.*?)\s*$")
 # `use:` on a models list item, whether it is the first key (`- use: X`) or a
 # later one (`  use: X`). Leading whitespace is optional because
 # `yaml.safe_dump` (the setup wizard, config-upgrade.sh) writes list items
@@ -240,32 +238,6 @@ def nested_section_value(lines: list[str], section_path: str, key: str) -> str |
     return None
 
 
-def tools_include_name(lines: list[str], tool_name: str) -> bool:
-    """Return True when the top-level tools list has an active item name."""
-    inside = False
-    for raw in lines:
-        line = _strip_comment(raw)
-        if not line.strip():
-            continue
-        sect_match = _SECTION_RE.match(line)
-        if sect_match:
-            inside = sect_match.group(1) == "tools"
-            continue
-        if not inside:
-            continue
-        name_match = _LIST_ITEM_NAME_RE.match(line)
-        if name_match:
-            if _unquote(name_match.group(1).strip()) == tool_name:
-                return True
-            continue
-        stripped = line.lstrip()
-        indent = len(line) - len(stripped)
-        if indent == 0:
-            inside = False
-            continue
-    return False
-
-
 def models_use_providers(lines: list[str]) -> set[str]:
     """Return provider modules referenced by `models[].use`.
 
@@ -339,8 +311,6 @@ def detect_from_config(path: Path) -> list[str]:
         nested_section_value(lines, "sandbox.ownership", "type") or ""
     ).lower() == "redis":
         extras.add("redis")
-    if tools_include_name(lines, "browser_navigate"):
-        extras.add("browser")
     for provider in models_use_providers(lines):
         extra = _PROVIDER_EXTRAS.get(provider)
         if extra is not None:

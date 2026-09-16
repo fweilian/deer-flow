@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from fastapi import FastAPI, HTTPException, Request
 from langgraph.types import Checkpointer
 
-from deerflow.community.browser_automation.session import browser_multi_worker_error
 from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.persistence.feedback import FeedbackRepository
 from deerflow.runtime import ORPHAN_RECOVERY_STOP_REASON, STARTUP_ORPHAN_RECOVERY_ERROR, RunContext, RunManager, StreamBridge
@@ -47,14 +46,6 @@ logger = logging.getLogger(__name__)
 _RUN_DRAIN_TIMEOUT_SECONDS = 5.0
 
 
-def _browser_tools_enabled_in_config(config: AppConfig) -> bool:
-    """Return whether process-local agentic browser sessions are configured."""
-    get_tool_config = getattr(config, "get_tool_config", None)
-    if callable(get_tool_config):
-        return get_tool_config("browser_navigate") is not None
-    return any(getattr(tool, "name", None) == "browser_navigate" for tool in (getattr(config, "tools", None) or []))
-
-
 def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
     """Refuse unsafe multi-process configurations before persistence starts.
 
@@ -63,14 +54,11 @@ def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
 
     1. The background scheduler must be disabled for ordinary multi-worker
        mode. ``scheduler.multi_instance`` opts into the lease-aware path.
-    2. Process-local browser sessions must be disabled. Browser tools keep
-       Chromium and Playwright objects in one worker's memory, while ordinary
-       uvicorn dispatch provides no thread-id affinity.
-    3. The DB backend must be Postgres — SQLite write-locks cannot support
+    2. The DB backend must be Postgres — SQLite write-locks cannot support
        concurrent multi-process access.
-    4. ``run_events.backend`` must be ``db``. Memory and JSONL stores are
+    3. ``run_events.backend`` must be ``db``. Memory and JSONL stores are
        process-local, so workers cannot enforce a shared singleton receipt.
-    5. ``run_ownership.heartbeat_enabled`` must be True — without heartbeat,
+    4. ``run_ownership.heartbeat_enabled`` must be True — without heartbeat,
        every run has a NULL lease, so reconciliation treats all inflight
        runs as orphans and Worker B would kill Worker A's live runs on
        every rolling update or scale-up.
@@ -104,9 +92,6 @@ def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
 
     if config.scheduler.enabled and not multi_instance_scheduler:
         raise SystemExit(f"GATEWAY_WORKERS={workers} cannot run with scheduler.enabled=true because each worker starts its own scheduler. Set GATEWAY_WORKERS=1, scheduler.multi_instance=true, or scheduler.enabled=false.")
-
-    if _browser_tools_enabled_in_config(config):
-        raise SystemExit(browser_multi_worker_error(workers))
 
     if backend != "postgres":
         raise SystemExit(f"GATEWAY_WORKERS={workers} requires database.backend='postgres', but database.backend is '{backend}'. SQLite cannot support concurrent multi-process access. Set GATEWAY_WORKERS=1 or switch to Postgres.")

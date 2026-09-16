@@ -48,8 +48,6 @@ export interface Translations {
     editRerunWarning: string;
     branch: string;
     showArtifacts: string;
-    browser: string;
-    showBrowser: string;
   };
 
   runDuration: {
@@ -690,15 +688,6 @@ export interface Translations {
     clickToViewContent: string;
     writeTodos: string;
     skillInstallTooltip: string;
-    browserNavigate: (url: string) => string;
-    browserNavigateGeneric: string;
-    browserClick: string;
-    browserType: string;
-    browserSnapshot: string;
-    browserGetText: string;
-    browserBack: string;
-    browserScreenshot: string;
-    browserClose: string;
   };
 
   humanInput: {

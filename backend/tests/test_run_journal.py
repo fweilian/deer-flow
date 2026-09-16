@@ -2230,41 +2230,6 @@ class TestDeliveryTracking:
         }
 
     @pytest.mark.anyio
-    async def test_command_with_multiple_tool_names_leaves_artifacts_unattributed(self, journal_setup):
-        from langchain_core.messages import ToolMessage
-        from langgraph.types import Command
-
-        j, store = journal_setup
-        self._register_tool_call(j, "call_present", "present_files")
-        self._register_tool_call(j, "call_browser", "browser_screenshot")
-        cmd = Command(
-            update={
-                "artifacts": [
-                    "/mnt/user-data/outputs/report.md",
-                    "/mnt/user-data/outputs/shot.png",
-                ],
-                "messages": [
-                    ToolMessage("Successfully presented files", tool_call_id="call_present"),
-                    ToolMessage("Saved browser screenshot", tool_call_id="call_browser"),
-                ],
-            }
-        )
-        j.on_tool_end(cmd, run_id=uuid4())
-        j.record_delivery()
-        await j.flush()
-
-        events = await store.list_events("t1", "r1")
-        content = next(e for e in events if e["event_type"] == "run.delivery")["content"]
-        assert content == {
-            "presented": 2,
-            "paths": [
-                "/mnt/user-data/outputs/report.md",
-                "/mnt/user-data/outputs/shot.png",
-            ],
-            "by_tool": {},
-        }
-
-    @pytest.mark.anyio
     async def test_error_command_without_artifacts_not_recorded(self, journal_setup):
         from langchain_core.messages import ToolMessage
         from langgraph.types import Command
@@ -2280,28 +2245,6 @@ class TestDeliveryTracking:
         delivery = [e for e in events if e["event_type"] == "run.delivery"]
         assert len(delivery) == 1
         assert delivery[0]["content"] == {"presented": 0, "paths": [], "by_tool": {}}
-
-    @pytest.mark.anyio
-    async def test_browser_tool_artifacts_recorded_under_producing_tool(self, journal_setup):
-        from langchain_core.messages import ToolMessage
-        from langgraph.types import Command
-
-        j, store = journal_setup
-        self._register_tool_call(j, "call_3", "browser_screenshot")
-        cmd = Command(
-            update={
-                "artifacts": ["/mnt/user-data/outputs/shot.png"],
-                "messages": [ToolMessage("Saved browser screenshot", tool_call_id="call_3")],
-            }
-        )
-        j.on_tool_end(cmd, run_id=uuid4())
-        j.record_delivery()
-        await j.flush()
-
-        events = await store.list_events("t1", "r1")
-        content = next(e for e in events if e["event_type"] == "run.delivery")["content"]
-        assert content["presented"] == 1
-        assert content["by_tool"] == {"browser_screenshot": ["/mnt/user-data/outputs/shot.png"]}
 
     @pytest.mark.anyio
     async def test_duplicate_path_tool_pair_recorded_once(self, journal_setup):

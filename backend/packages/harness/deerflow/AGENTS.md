@@ -27,15 +27,6 @@ Accepted divergence: a crash-recovered scheduled launch reuses its run via the i
 
 Tests: the `tests/test_trace_*` and `tests/test_worker_trace_binding.py` suites, `test_gateway_services.py`, `test_run_metadata_secret_safety.py`, plus the Langfuse suites in `tracing/AGENTS.md`.
 
-### Browser Progress Screenshots (`community/browser_automation/`)
-
-Hidden per-action browser progress frames use JPEG at quality 80 to keep their
-storage and transfer cost bounded relative to lossless PNG. The explicit
-`browser_screenshot` tool remains PNG because it creates a user-requested
-artifact. New automatic capture entry points must reuse the shared progress
-encoding definition in `tools.py` so the byte encoding and `.jpg` suffix cannot
-drift.
-
 ### Embedded Client (`packages/harness/deerflow/client.py`)
 
 `DeerFlowClient` provides in-process access without HTTP or a FastAPI dependency. It shares Gateway's `deerflow` modules, config files, data directories, and response schemas for compatible consumers.

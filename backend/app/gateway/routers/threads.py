@@ -761,18 +761,6 @@ async def _delete_thread_data_with_reservation(thread_id: str, request: Request)
     except Exception:
         logger.debug("Could not delete thread_meta for %s (not critical)", sanitize_log_param(thread_id))
 
-    # Tear down any live browser session (best-effort). Sessions are keyed only
-    # by thread_id, so leaving one alive after the owner deletes the thread lets
-    # a later caller who guesses the id reuse the retained page/cookies.
-    try:
-        from deerflow.community.browser_automation import get_browser_session_manager
-
-        await get_browser_session_manager().close_session(thread_id)
-    except ImportError:
-        pass  # Playwright is an optional dependency.
-    except Exception:
-        logger.debug("Could not close browser session for %s (not critical)", sanitize_log_param(thread_id))
-
     return response
 
 

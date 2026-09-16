@@ -102,7 +102,6 @@ export type MockAPIOptions = {
   };
   features?: {
     agentsApiEnabled?: boolean;
-    browserControlEnabled?: boolean;
     mcpTasksEnabled?: boolean;
   };
   runStreamHandler?: (route: Route) => Promise<void>;
@@ -286,7 +285,6 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
   };
   const featureFlags = {
     agentsApiEnabled: options?.features?.agentsApiEnabled ?? true,
-    browserControlEnabled: options?.features?.browserControlEnabled ?? true,
     mcpTasksEnabled: options?.features?.mcpTasksEnabled ?? true,
   };
 
@@ -1326,9 +1324,9 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
     return route.fallback();
   });
 
-  // Feature flags — frontend gates UI (e.g. agents/browser) on these. Default to
-  // enabled so existing tests exercise the normal path; tests that need the
-  // disabled state override this route after calling mockLangGraphAPI.
+  // Feature flags — frontend gates optional UI on these. Default to enabled so
+  // existing tests exercise the normal path; tests that need the disabled state
+  // override this route after calling mockLangGraphAPI.
   void page.route("**/api/features", (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({
@@ -1336,7 +1334,6 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
         contentType: "application/json",
         body: JSON.stringify({
           agents_api: { enabled: featureFlags.agentsApiEnabled },
-          browser_control: { enabled: featureFlags.browserControlEnabled },
           mcp_tasks: { enabled: featureFlags.mcpTasksEnabled },
         }),
       });

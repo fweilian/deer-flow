@@ -445,7 +445,7 @@ def test_default_lead_agent_does_not_apply_installed_skill_allowlists(monkeypatc
     """Installed skills are discoverable but not active for ordinary default chat.
 
     A public skill with ``allowed-tools`` must not globally hide configured
-    tools like ``browser_navigate`` before the user has selected a specific
+    tools before the user has selected a specific
     skill-owned workflow.
     """
     from unittest.mock import MagicMock
@@ -464,7 +464,7 @@ def test_default_lead_agent_does_not_apply_installed_skill_allowlists(monkeypatc
     )
     monkeypatch.setattr(
         "deerflow.tools.get_available_tools",
-        lambda **kwargs: [NamedTool("bash"), NamedTool("browser_navigate"), NamedTool("review_skill_package")],
+        lambda **kwargs: [NamedTool("bash"), NamedTool("web_search"), NamedTool("review_skill_package")],
     )
 
     mock_app_config = MagicMock()
@@ -480,7 +480,7 @@ def test_default_lead_agent_does_not_apply_installed_skill_allowlists(monkeypatc
     agent_kwargs = lead_agent_module.make_lead_agent({"configurable": {}})
 
     tool_names = [tool.name for tool in agent_kwargs["tools"]]
-    assert "browser_navigate" in tool_names
+    assert "web_search" in tool_names
     assert "bash" in tool_names
     assert "describe_skill" in tool_names
 

@@ -13,7 +13,6 @@ Two complementary guards:
 Deliberate exceptions (RFC #4588):
 - ``DELETE /api/threads/{thread_id}`` keeps ``thread_id: str`` as the
   legacy-cleanup escape hatch.
-- The browser websocket stream validates on upgrade; covered separately.
 """
 
 from __future__ import annotations
@@ -71,7 +70,6 @@ def _collect_thread_id_routes():
     """Import every gateway router and collect (method, full_path) with {thread_id}."""
     from app.gateway.routers import (
         artifacts,
-        browser,
         feedback,
         mcp_tasks,
         runs,
@@ -85,7 +83,6 @@ def _collect_thread_id_routes():
 
     routers = [
         artifacts,
-        browser,
         feedback,
         mcp_tasks,
         runs,
@@ -113,21 +110,6 @@ def _collect_thread_id_routes():
 
 
 _THREAD_ID_ROUTES = _collect_thread_id_routes()
-
-
-def test_browser_websocket_rejects_noncanonical_thread_id():
-    """The browser stream websocket validates thread_id on upgrade."""
-    from starlette.websockets import WebSocketDisconnect
-
-    from app.gateway.routers import browser
-
-    app = make_authed_test_app()
-    app.include_router(browser.router)
-
-    with TestClient(app, raise_server_exceptions=False) as client:
-        with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect(f"/api/threads/{BAD_THREAD_ID}/browser/stream"):
-                pass
 
 
 def test_sweep_covers_expected_surface():

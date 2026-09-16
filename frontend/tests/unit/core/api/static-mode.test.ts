@@ -52,7 +52,6 @@ describe("static website API requests", () => {
   it("loads optional capabilities and empty catalogs without the Gateway", async () => {
     await expect(fetchFeatures()).resolves.toMatchObject({
       agents_api: { enabled: false },
-      browser_control: { enabled: false },
       mcp_tasks: { enabled: false },
       subagent_batches: { repository_available: false, worker_running: false },
     });
