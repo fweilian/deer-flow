@@ -65,8 +65,3 @@ MCP_TASK_POLL_AFTER_MAX_SECONDS = 86_400
 # initialize deerflow.runtime just to validate storage constraints.
 RUN_EVENT_TYPE_MAX_LENGTH = 32
 RUN_EVENT_CATEGORY_MAX_LENGTH = 16
-
-# Workspace changes are produced below the runtime layer, so their persisted
-# event identity also lives here rather than in the runtime event catalog.
-WORKSPACE_CHANGES_EVENT_TYPE = "workspace_changes"
-WORKSPACE_CHANGES_EVENT_CATEGORY = "workspace"

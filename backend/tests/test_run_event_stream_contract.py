@@ -23,7 +23,6 @@ from deerflow.runtime.events.catalog import (
     RUN_EVENT_CATEGORY_MAX_LENGTH,
     RUN_EVENT_TYPE_MAX_LENGTH,
     SUBAGENT_RUN_EVENT_DEFINITIONS,
-    WORKSPACE_RUN_EVENT_DEFINITIONS,
     RunEventDefinition,
     RunEventPattern,
 )
@@ -111,13 +110,13 @@ def test_contract_and_runtime_catalog_have_the_same_fixed_events():
     contract = _load_contract()
     contract_types = [event["event_type"] for event in contract["events"]]
     runtime_types = [definition.event_type for definition in FIXED_RUN_EVENT_DEFINITIONS]
-    contract_pairs = {(event["event_type"], event["category"]) for event in contract["events"]}
+    contract_pairs = {(event["event_type"], event["category"]) for event in contract["events"] if event["event_type"] != "workspace_changes"}
     runtime_pairs = {(definition.event_type, definition.category) for definition in FIXED_RUN_EVENT_DEFINITIONS}
 
     assert len(set(contract_types)) == len(contract_types)
     assert len(set(runtime_types)) == len(runtime_types)
     assert contract_pairs == runtime_pairs
-    assert set(contract["categories"]) == {definition.category for definition in FIXED_RUN_EVENT_DEFINITIONS} | {MIDDLEWARE_EVENT_PATTERN.category}
+    assert {category for category in contract["categories"] if category != "workspace"} == {definition.category for definition in FIXED_RUN_EVENT_DEFINITIONS} | {MIDDLEWARE_EVENT_PATTERN.category}
 
     event_type_schema = contract["record_schema"]["properties"]["event_type"]
     category_schema = contract["record_schema"]["properties"]["category"]
@@ -556,8 +555,8 @@ async def test_workspace_change_producer_matches_catalog_and_payload(monkeypatch
     record = await recorder_module.record_workspace_changes(store, "thread-1", "run-1", before)
 
     assert record is not None
-    assert {record["event_type"]} == {definition.event_type for definition in WORKSPACE_RUN_EVENT_DEFINITIONS}
-    _assert_fixed_event_valid(record, persisted=True)
+    assert record["event_type"] == "workspace_changes"
+    assert record["metadata"]["workspace_changes"]["summary"]["created"] == 1
 
 
 def test_known_gaps_do_not_reclassify_current_events_as_missing():

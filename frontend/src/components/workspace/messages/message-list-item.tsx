@@ -59,7 +59,6 @@ import { useSkills } from "@/core/skills/hooks";
 import { SafeReasoningContent } from "@/core/streamdown/components";
 import { cn } from "@/lib/utils";
 
-import { WorkspaceChangeBadge } from "../changes";
 import { CitationSourcesPanel } from "../citations/citation-sources-panel";
 import { CopyButton } from "../copy-button";
 import { ReferenceAttachmentSummary } from "../sidecar/reference-attachments";
@@ -145,7 +144,6 @@ export function MessageListItem({
   threadId,
   artifactPaths = [],
   showCopyButton = true,
-  showWorkspaceChanges = false,
   canEdit = false,
   isEditPending = false,
   onEditAndRegenerate,
@@ -154,11 +152,10 @@ export function MessageListItem({
   message: Message;
   isLoading?: boolean;
   threadId: string;
+  runId?: string;
   artifactPaths?: readonly string[];
   feedback?: FeedbackData | null;
-  runId?: string;
   showCopyButton?: boolean;
-  showWorkspaceChanges?: boolean;
   canEdit?: boolean;
   isEditPending?: boolean;
   onEditAndRegenerate?: (replacementText: string) => void | Promise<boolean>;
@@ -223,8 +220,6 @@ export function MessageListItem({
         isLoading={isLoading}
         threadId={threadId}
         artifactPaths={artifactPaths}
-        runId={runId}
-        showWorkspaceChanges={showWorkspaceChanges}
         editState={
           isHuman && isEditing
             ? {
@@ -373,8 +368,6 @@ function MessageContent_({
   isLoading = false,
   threadId,
   artifactPaths,
-  runId,
-  showWorkspaceChanges = false,
   editState,
 }: {
   className?: string;
@@ -382,8 +375,6 @@ function MessageContent_({
   isLoading?: boolean;
   threadId: string;
   artifactPaths: readonly string[];
-  runId?: string;
-  showWorkspaceChanges?: boolean;
   editState?: {
     draft: string;
     disabled: boolean;
@@ -587,13 +578,6 @@ function MessageContent_({
         components={components}
       />
       <CitationSourcesPanel sources={citationSources} />
-      {message.type === "ai" && showWorkspaceChanges && (
-        <WorkspaceChangeBadge
-          threadId={threadId}
-          runId={runId}
-          disabled={isLoading}
-        />
-      )}
     </AIElementMessageContent>
   );
 }

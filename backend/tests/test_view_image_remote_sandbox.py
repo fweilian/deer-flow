@@ -17,11 +17,6 @@ from deerflow.tools.builtins.view_image_tool import view_image_tool
 
 PNG_BYTES = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
 STALE_SAME_SIZE_PNG_BYTES = PNG_BYTES[:-1] + bytes([PNG_BYTES[-1] ^ 1])
-_E2BFileNotFound = type(
-    "FileNotFoundException",
-    (Exception,),
-    {"__module__": "e2b.filesystem.filesystem"},
-)
 
 
 class _RemoteSandbox:
@@ -49,8 +44,8 @@ class _MissingRemoteSandbox(_RemoteSandbox):
     def download_file(self, path: str) -> bytes:
         self.downloads.append(path)
         try:
-            raise _E2BFileNotFound("not found")
-        except _E2BFileNotFound as error:
+            raise FileNotFoundError("not found")
+        except FileNotFoundError as error:
             raise OSError(f"Failed to download file '{path}' from sandbox: not found") from error
 
 

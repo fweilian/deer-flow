@@ -225,7 +225,7 @@ PASS run.delivery 记录了 present_files
 | --------------- | -- | -- | -- | ----------------------------------- |
 | **Phase 0（本阶段）** | ✅  | ✅  | ✅  | **主链路三轮 + artifact 补充轮均通过（PASS=17，FAIL=0）** |
 | **Phase 1（配置收敛）** | ✅ | ✅ | ✅ | **1.1–1.8 完成；L1=408 passed；Postgres/Redis L2 artifact=PASS=18、FAIL=0** |
-| Phase 2         |    |    |    | 删叶子；每删一个模块跑一次 L1                    |
+| **Phase 2（叶子裁剪）** | ✅ | ✅ | ✅ | **E2B/BoxLite/Tenki 删除；AIO/OpenSandbox 保留；L1=353 passed / 1 warning；L2 artifact=PASS=18、FAIL=0** |
 | Phase 3         |    |    |    | 渠道下线；顺序 3.2 → 3.2b → 3.3 → 3.4 不可换  |
 | Phase 4         |    |    |    | 浏览器下线                               |
 | Phase 5         |    |    |    | FS 解耦（重构）；L1 扩集必跑                   |
@@ -238,6 +238,6 @@ PASS run.delivery 记录了 present_files
 
 1. ~~L2 从未执行过~~ → **已于 2026-09-16 12:57 执行并全绿**（见 §3）。本环境此前 `POST /api/threads/{id}/runs` 命中数为 0、DB 仅 3 张表有数据（详见 `runtime-state.md` §3.3），**该历史状态已由本次执行终结**，基线绿色起点已建立。
 > 第 2 项原记录是历史状态；已于 2026-09-16 14:28 通过 artifact 补充 smoke 收尾，详见上方实测记录。该轮真实生成并读取 `/mnt/user-data/outputs/phase0-artifact.txt`，且 `run.delivery` 记录了 `present_files`，结果 `PASS=17 FAIL=0`。
-2. **`artifact 可读` 环节仍未纳入**。§17.3 V1 的完整表述含 `artifact 可读`，但本次 smoke 的 prompt 是纯文本回答，**没有产出文件**，因此 artifact / `workspace_changes` 链路（见 `feature-inventory.md` §19）**未经验证**。建议在 Phase 2.9（删 `workspace_changes` 的 L1+L2）**之前**补一次"让 Agent 写文件并 present"的 run 作为对照——否则删 L1/L2 时无法区分是否误伤了 L3 交付校验。
+2. ~~`artifact 可读` 环节仍未纳入~~ → **已于 2026-09-16 在 Phase 2.9 前补齐真实 artifact 生成/读取 smoke**：Agent 写入并 `present_files`，artifact API 返回 200、内容标记匹配，且 `run.delivery.present_files` 回执存在；结果 **PASS=18、FAIL=0**。
 3. **`.agent/skills/smoke-test/` 不能替代本清单**。它是**部署/健康** smoke（`make check` → `make install` → `make start` → 端口 → `/health` → 前端 `/workspace` 路由），主链路只到可选的 "Simple chat test"，**不覆盖 checkpoint 与 resume**。两者是互补关系：部署 smoke 验证"服务起得来"，本清单验证"链路跑得通"。
 4. **smoke 会累积测试数据**。每次执行都会新建 thread + 2 个 run + 50 个 checkpoint。基线后 `threads_meta`=1 / `runs`=2 / `checkpoints`=50，可作为"跑过几轮"的计数参照。Phase 1.5 切 Postgres 时需一并迁移或清理这批数据。

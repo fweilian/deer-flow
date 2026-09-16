@@ -181,7 +181,7 @@ def test_warm_hit_uses_reclaim_instrumentation_not_pre_acquire_sample() -> None:
 def test_summary_preserves_all_failure_group() -> None:
     rows = [
         {
-            "provider": "boxlite",
+            "provider": "aio-docker",
             "scenario": "warm_same_thread",
             "workload": "noop",
             "concurrency": 1,
@@ -196,7 +196,7 @@ def test_summary_preserves_all_failure_group() -> None:
 
     assert summary == [
         {
-            "provider": "boxlite",
+            "provider": "aio-docker",
             "scenario": "warm_same_thread",
             "workload": "noop",
             "concurrency": 1,
@@ -217,104 +217,3 @@ def test_summary_preserves_all_failure_group() -> None:
             "total_mean": 0.0,
         }
     ]
-
-
-def test_health_check_skip_seconds_is_forwarded_and_serialized(monkeypatch, tmp_path):
-    captured_config: dict[str, Any] = {}
-
-    def _factory(config: dict[str, Any]):
-        captured_config.update(config)
-        return _FakeProvider(), {
-            "replicas": config["replicas"],
-            "idle_timeout": config["idle_timeout"],
-            "image": config.get("image"),
-            "health_check_skip_seconds": config.get("health_check_skip_seconds"),
-        }
-
-    monkeypatch.setitem(bench.PROVIDER_FACTORIES, "boxlite", _factory)
-    output_path = tmp_path / "out.jsonl"
-
-    rc = bench.main(
-        [
-            "--provider",
-            "boxlite",
-            "--iterations",
-            "1",
-            "--warmup-iterations",
-            "0",
-            "--health-check-skip-seconds",
-            "7.5",
-            "--output",
-            str(output_path),
-        ]
-    )
-
-    assert rc == 0
-    assert captured_config["health_check_skip_seconds"] == 7.5
-    row = __import__("json").loads(output_path.read_text(encoding="utf-8").splitlines()[0])
-    assert row["health_check_skip_seconds"] == 7.5
-
-
-def test_boxlite_factory_restores_module_state(monkeypatch):
-    import deerflow.community.boxlite.provider as provider_mod
-
-    original_get_app_config = provider_mod.get_app_config
-
-    class _FactoryProvider:
-        _create_box = object()
-
-        def __init__(self) -> None:
-            self.created = True
-
-    original_create_box = _FactoryProvider._create_box
-    monkeypatch.setattr(provider_mod, "BoxliteProvider", _FactoryProvider)
-
-    provider, _ = bench._make_boxlite_provider({})
-
-    assert isinstance(provider, _FactoryProvider)
-    assert provider_mod.get_app_config is original_get_app_config
-    assert _FactoryProvider._create_box is original_create_box
-
-
-def test_boxlite_shim_workaround_retries_after_fixing_permissions(monkeypatch, tmp_path):
-    boxes_dir = tmp_path / "boxes"
-    shim = boxes_dir / "deadbeef" / "bin" / "boxlite-shim"
-    shim.parent.mkdir(parents=True)
-    shim.write_text("#!/bin/sh\n", encoding="utf-8")
-    shim.chmod(0o644)
-
-    calls = 0
-
-    def _create_box(_sandbox_id: str):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("shim not executable")
-        return "ok"
-
-    monkeypatch.setattr(bench, "_boxlite_version", lambda: "0.9.7")
-
-    result = bench._create_box_with_097_shim_workaround(
-        _create_box,
-        "sandbox-id",
-        boxes_dir=str(boxes_dir),
-    )
-
-    assert result == "ok"
-    assert calls == 2
-    assert shim.stat().st_mode & 0o111
-
-
-def test_boxlite_shim_workaround_loud_fails_for_other_versions(monkeypatch, tmp_path):
-    boxes_dir = tmp_path / "boxes"
-    monkeypatch.setattr(bench, "_boxlite_version", lambda: "0.9.8")
-
-    def _create_box(_sandbox_id: str):
-        raise RuntimeError("shim not executable")
-
-    with __import__("pytest").raises(RuntimeError, match="only supports boxlite 0.9.7"):
-        bench._create_box_with_097_shim_workaround(
-            _create_box,
-            "sandbox-id",
-            boxes_dir=str(boxes_dir),
-        )

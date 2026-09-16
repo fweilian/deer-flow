@@ -17,7 +17,6 @@ from app.gateway.health import READINESS_CHECKPOINTER_CONFIG_ATTR, readiness_pay
 from app.gateway.routers import (
     agents,
     artifacts,
-    assistants_compat,
     auth,
     browser,
     channel_connections,
@@ -26,7 +25,6 @@ from app.gateway.routers import (
     features,
     feedback,
     github_webhooks,
-    input_polish,
     integrations,
     mcp,
     mcp_tasks,
@@ -38,7 +36,6 @@ from app.gateway.routers import (
     skills,
     subagent_batches,
     subagents,
-    suggestions,
     thread_runs,
     threads,
     uploads,
@@ -654,20 +651,8 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
                 "description": "Create and manage custom agents with per-agent config and prompts",
             },
             {
-                "name": "suggestions",
-                "description": "Generate follow-up question suggestions for conversations",
-            },
-            {
-                "name": "input-polish",
-                "description": "Polish composer draft input before sending",
-            },
-            {
                 "name": "channels",
                 "description": "Manage IM channel integrations (Feishu, Slack, Telegram)",
-            },
-            {
-                "name": "assistants-compat",
-                "description": "LangGraph Platform-compatible assistants API (stub)",
             },
             {
                 "name": "runs",
@@ -839,20 +824,11 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Deployment-level subagent catalog and admin management.
     app.include_router(subagents.router)
 
-    # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
-    app.include_router(suggestions.router)
-
-    # Input polishing API is mounted at /api/input-polish
-    app.include_router(input_polish.router)
-
     # User-facing IM channel connection API is mounted at /api/channels
     app.include_router(channel_connections.router)
 
     # Channels API is mounted at /api/channels
     app.include_router(channels.router)
-
-    # Assistants compatibility API (LangGraph Platform stub)
-    app.include_router(assistants_compat.router)
 
     # Auth API is mounted at /api/v1/auth
     app.include_router(auth.router)

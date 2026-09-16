@@ -1,4 +1,4 @@
-"""Shared URL safety checks for server-side web tools."""
+"""Shared URL safety checks for server-side browser automation."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def resolve_host_addresses(hostname: str) -> list[ipaddress._BaseAddress]:
 
 
 def is_blocked_address(address: ipaddress._BaseAddress) -> bool:
-    """Return True for addresses web tools should not reach by default."""
+    """Return True for addresses browser automation should not reach by default."""
     return address.is_private or address.is_loopback or address.is_link_local or address.is_reserved or address.is_multicast or address.is_unspecified
 
 
@@ -38,13 +38,7 @@ def validate_public_http_url(
     action: str = "fetch",
     resolver: Callable[[str], list[ipaddress._BaseAddress]] | None = None,
 ) -> str | None:
-    """Validate an http(s) URL before a server-side web tool fetches it.
-
-    Returns an ``"Error: ..."`` string when the URL should be rejected, or
-    ``None`` when the caller may proceed.  The check is intentionally conservative
-    for self-hosted fetch/render services because those services run inside the
-    deployment network and can otherwise reach cloud metadata or private hosts.
-    """
+    """Validate an http(s) URL before browser automation opens it."""
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return "Error: Only http:// and https:// URLs are supported"

@@ -4,7 +4,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SandboxOwnershipType = Literal["memory", "redis"]
-SandboxOverflowPolicy = Literal["wait", "reject", "burst"]
 SandboxNetworkMode = Literal["open", "isolated", "allowlist"]
 SandboxNetworkApproval = Literal["deny", "prompt"]
 
@@ -141,16 +140,11 @@ class SandboxConfig(BaseModel):
         allow_host_bash: Enable host-side bash execution for LocalSandboxProvider.
             Dangerous and intended only for fully trusted local workflows.
 
-    AioSandboxProvider, BoxliteProvider, E2BSandboxProvider, and OpenSandboxProvider shared options:
-        image: Sandbox image to use (Docker/AIO, BoxLite OCI, or OpenSandbox image)
-        replicas: Positive provider capacity. E2B shares it across Gateway
-            workers when ownership uses Redis; other modes/providers keep
-            process-local accounting.
+    AioSandboxProvider and OpenSandboxProvider shared options:
+        image: Sandbox image to use (Docker/AIO or OpenSandbox image)
+        replicas: Positive provider capacity.
         idle_timeout: Idle timeout in seconds before released warm sandboxes/VMs are stopped (default: 600 = 10 minutes). Set to 0 to disable.
         environment: Environment variables to inject into the sandbox (values starting with $ are resolved from host env)
-
-    BoxliteProvider specific options:
-        health_check_skip_seconds: Optional reclaim-time skip window in seconds for recently released warm VMs. Default behavior is 0.0 = always validate before reuse.
 
     AioSandboxProvider specific options:
         port: Base port for sandbox containers (default: 8080)
@@ -159,7 +153,7 @@ class SandboxConfig(BaseModel):
         thread_data_mounts: Override whether thread data is already visible to
             the sandbox through shared mounts. Omit to auto-detect from the backend.
 
-    AioSandboxProvider and E2BSandboxProvider shared options:
+    AioSandboxProvider specific options:
         ownership: Cross-instance sandbox ownership store (memory | redis). Multi-instance
             deployments sharing a sandbox backend need redis; see SandboxOwnershipConfig.
 
@@ -181,7 +175,7 @@ class SandboxConfig(BaseModel):
     )
     image: str | None = Field(
         default=None,
-        description="Sandbox image to use (Docker/AIO, BoxLite OCI, or OpenSandbox image)",
+        description="Sandbox image to use (Docker/AIO or OpenSandbox image)",
     )
     port: int | None = Field(
         default=None,
@@ -190,21 +184,7 @@ class SandboxConfig(BaseModel):
     replicas: int | None = Field(
         default=None,
         gt=0,
-        description=("Positive provider capacity. E2B enforces it deployment-wide when sandbox ownership uses Redis; otherwise accounting is per Gateway process. Each provider defines which lifecycle states count."),
-    )
-    overflow_policy: SandboxOverflowPolicy = Field(
-        default="wait",
-        description="E2B capacity policy. Use wait, reject, or burst.",
-    )
-    acquire_timeout: int = Field(
-        default=30,
-        gt=0,
-        description="Seconds that E2B wait policy waits for capacity.",
-    )
-    burst_limit: int = Field(
-        default=0,
-        ge=0,
-        description="Extra E2B capacity slots when overflow_policy is burst.",
+        description="Positive provider capacity.",
     )
     container_prefix: str | None = Field(
         default=None,
@@ -214,15 +194,10 @@ class SandboxConfig(BaseModel):
         default=None,
         description="Idle timeout in seconds before released warm sandboxes/VMs are stopped (default: 600 = 10 minutes). Set to 0 to disable.",
     )
-    health_check_skip_seconds: float | None = Field(
-        default=None,
-        ge=0,
-        description="BoxLite-only reclaim skip window in seconds for boxes recently released by this provider instance. Set to 0 to always validate before warm reuse.",
-    )
     ownership: SandboxOwnershipConfig | None = Field(
         default=None,
         description=(
-            "AioSandboxProvider/E2BSandboxProvider: where cross-instance sandbox ownership is tracked (#4206, #4341). Omitted = memory (single-instance). "
+            "AioSandboxProvider: where cross-instance sandbox ownership is tracked (#4206, #4341). Omitted = memory (single-instance). "
             "Multi-worker / load-balanced gateways sharing one sandbox backend must set type: redis, or peers can adopt and destroy each other's live sandboxes."
         ),
     )

@@ -19,7 +19,6 @@ from deerflow.workspace_changes import (
     record_workspace_changes,
     scan_workspace_roots,
 )
-from deerflow.workspace_changes.api import get_workspace_changes_response
 from deerflow.workspace_changes.scanner import (
     SAMPLE_BYTES,
     _normalize_symlink_target,
@@ -477,101 +476,6 @@ def test_compare_snapshots_truncates_large_text_diffs(tmp_path):
     assert result.summary.truncated is True
 
 
-@pytest.mark.asyncio
-async def test_workspace_changes_response_returns_summary_only_and_full_payload():
-    store = MemoryRunEventStore()
-    payload = {
-        "version": 1,
-        "summary": {
-            "created": 1,
-            "modified": 0,
-            "deleted": 0,
-            "additions": 2,
-            "deletions": 0,
-            "truncated": False,
-        },
-        "files": [
-            {
-                "path": "/mnt/user-data/outputs/report.md",
-                "root": "outputs",
-                "status": "created",
-                "binary": False,
-                "sensitive": False,
-                "size_before": None,
-                "size_after": 12,
-                "sha256_before": None,
-                "sha256_after": "abc",
-                "diff": "+hello",
-                "diff_truncated": False,
-                "diff_unavailable_reason": None,
-                "additions": 1,
-                "deletions": 0,
-            }
-        ],
-        "limits": {
-            "max_files": 200,
-            "max_file_bytes_for_diff": 262144,
-            "max_total_diff_bytes": 1048576,
-        },
-    }
-    await store.put(
-        thread_id="thread-1",
-        run_id="run-1",
-        event_type="workspace_changes",
-        category="workspace",
-        content="1 file changed +2 -0",
-        metadata={"workspace_changes": payload},
-    )
-
-    summary = await get_workspace_changes_response(
-        store,
-        "thread-1",
-        "run-1",
-        include_files=False,
-    )
-    metadata_only = await get_workspace_changes_response(
-        store,
-        "thread-1",
-        "run-1",
-        include_files=True,
-        include_diff=False,
-    )
-    full = await get_workspace_changes_response(
-        store,
-        "thread-1",
-        "run-1",
-        include_files=True,
-    )
-
-    assert summary["available"] is True
-    assert summary["summary"]["created"] == 1
-    assert summary["files"] == []
-    assert metadata_only["files"][0]["path"] == "/mnt/user-data/outputs/report.md"
-    assert metadata_only["files"][0]["diff"] == ""
-    assert full["files"][0]["diff"] == "+hello"
-
-
-@pytest.mark.asyncio
-async def test_workspace_changes_response_is_empty_when_no_event_exists():
-    response = await get_workspace_changes_response(
-        MemoryRunEventStore(),
-        "thread-1",
-        "run-1",
-    )
-
-    assert response["available"] is False
-    assert response["summary"] == {
-        "created": 0,
-        "modified": 0,
-        "deleted": 0,
-        "symlink_created": 0,
-        "additions": 0,
-        "deletions": 0,
-        "truncated": False,
-    }
-    assert response["files"] == []
-
-
 @pytest.mark.anyio
 async def test_run_agent_records_workspace_changes_event(tmp_path, monkeypatch):
     from deerflow.config import paths as paths_module
@@ -694,58 +598,6 @@ async def test_record_workspace_changes_uses_cached_baseline_for_modified_diff(t
     assert "-old" in diff
     assert "+new" in diff
     assert not text_cache_dir.exists()
-
-
-@pytest.mark.anyio
-async def test_workspace_changes_route_forwards_include_files_flag():
-    from app.gateway.routers.thread_runs import get_run_workspace_changes
-
-    calls: dict = {}
-
-    class FakeStore:
-        async def list_events(self, thread_id, run_id, *, event_types=None, task_id=None, limit=500, after_seq=None):
-            calls.update(thread_id=thread_id, run_id=run_id, event_types=event_types)
-            return [
-                {
-                    "metadata": {
-                        "workspace_changes": {
-                            "version": 1,
-                            "summary": {
-                                "created": 1,
-                                "modified": 0,
-                                "deleted": 0,
-                                "additions": 1,
-                                "deletions": 0,
-                                "truncated": False,
-                            },
-                            "files": [{"path": "/mnt/user-data/workspace/report.md", "diff": "+hello"}],
-                            "limits": {},
-                        }
-                    }
-                }
-            ]
-
-    class FakeState:
-        run_event_store = FakeStore()
-
-    class FakeApp:
-        state = FakeState()
-
-    class FakeRequest:
-        app = FakeApp()
-        _deerflow_test_bypass_auth = True
-
-    response = await get_run_workspace_changes(
-        thread_id="thread-1",
-        run_id="run-1",
-        request=FakeRequest(),
-        include_files=False,
-        include_diff=False,
-    )
-
-    assert response["available"] is True
-    assert response["files"] == []
-    assert calls["event_types"] == ["workspace_changes"]
 
 
 def test_normalize_symlink_target_strips_extended_length_drive_prefix(monkeypatch):

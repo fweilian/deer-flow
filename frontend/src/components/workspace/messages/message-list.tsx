@@ -68,7 +68,6 @@ import {
   type MessageGroup as ThreadMessageGroup,
   type StreamMetadataSnapshot,
 } from "@/core/messages/utils";
-import { getWorkspaceChangeAnchorGroupIndices } from "@/core/messages/workspace-change-anchor";
 import {
   buildMessageSidecarContext,
   type SidecarContext,
@@ -519,10 +518,6 @@ export function MessageList({
   );
   const artifactArchiveCandidatesByGroupIndex = useMemo(
     () => getArtifactArchiveCandidatesByGroupIndex(groupedMessages),
-    [groupedMessages],
-  );
-  const workspaceChangeAnchorGroupIndices = useMemo(
-    () => getWorkspaceChangeAnchorGroupIndices(groupedMessages),
     [groupedMessages],
   );
   useEffect(() => {
@@ -1133,9 +1128,6 @@ export function MessageList({
                               : undefined
                           }
                           showCopyButton={group.type !== "assistant"}
-                          showWorkspaceChanges={workspaceChangeAnchorGroupIndices.has(
-                            groupIndex,
-                          )}
                           canEdit={
                             group.type === "human" &&
                             Boolean(msg.id) &&

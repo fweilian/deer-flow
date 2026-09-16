@@ -267,3 +267,10 @@ Phase 1 的 1.1–1.8 已完成。最终运行配置的 MD5 为 5f0b585c2fdb2aa9
     Resume Run: ed872b7d-3260-404c-8609-9fc7c452697d
 
 本轮验证了 thread → run → SSE → checkpoint → resume，以及 artifact 生成、artifact API 读取、内容标记校验和 run.delivery.present_files 回执。为让 Agent 生成文件而临时加入的 write_file 已在 smoke 后移除；最终配置恢复并通过哈希核对。
+
+## 9. Phase 2 叶子裁剪验证（2026-09-16）
+
+- 删除 E2B、BoxLite、Tenki；AIO 与 OpenSandbox 保留。
+- 删除搜索/抓取/图像搜索 provider、17 个非本期 skill、TUI、兼容/体验路由及 workspace changes 的前端 L1 和事件/路由 L2；保留 workspace 快照、差分与 artifact 交付校验 L3。
+- 后端 L1：353 passed / 1 warning；`test_doctor.py`：62 passed；ruff 与前端 `pnpm check` 通过。
+- 真实 Postgres/Redis artifact smoke：`/health/ready`、登录、SSE、checkpoint、DB run events、artifact API 读取、`run.delivery.present_files` 与 resume 均通过，结果 `PASS=18 FAIL=0`。

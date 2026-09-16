@@ -120,6 +120,17 @@ Phase 2.9 要删 `workspace_changes` 的 L1（前端 UI）+ L2（事件与路由
 
 → **Phase 0 的 V1 验收已闭合，可以进入后续阶段。**
 
+## 七、Phase 2 叶子裁剪完成（2026-09-16）
+
+本阶段按既定范围完成：
+
+- 删除 E2B、BoxLite、Tenki；保留 AIO 与 OpenSandbox。
+- 删除搜索、抓取、图像搜索等已下线 provider，以及 17 个非本期 skill 和 TUI。
+- 删除 assistants 兼容路由、suggestions、input-polish 及其配置；删除 workspace changes 的前端 L1 与事件/路由 L2，保留快照、差分和 artifact 交付校验 L3。
+- 清理对应依赖、锁文件、wizard、doctor、测试和路由注册，`config.example.yaml` 与运行配置保持收敛。
+
+验证结果：后端 L1 **353 passed / 1 warning**；`test_doctor` **62 passed**；ruff 与前端 `pnpm check` 通过；真实 Postgres/Redis artifact smoke **PASS=18、FAIL=0**。smoke 专用的 `write_file` 仅临时启用，完成后已移除，未进入提交。
+
 ## 六、Phase 1 收敛完成（2026-09-16）
 
 Phase 1 的 1.1–1.8 已在当前工作区完成并通过验证：

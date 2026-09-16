@@ -62,7 +62,6 @@ from deerflow.runtime.secret_context import redact_config_secrets, redact_metada
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY, get_original_user_content_text, message_to_text
 from deerflow.utils.thread_id import ThreadId
-from deerflow.workspace_changes import get_workspace_changes_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/threads", tags=["runs"])
@@ -1715,26 +1714,6 @@ async def list_run_events(
         else event
         for event in events
     ]
-
-
-@router.get("/{thread_id}/runs/{run_id}/workspace-changes")
-@require_permission("runs", "read", owner_check=True)
-async def get_run_workspace_changes(
-    thread_id: ThreadId,
-    run_id: str,
-    request: Request,
-    include_files: bool = Query(default=True),
-    include_diff: bool = Query(default=True),
-) -> dict:
-    """Return workspace/output file changes recorded for one run."""
-    event_store = get_run_event_store(request)
-    return await get_workspace_changes_response(
-        event_store,
-        thread_id,
-        run_id,
-        include_files=include_files,
-        include_diff=include_diff,
-    )
 
 
 @router.get("/{thread_id}/token-usage", response_model=ThreadTokenUsageResponse)

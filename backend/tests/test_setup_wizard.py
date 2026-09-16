@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import yaml
 from wizard import ui as wizard_ui
-from wizard.providers import LLM_PROVIDERS, SEARCH_PROVIDERS, WEB_FETCH_PROVIDERS, LLMProvider, with_thinking_support
+from wizard.providers import LLM_PROVIDERS, LLMProvider, with_thinking_support
 from wizard.steps import channels as channels_step
 from wizard.steps import llm as llm_step
-from wizard.steps import search as search_step
 from wizard.writer import (
     build_minimal_config,
     read_env_file,
@@ -125,34 +124,6 @@ class TestProviders:
             assert p.models
             assert p.default_model in p.models
 
-    def test_search_providers_have_required_fields(self):
-        for sp in SEARCH_PROVIDERS:
-            assert sp.name
-            assert sp.display_name
-            assert sp.use
-            assert ":" in sp.use
-
-    def test_search_and_fetch_include_firecrawl(self):
-        assert any(provider.name == "firecrawl" for provider in SEARCH_PROVIDERS)
-        assert any(provider.name == "firecrawl" for provider in WEB_FETCH_PROVIDERS)
-
-    def test_web_fetch_providers_have_required_fields(self):
-        for provider in WEB_FETCH_PROVIDERS:
-            assert provider.name
-            assert provider.display_name
-            assert provider.use
-            assert ":" in provider.use
-            assert provider.tool_name == "web_fetch"
-
-    def test_at_least_one_free_search_provider(self):
-        """At least one search provider needs no API key."""
-        free = [sp for sp in SEARCH_PROVIDERS if sp.env_var is None]
-        assert free, "Expected at least one free (no-key) search provider"
-
-    def test_at_least_one_free_web_fetch_provider(self):
-        free = [provider for provider in WEB_FETCH_PROVIDERS if provider.env_var is None]
-        assert free, "Expected at least one free (no-key) web fetch provider"
-
 
 class TestBuildMinimalConfig:
     def test_produces_valid_yaml(self):
@@ -187,20 +158,6 @@ class TestBuildMinimalConfig:
         assert model["gemini_api_key"] == "$GEMINI_API_KEY"
         assert "api_key" not in model
 
-    def test_search_tool_included(self):
-        content = build_minimal_config(
-            provider_use="langchain_openai:ChatOpenAI",
-            model_name="gpt-4o",
-            display_name="OpenAI",
-            api_key_field="api_key",
-            env_var="OPENAI_API_KEY",
-            search_use="deerflow.community.tavily.tools:web_search_tool",
-            search_extra_config={"max_results": 5},
-        )
-        data = yaml.safe_load(content)
-        search_tool = next(t for t in data.get("tools", []) if t["name"] == "web_search")
-        assert search_tool["max_results"] == 5
-
     def test_openrouter_defaults_are_preserved(self):
         content = build_minimal_config(
             provider_use="langchain_openai:ChatOpenAI",
@@ -223,20 +180,6 @@ class TestBuildMinimalConfig:
         assert model["max_retries"] == 2
         assert model["max_tokens"] == 8192
         assert model["temperature"] == 0.7
-
-    def test_web_fetch_tool_included(self):
-        content = build_minimal_config(
-            provider_use="langchain_openai:ChatOpenAI",
-            model_name="gpt-4o",
-            display_name="OpenAI",
-            api_key_field="api_key",
-            env_var="OPENAI_API_KEY",
-            web_fetch_use="deerflow.community.jina_ai.tools:web_fetch_tool",
-            web_fetch_extra_config={"timeout": 10},
-        )
-        data = yaml.safe_load(content)
-        fetch_tool = next(t for t in data.get("tools", []) if t["name"] == "web_fetch")
-        assert fetch_tool["timeout"] == 10
 
     def test_no_search_tool_when_not_configured(self):
         content = build_minimal_config(
@@ -658,26 +601,8 @@ class TestWriteConfigYaml:
                     "config_version": 5,
                     "log_level": "info",
                     "token_usage": {"enabled": True},
-                    "tool_groups": [{"name": "web"}, {"name": "file:read"}, {"name": "file:write"}, {"name": "bash"}],
+                    "tool_groups": [{"name": "file:read"}, {"name": "file:write"}, {"name": "bash"}],
                     "tools": [
-                        {
-                            "name": "web_search",
-                            "group": "web",
-                            "use": "deerflow.community.ddg_search.tools:web_search_tool",
-                            "max_results": 5,
-                        },
-                        {
-                            "name": "web_fetch",
-                            "group": "web",
-                            "use": "deerflow.community.jina_ai.tools:web_fetch_tool",
-                            "timeout": 10,
-                        },
-                        {
-                            "name": "image_search",
-                            "group": "web",
-                            "use": "deerflow.community.image_search.tools:image_search_tool",
-                            "max_results": 5,
-                        },
                         {"name": "ls", "group": "file:read", "use": "deerflow.sandbox.tools:ls_tool"},
                         {"name": "write_file", "group": "file:write", "use": "deerflow.sandbox.tools:write_file_tool"},
                         {"name": "bash", "group": "bash", "use": "deerflow.sandbox.tools:bash_tool"},
@@ -706,9 +631,9 @@ class TestWriteConfigYaml:
 
         assert data["log_level"] == "info"
         assert data["token_usage"]["enabled"] is True
-        assert data["tool_groups"][0]["name"] == "web"
+        assert data["tool_groups"][0]["name"] == "file:read"
         assert data["summarization"]["max_tokens"] == 2048
-        assert any(tool["name"] == "image_search" and tool["max_results"] == 5 for tool in data["tools"])
+        assert all(tool["name"] not in {"web_search", "web_fetch", "image_search"} for tool in data["tools"])
 
     def test_config_version_read_from_example(self, tmp_path):
         """write_config_yaml should read config_version from config.example.yaml if present."""
@@ -743,33 +668,3 @@ class TestWriteConfigYaml:
         with open(config_path) as f:
             data = yaml.safe_load(f)
         assert data["models"][0]["base_url"] == "https://openrouter.ai/api/v1"
-
-
-class TestSearchStep:
-    def test_reuses_api_key_for_same_provider(self, monkeypatch):
-        monkeypatch.setattr(search_step, "print_header", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(search_step, "print_success", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(search_step, "print_info", lambda *_args, **_kwargs: None)
-
-        choices = iter([3, 1])
-        prompts: list[str] = []
-
-        def fake_choice(_prompt, _options, default=0):
-            return next(choices)
-
-        def fake_secret(prompt):
-            prompts.append(prompt)
-            return "shared-api-key"
-
-        monkeypatch.setattr(search_step, "ask_choice", fake_choice)
-        monkeypatch.setattr(search_step, "ask_secret", fake_secret)
-
-        result = search_step.run_search_step()
-
-        assert result.search_provider is not None
-        assert result.fetch_provider is not None
-        assert result.search_provider.name == "exa"
-        assert result.fetch_provider.name == "exa"
-        assert result.search_api_key == "shared-api-key"
-        assert result.fetch_api_key == "shared-api-key"
-        assert prompts == ["EXA_API_KEY"]

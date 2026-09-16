@@ -55,9 +55,8 @@ def _is_file_not_found_error(error: BaseException) -> bool:
 
     ``Sandbox.download_file`` promises ``OSError`` for read failures, while
     remote SDKs expose missing paths in different explicit forms: builtin or
-    provider-defined ``FileNotFoundError`` types, E2B's
-    ``FileNotFoundException``, and HTTP-style exceptions carrying
-    ``status_code == 404``. Walk only explicit ``raise ... from`` causes so an
+    provider-defined ``FileNotFoundError`` types and HTTP-style exceptions
+    carrying ``status_code == 404``. Walk only explicit ``raise ... from`` causes so an
     unrelated exception being handled when a transport failure is raised cannot
     accidentally authorize historical host recovery. Error-message strings are
     deliberately never parsed.
@@ -69,8 +68,6 @@ def _is_file_not_found_error(error: BaseException) -> bool:
         seen.add(id(current))
         error_type = type(current)
         if isinstance(current, FileNotFoundError) or error_type.__name__ == "FileNotFoundError":
-            return True
-        if error_type.__name__ == "FileNotFoundException" and error_type.__module__.split(".", 1)[0] == "e2b":
             return True
         if getattr(current, "status_code", None) == 404:
             return True

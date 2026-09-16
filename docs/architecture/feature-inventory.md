@@ -1683,7 +1683,7 @@ Low    ：C1 C2 C3 C4 C8 C9 C10 C11 C12 D17
 | 2.5 | 删除 `routers/{suggestions,input_polish}.py` + 配置节 + 中间件引用                                       | 无          |
 | 2.6 | 删除 `deerflow/tui/` + `[project.scripts]`                                                       | 无          |
 | 2.7 | 删除对应测试与 `config.example.yaml` 中的 provider 段落                                                   | 2.1-2.6    |
-| 2.8 | 删除 E2B / OpenSandbox / Boxlite / Tenki（**可选**，建议先留 AIO）                                        | 无          |
+| 2.8 | 删除 E2B / BoxLite / Tenki；**保留 AIO 与 OpenSandbox**（本阶段决策）                                      | 无          |
 | 2.9 | **Rev.3.1**：删除 `workspace_changes` 的 **L1（前端 UI）+ L2（事件与路由）** —— `components/workspace/changes/`、`core/workspace-changes/`、`core/messages/workspace-change-anchor.ts`、`routers/thread_runs.py` L1720 路由、`workspace_changes/api.py`、`constants.py` 事件常量、`runtime/events/catalog.py` 事件定义、`auth/pat.py` L88 白名单项。**⚠️ 不得触碰 L3（快照/差分/交付校验）**，见 §19.5 | 无 |
 | 2.10 | **Rev.3.1**：从核心依赖移除 `ddgs`（C1 与 C3 删除后无使用者）                                                | 2.2        |
 

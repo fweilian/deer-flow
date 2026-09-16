@@ -1146,33 +1146,6 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
     return route.fallback();
   });
 
-  // Workspace changes — the run-scoped badge query. Unmocked it 401s against
-  // the absent gateway and the fetcher redirects the page to /login.
-  void page.route("**/api/threads/*/runs/*/workspace-changes*", (route) => {
-    if (route.request().method() === "GET") {
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          run_id: "mock-run",
-          thread_id: "mock-thread",
-          status: "success",
-          summary: {
-            created: 0,
-            modified: 0,
-            deleted: 0,
-            symlink_created: 0,
-            additions: 0,
-            deletions: 0,
-            truncated: false,
-          },
-          changes: [],
-        }),
-      });
-    }
-    return route.fallback();
-  });
-
   // Thread history — useStream fetches state history on mount
   void page.route("**/api/langgraph/threads/*/history", (route) => {
     const url = route.request().url();

@@ -85,7 +85,7 @@ _PAT_ROUTE_RULES: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = (
     (frozenset({"POST"}), re.compile(r"^/api/threads/[^/]+/runs/[^/]+/cancel$")),
     (
         frozenset({"GET"}),
-        re.compile(r"^/api/threads/[^/]+/runs/[^/]+/(join|messages|events|workspace-changes)$"),
+        re.compile(r"^/api/threads/[^/]+/runs/[^/]+/(join|messages|events)$"),
     ),
     (frozenset({"GET", "POST"}), re.compile(r"^/api/threads/[^/]+/runs/[^/]+/artifacts/archive$")),
     (frozenset({"GET", "POST"}), re.compile(r"^/api/threads/[^/]+/runs/[^/]+/stream$")),

@@ -81,7 +81,6 @@ def _yaml_dump(data: Any) -> str:
 
 def _default_tools() -> list[dict[str, Any]]:
     return [
-        {"name": "image_search", "use": "deerflow.community.image_search.tools:image_search_tool", "group": "web", "max_results": 5},
         {"name": "ls", "use": "deerflow.sandbox.tools:ls_tool", "group": "file:read"},
         {"name": "read_file", "use": "deerflow.sandbox.tools:read_file_tool", "group": "file:read"},
         {"name": "glob", "use": "deerflow.sandbox.tools:glob_tool", "group": "file:read"},
@@ -95,12 +94,6 @@ def _default_tools() -> list[dict[str, Any]]:
 def _build_tools(
     *,
     base_tools: list[dict[str, Any]] | None,
-    search_use: str | None,
-    search_tool_name: str,
-    search_extra_config: dict | None,
-    web_fetch_use: str | None,
-    web_fetch_tool_name: str,
-    web_fetch_extra_config: dict | None,
     include_bash_tool: bool,
     include_write_tools: bool,
 ) -> list[dict[str, Any]]:
@@ -108,31 +101,8 @@ def _build_tools(
     tools = [
         tool
         for tool in tools
-        if tool.get("name") not in {search_tool_name, web_fetch_tool_name, "write_file", "str_replace", "bash"}
+        if tool.get("name") not in {"write_file", "str_replace", "bash"}
     ]
-
-    web_group = "web"
-
-    if search_use:
-        search_tool: dict[str, Any] = {
-            "name": search_tool_name,
-            "use": search_use,
-            "group": web_group,
-        }
-        if search_extra_config:
-            search_tool.update(search_extra_config)
-        tools.insert(0, search_tool)
-
-    if web_fetch_use:
-        fetch_tool: dict[str, Any] = {
-            "name": web_fetch_tool_name,
-            "use": web_fetch_use,
-            "group": web_group,
-        }
-        if web_fetch_extra_config:
-            fetch_tool.update(web_fetch_extra_config)
-        insert_idx = 1 if search_use else 0
-        tools.insert(insert_idx, fetch_tool)
 
     if include_write_tools:
         tools.extend(
@@ -182,12 +152,6 @@ def build_minimal_config(
     env_var: str | None,
     extra_model_config: dict | None = None,
     base_url: str | None = None,
-    search_use: str | None = None,
-    search_tool_name: str = "web_search",
-    search_extra_config: dict | None = None,
-    web_fetch_use: str | None = None,
-    web_fetch_tool_name: str = "web_fetch",
-    web_fetch_extra_config: dict | None = None,
     sandbox_use: str = "deerflow.sandbox.local:LocalSandboxProvider",
     allow_host_bash: bool = False,
     include_bash_tool: bool = False,
@@ -225,12 +189,6 @@ def build_minimal_config(
         base_tools = None
     tools = _build_tools(
         base_tools=base_tools,
-        search_use=search_use,
-        search_tool_name=search_tool_name,
-        search_extra_config=search_extra_config,
-        web_fetch_use=web_fetch_use,
-        web_fetch_tool_name=web_fetch_tool_name,
-        web_fetch_extra_config=web_fetch_extra_config,
         include_bash_tool=include_bash_tool,
         include_write_tools=include_write_tools,
     )
@@ -265,12 +223,6 @@ def write_config_yaml(
     env_var: str | None,
     extra_model_config: dict | None = None,
     base_url: str | None = None,
-    search_use: str | None = None,
-    search_tool_name: str = "web_search",
-    search_extra_config: dict | None = None,
-    web_fetch_use: str | None = None,
-    web_fetch_tool_name: str = "web_fetch",
-    web_fetch_extra_config: dict | None = None,
     sandbox_use: str = "deerflow.sandbox.local:LocalSandboxProvider",
     allow_host_bash: bool = False,
     include_bash_tool: bool = False,
@@ -300,12 +252,6 @@ def write_config_yaml(
         env_var=env_var,
         extra_model_config=extra_model_config,
         base_url=base_url,
-        search_use=search_use,
-        search_tool_name=search_tool_name,
-        search_extra_config=search_extra_config,
-        web_fetch_use=web_fetch_use,
-        web_fetch_tool_name=web_fetch_tool_name,
-        web_fetch_extra_config=web_fetch_extra_config,
         sandbox_use=sandbox_use,
         allow_host_bash=allow_host_bash,
         include_bash_tool=include_bash_tool,

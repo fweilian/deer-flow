@@ -19,6 +19,7 @@ import yaml
 from support.symlinks import symlink_or_skip
 
 from deerflow.extensions.cli import find_project_root
+from deerflow.extensions.cli import main as deerflow_main
 from deerflow.extensions.loader import ExtensionSpec
 from deerflow.extensions.manager import (
     ExtensionManager,
@@ -28,7 +29,6 @@ from deerflow.extensions.manager import (
     _validate_locked_local_sources,
     _validate_remote_source,
 )
-from deerflow.tui.cli import main as deerflow_main
 
 
 def _write_local_extension(
