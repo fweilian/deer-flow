@@ -106,7 +106,6 @@ class Paths:
     Directory layout (host side):
         {base_dir}/
         ├── memory.json
-        ├── USER.md          <-- global user profile (injected into all agents)
         ├── agents/
         │   └── {agent_name}/
         │       ├── config.yaml
@@ -164,11 +163,6 @@ class Paths:
     def memory_file(self) -> Path:
         """Path to the persisted memory file: `{base_dir}/memory.json`."""
         return self.base_dir / "memory.json"
-
-    @property
-    def user_md_file(self) -> Path:
-        """Path to the global user profile file: `{base_dir}/USER.md`."""
-        return self.base_dir / "USER.md"
 
     @property
     def agents_dir(self) -> Path:

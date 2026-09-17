@@ -4,11 +4,11 @@ from pydantic import BaseModel, Field
 
 
 class AgentsApiConfig(BaseModel):
-    """Configuration for custom-agent and user-profile management routes."""
+    """Configuration for custom-agent management routes."""
 
     enabled: bool = Field(
         default=False,
-        description=("Whether to expose the custom-agent management API over HTTP. When disabled, the gateway rejects read/write access to custom agent SOUL.md, config, and USER.md prompt-management routes."),
+        description=("Whether to expose the custom-agent management API over HTTP. When disabled, the gateway rejects read/write access to custom agent SOUL.md and config routes."),
     )
 
 

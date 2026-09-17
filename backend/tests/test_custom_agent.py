@@ -66,10 +66,6 @@ class TestPaths:
         paths = _make_paths(tmp_path)
         assert paths.agent_memory_file("code-reviewer") == tmp_path / "agents" / "code-reviewer" / "memory.json"
 
-    def test_user_md_file(self, tmp_path):
-        paths = _make_paths(tmp_path)
-        assert paths.user_md_file == tmp_path / "USER.md"
-
     def test_paths_are_different_from_global(self, tmp_path):
         paths = _make_paths(tmp_path)
         assert paths.memory_file != paths.agent_memory_file("my-agent")
@@ -809,42 +805,6 @@ class TestAgentsAPI:
         assert response.status_code == 409
 
 
-# ===========================================================================
-# 9. Gateway API – User Profile endpoints
-# ===========================================================================
-
-
-class TestUserProfileAPI:
-    def test_get_user_profile_empty(self, agent_client):
-        response = agent_client.get("/api/user-profile")
-        assert response.status_code == 200
-        assert response.json()["content"] is None
-
-    def test_put_user_profile(self, agent_client, tmp_path):
-        content = "# User Profile\n\nI am a developer."
-        response = agent_client.put("/api/user-profile", json={"content": content})
-        assert response.status_code == 200
-        assert response.json()["content"] == content
-
-        # File should be written to disk
-        user_md = tmp_path / "USER.md"
-        assert user_md.exists()
-        assert user_md.read_text(encoding="utf-8") == content
-
-    def test_get_user_profile_after_put(self, agent_client):
-        content = "# Profile\n\nI work on data science."
-        agent_client.put("/api/user-profile", json={"content": content})
-
-        response = agent_client.get("/api/user-profile")
-        assert response.status_code == 200
-        assert response.json()["content"] == content
-
-    def test_put_empty_user_profile_returns_none(self, agent_client):
-        response = agent_client.put("/api/user-profile", json={"content": ""})
-        assert response.status_code == 200
-        assert response.json()["content"] is None
-
-
 class TestAgentsApiDisabled:
     def test_agents_list_returns_403(self, disabled_agent_client):
         response = disabled_agent_client.get("/api/agents")
@@ -870,10 +830,3 @@ class TestAgentsApiDisabled:
     def test_agent_delete_returns_403(self, disabled_agent_client):
         response = disabled_agent_client.delete("/api/agents/example-agent")
         assert response.status_code == 403
-
-    def test_user_profile_routes_return_403(self, disabled_agent_client):
-        get_response = disabled_agent_client.get("/api/user-profile")
-        put_response = disabled_agent_client.put("/api/user-profile", json={"content": "blocked"})
-
-        assert get_response.status_code == 403
-        assert put_response.status_code == 403
