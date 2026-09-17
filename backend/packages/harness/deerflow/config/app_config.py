@@ -26,6 +26,7 @@ from deerflow.config.loop_detection_config import LoopDetectionConfig
 from deerflow.config.mcp_tasks_config import McpTasksConfig
 from deerflow.config.memory_config import MemoryConfig, load_memory_config_from_dict
 from deerflow.config.model_config import ModelConfig
+from deerflow.config.object_storage_config import ObjectStorageConfig
 from deerflow.config.read_before_write_config import ReadBeforeWriteConfig
 from deerflow.config.reload_boundary import format_field_description
 from deerflow.config.run_events_config import RunEventsConfig
@@ -268,6 +269,13 @@ class AppConfig(BaseModel):
         description=format_field_description(
             "database",
             field_doc="Unified database backend for run/feedback metadata (memory, sqlite, or postgres).",
+        ),
+    )
+    object_storage: ObjectStorageConfig = Field(
+        default_factory=ObjectStorageConfig,
+        description=format_field_description(
+            "object_storage",
+            field_doc="Shared S3-compatible object storage for Phase 5 persistent file domains. Disabled by default; startup-only when enabled.",
         ),
     )
     run_events: RunEventsConfig = Field(

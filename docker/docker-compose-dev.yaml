@@ -52,6 +52,42 @@ services:
       - deer-flow-dev
     restart: unless-stopped
 
+  # ── Shared Object Storage (Phase 5 local integration environment) ──────
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: deer-flow-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - deer-flow-dev
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    container_name: deer-flow-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      DEER_FLOW_OBJECT_STORAGE_BUCKET: ${DEER_FLOW_OBJECT_STORAGE_BUCKET:-deer-flow}
+    command:
+      - sh
+      - -c
+      - mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" && mc mb --ignore-existing "local/$$DEER_FLOW_OBJECT_STORAGE_BUCKET"
+    networks:
+      - deer-flow-dev
+
   # ── Sandbox Provisioner ────────────────────────────────────────────────
   # Manages per-sandbox Pod + Service lifecycle in the host Kubernetes
   # cluster via the K8s API.
@@ -230,6 +266,10 @@ services:
       # Pass PROVISIONER_API_KEY into the gateway container so config.yaml can reference it
       # as sandbox.provisioner_api_key: $PROVISIONER_API_KEY
       - PROVISIONER_API_KEY=${PROVISIONER_API_KEY:-}
+      # Object-storage settings for an opt-in `object_storage:` config block.
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - DEER_FLOW_OBJECT_STORAGE_BUCKET=${DEER_FLOW_OBJECT_STORAGE_BUCKET:-deer-flow}
       # Proxy values (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) are inherited from ../.env via env_file.
       # Only NO_PROXY is declared here so internal service hostnames are always exempt from the proxy.
       - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,openviking,host.docker.internal
@@ -243,6 +283,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     networks:
       - deer-flow-dev
     restart: unless-stopped
@@ -253,6 +295,7 @@ volumes:
   gateway-venv:
   gateway-uv-cache:
   redis-data:
+  minio-data:
 
 networks:
   deer-flow-dev:

@@ -1,27 +1,26 @@
 import asyncio
-import functools
 import hashlib
 import logging
 import mimetypes
 import os
-import stat
 import tempfile
 import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import SandboxRequestLease, require_permission, try_acquire_sandbox_for_request
 from app.gateway.deps import get_run_manager
 from app.gateway.internal_auth import get_trusted_internal_owner_user_id
-from app.gateway.path_utils import normalize_outputs_virtual_path, resolve_outputs_confined_path, resolve_thread_virtual_path
+from app.gateway.path_utils import normalize_outputs_virtual_path
 from deerflow.authz.sandbox_authz import safe_app_config
 from deerflow.config.paths import make_safe_user_id
+from deerflow.object_storage import ByteRange, OutputsStorage, OutputStorageError
 from deerflow.runtime import ConflictError, ThreadOperationKind
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.sandbox.sandbox_provider import get_sandbox_provider
@@ -45,7 +44,6 @@ ACTIVE_CONTENT_MIME_TYPES = {
 MAX_SKILL_ARCHIVE_MEMBER_BYTES = 16 * 1024 * 1024
 _SKILL_ARCHIVE_READ_CHUNK_SIZE = 64 * 1024
 MAX_EDITABLE_ARTIFACT_BYTES = 2 * 1024 * 1024
-_ARTIFACT_EDIT_TEMP_PREFIX = ".artifact-edit-"
 
 
 class ArtifactUpdateRequest(BaseModel):
@@ -72,43 +70,12 @@ async def reserve_artifact_write(request: Request, thread_id: str, *, user_id: s
 
 
 def _normalize_editable_artifact_path(path: str) -> str:
-    # The outputs-only rule is shared with channel attachment delivery:
-    # ``normalize_outputs_virtual_path`` collapses ``..`` before its prefix check
-    # and ``resolve_outputs_confined_path`` re-checks the resolved host path, so
-    # neither an encoded ``..`` nor a symlink planted in ``outputs/`` can
-    # redirect the edit to a sibling ``user-data/`` directory.
+    # The object-key namespace independently validates the normalized relative
+    # path, so an encoded ``..`` cannot escape the outputs object prefix.
     virtual_path = normalize_outputs_virtual_path(path)
     if ".skill/" in virtual_path or virtual_path.endswith(".skill"):
         raise HTTPException(status_code=415, detail="Skill archives cannot be edited in the artifacts panel")
     return virtual_path
-
-
-def _load_editable_artifact(actual_path: Path, path: str, expected_sha256: str) -> tuple[bytes, os.stat_result]:
-    try:
-        file_stat = os.lstat(actual_path)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Artifact not found: {path}") from None
-    if stat.S_ISLNK(file_stat.st_mode):
-        raise HTTPException(status_code=415, detail="Symlinked artifacts cannot be edited")
-    if not stat.S_ISREG(file_stat.st_mode):
-        raise HTTPException(status_code=400, detail=f"Path is not a file: {path}")
-    if file_stat.st_size > MAX_EDITABLE_ARTIFACT_BYTES:
-        raise HTTPException(status_code=413, detail="Artifact is too large to edit")
-
-    current = actual_path.read_bytes()
-    if len(current) > MAX_EDITABLE_ARTIFACT_BYTES:
-        raise HTTPException(status_code=413, detail="Artifact is too large to edit")
-    if b"\x00" in current:
-        raise HTTPException(status_code=415, detail="Binary artifacts cannot be edited")
-    try:
-        current.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=415, detail="Only UTF-8 text artifacts can be edited") from None
-
-    current_sha256 = hashlib.sha256(current).hexdigest()
-    if current_sha256 != expected_sha256:
-        raise HTTPException(status_code=412, detail="Artifact changed since it was opened")
-    return current, file_stat
 
 
 def _encode_artifact_update(content: str) -> bytes:
@@ -120,40 +87,17 @@ def _encode_artifact_update(content: str) -> bytes:
     return encoded
 
 
-def _replace_artifact_atomically(actual_path: Path, content: bytes, file_stat: os.stat_result) -> None:
-    temp_fd, temp_path_str = tempfile.mkstemp(prefix=_ARTIFACT_EDIT_TEMP_PREFIX, dir=actual_path.parent)
-    temp_path = Path(temp_path_str)
+def _validate_editable_object(content: bytes, path: str, expected_sha256: str) -> None:
+    if len(content) > MAX_EDITABLE_ARTIFACT_BYTES:
+        raise HTTPException(status_code=413, detail="Artifact is too large to edit")
+    if b"\x00" in content:
+        raise HTTPException(status_code=415, detail="Binary artifacts cannot be edited")
     try:
-        # Preserve ownership where possible and keep replacement permissions
-        # scoped to the owner/group. The shared outputs directory allows a
-        # mounted sandbox to reach the file without making it world-writable.
-        if hasattr(os, "fchown"):
-            try:
-                os.fchown(temp_fd, file_stat.st_uid, file_stat.st_gid)
-            except OSError:
-                logger.debug("Could not preserve artifact ownership: %s", actual_path, exc_info=True)
-        # Windows has no fchmod and uses ACLs rather than POSIX mode bits.
-        # Keep the mkstemp permissions there; retain the existing POSIX
-        # behavior on platforms that expose descriptor-based chmod.
-        if hasattr(os, "fchmod"):
-            os.fchmod(temp_fd, stat.S_IMODE(file_stat.st_mode) | 0o660)
-        with os.fdopen(temp_fd, "wb") as handle:
-            temp_fd = -1
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_path, actual_path)
-        # Invalidate the SHA-256 cache after a successful edit so the next
-        # preview request computes the new digest. Edits are rare, so
-        # clearing the whole 256-entry LRU costs nothing (see PR review).
-        _sha256_of_file_cached.cache_clear()
-    finally:
-        if temp_fd >= 0:
-            os.close(temp_fd)
-        try:
-            temp_path.unlink()
-        except FileNotFoundError:
-            pass
+        content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=415, detail="Only UTF-8 text artifacts can be edited") from None
+    if hashlib.sha256(content).hexdigest() != expected_sha256:
+        raise HTTPException(status_code=412, detail="Artifact changed since it was opened")
 
 
 def _sync_artifact_to_sandbox(sandbox, virtual_path: str, content: bytes) -> None:
@@ -170,6 +114,65 @@ def _build_attachment_headers(filename: str, extra_headers: dict[str, str] | Non
     if extra_headers:
         headers.update(extra_headers)
     return headers
+
+
+def _object_not_found(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    error = response.get("Error", {}) if isinstance(response, dict) else {}
+    return str(error.get("Code", "")) in {"404", "NoSuchKey", "NotFound"}
+
+
+def _http_range(range_header: str | None, size: int | None) -> tuple[ByteRange | None, int, dict[str, str]]:
+    """Translate one HTTP byte range to the object-store port contract."""
+    headers = {"Accept-Ranges": "bytes"}
+    if range_header is None:
+        return None, 200, headers
+    if size is None or not range_header.startswith("bytes=") or "," in range_header:
+        raise HTTPException(status_code=416, detail="Requested range is not satisfiable", headers={**headers, "Content-Range": f"bytes */{size or 0}"})
+    start_text, separator, end_text = range_header.removeprefix("bytes=").partition("-")
+    if not separator:
+        raise HTTPException(status_code=416, detail="Requested range is not satisfiable", headers={**headers, "Content-Range": f"bytes */{size}"})
+    try:
+        if start_text:
+            start = int(start_text)
+            end = size - 1 if not end_text else min(int(end_text), size - 1)
+        else:
+            suffix = int(end_text)
+            if suffix <= 0:
+                raise ValueError
+            start, end = max(size - suffix, 0), size - 1
+    except ValueError as exc:
+        raise HTTPException(status_code=416, detail="Requested range is not satisfiable", headers={**headers, "Content-Range": f"bytes */{size}"}) from exc
+    if size == 0 or start < 0 or start >= size or end < start:
+        raise HTTPException(status_code=416, detail="Requested range is not satisfiable", headers={**headers, "Content-Range": f"bytes */{size}"})
+    headers.update({"Content-Range": f"bytes {start}-{end}/{size}", "Content-Length": str(end - start + 1)})
+    return ByteRange(start, end), 206, headers
+
+
+async def _stream_output(outputs: OutputsStorage, relative_path: str, byte_range: ByteRange | None):
+    async with outputs.open_read(relative_path, byte_range=byte_range) as read:
+        async for chunk in read.chunks:
+            yield chunk
+
+
+async def _load_skill_archive_from_outputs(outputs: OutputsStorage, relative_path: str, internal_path: str, skill_file_path: str) -> tuple[bytes, str | None]:
+    """Materialize one archive only for the request-scoped ZIP reader.
+
+    ``zipfile`` requires random access.  The temporary file is removed before
+    this coroutine returns and is never an outputs source of truth.
+    """
+    descriptor, temporary_path = tempfile.mkstemp(prefix=".artifact-skill-", suffix=".skill")
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            async with outputs.open_read(relative_path) as read:
+                async for chunk in read.chunks:
+                    await asyncio.to_thread(handle.write, chunk)
+        return await asyncio.to_thread(_load_skill_archive_member, Path(temporary_path), skill_file_path, internal_path)
+    finally:
+        try:
+            await asyncio.to_thread(os.unlink, temporary_path)
+        except FileNotFoundError:
+            pass
 
 
 def _slice_byte_range(content: bytes, range_header: str | None) -> tuple[bytes, int, dict[str, str]]:
@@ -230,17 +233,6 @@ def _is_active_content_mime_type(mime_type: str | None) -> bool:
         return False
     mime_type = mime_type.lower()
     return mime_type in ACTIVE_CONTENT_MIME_TYPES or mime_type.endswith("+xml")
-
-
-def is_text_file_by_content(path: Path, sample_size: int = 8192) -> bool:
-    """Check if file is text by examining content for null bytes."""
-    try:
-        with open(path, "rb") as f:
-            chunk = f.read(sample_size)
-            # Text files shouldn't contain null bytes
-            return b"\x00" not in chunk
-    except Exception:
-        return False
 
 
 def _read_skill_archive_member(zip_ref: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
@@ -312,56 +304,6 @@ def _load_skill_archive_member(actual_skill_path: Path, skill_file_path: str, in
     return content, mime_type
 
 
-def _read_artifact_payload(actual_path: Path, path: str, download: bool) -> tuple[str, str | None]:
-    """Worker-thread body for the regular branch of ``get_artifact``.
-
-    Stat probes and MIME sniffing (``mimetypes`` lazily stats the system MIME
-    database on first use) are blocking filesystem IO. Returns a
-    ``(kind, mime_type)`` plan the handler turns into a streamed
-    ``FileResponse``. Inline text and binary previews both use FileResponse so
-    clients can request a bounded byte range instead of buffering a whole file.
-    """
-    if not actual_path.exists():
-        raise HTTPException(status_code=404, detail=f"Artifact not found: {path}")
-    if not actual_path.is_file():
-        raise HTTPException(status_code=400, detail=f"Path is not a file: {path}")
-    mime_type, _ = mimetypes.guess_type(actual_path)
-    # Active content / explicit download is streamed by FileResponse — no read here.
-    if download or _is_active_content_mime_type(mime_type):
-        return ("file", mime_type)
-    if mime_type and mime_type.startswith("text/"):
-        return ("inline_file", mime_type)
-    if is_text_file_by_content(actual_path):
-        return ("inline_file", mime_type or "text/plain")
-    return ("inline_file", mime_type)
-
-
-def _sha256_of_file(path: Path) -> str:
-    """Return the hex SHA-256 digest of *path* without loading it whole.
-
-    Computing the digest on the Gateway lets the browser skip its own
-    crypto.subtle-based hashing, which is unavailable in non-secure contexts
-    (e.g. http://<lan-ip>:<port>) and otherwise breaks artifact preview +
-    inline editing (see issue #4864).
-
-    The digest is cached by (path, mtime_ns, size) so the many small ``Range``
-    requests a browser issues while scrubbing/paginating a preview do not each
-    re-hash a potentially huge artifact from scratch (raised in PR review).
-    """
-    stat = path.stat()
-    return _sha256_of_file_cached(str(path), stat.st_mtime_ns, stat.st_size)
-
-
-@functools.lru_cache(maxsize=256)
-def _sha256_of_file_cached(path: str, mtime_ns: int, size: int) -> str:
-    """Cached SHA-256 of *path*; the size/mtime args invalidate stale entries."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 @router.get(
     "/threads/{thread_id}/artifacts/{path:path}",
     summary="Get Artifact File",
@@ -410,6 +352,12 @@ async def get_artifact(thread_id: ThreadId, path: str, request: Request, downloa
     # effective user.
     raw_owner_user_id = get_trusted_internal_owner_user_id(request)
     owner_user_id = make_safe_user_id(raw_owner_user_id) if raw_owner_user_id else None
+    effective_user_id = owner_user_id or make_safe_user_id(get_effective_user_id())
+    try:
+        outputs = OutputsStorage.from_app_config(safe_app_config(), user_id=effective_user_id, thread_id=str(thread_id))
+    except Exception as exc:
+        logger.exception("Artifact object storage is unavailable")
+        raise HTTPException(status_code=503, detail="Artifact storage is unavailable") from exc
 
     # Check if this is a request for a file inside a .skill archive (e.g., xxx.skill/SKILL.md)
     if ".skill/" in path:
@@ -419,14 +367,22 @@ async def get_artifact(thread_id: ThreadId, path: str, request: Request, downloa
         skill_file_path = path[: marker_pos + len(".skill")]  # e.g., "mnt/user-data/outputs/my-skill.skill"
         internal_path = path[marker_pos + len(skill_marker) :]  # e.g., "SKILL.md"
 
-        actual_skill_path = await asyncio.to_thread(resolve_thread_virtual_path, thread_id, skill_file_path, user_id=owner_user_id)
-
-        # Offload the stat probes + ZIP open/extract + MIME sniff (blocking filesystem IO).
-        content, mime_type = await asyncio.to_thread(_load_skill_archive_member, actual_skill_path, skill_file_path, internal_path)
+        try:
+            relative_skill_path = outputs.relative_path(normalize_outputs_virtual_path(skill_file_path))
+            content, mime_type = await _load_skill_archive_from_outputs(outputs, relative_skill_path, internal_path, skill_file_path)
+        except OutputStorageError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except Exception as exc:
+            if _object_not_found(exc):
+                raise HTTPException(status_code=404, detail=f"Skill file not found: {skill_file_path}") from None
+            if isinstance(exc, HTTPException):
+                raise
+            logger.exception("Failed to read skill archive %s", skill_file_path)
+            raise HTTPException(status_code=503, detail="Artifact storage is unavailable") from exc
 
         # Add cache headers to avoid repeated ZIP extraction (cache for 5 minutes)
         cache_headers = {"Cache-Control": "private, max-age=300"}
-        download_name = Path(internal_path).name or actual_skill_path.stem
+        download_name = Path(internal_path).name or Path(skill_file_path).stem
         if download or _is_active_content_mime_type(mime_type):
             return Response(content=content, media_type=mime_type or "application/octet-stream", headers=_build_attachment_headers(download_name, cache_headers))
 
@@ -459,53 +415,36 @@ async def get_artifact(thread_id: ThreadId, path: str, request: Request, downloa
                 headers=inline_headers,
             )
 
-    actual_path = await asyncio.to_thread(resolve_thread_virtual_path, thread_id, path, user_id=owner_user_id)
+    try:
+        virtual_path = normalize_outputs_virtual_path(path)
+        relative_path = outputs.relative_path(virtual_path)
+        metadata = await outputs.stat(relative_path)
+    except OutputStorageError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        if _object_not_found(exc):
+            raise HTTPException(status_code=404, detail=f"Artifact not found: {path}") from None
+        logger.exception("Failed to stat artifact %s for thread %s", path, thread_id)
+        raise HTTPException(status_code=503, detail="Artifact storage is unavailable") from exc
 
-    logger.info(f"Resolving artifact path: thread_id={thread_id}, requested_path={path}, actual_path={actual_path}")
-
-    # Offload path stat + MIME sniff (blocking filesystem IO). Every regular
-    # artifact response is streamed by FileResponse; the worker only reports
-    # disposition and media type.
-    kind, mime_type = await asyncio.to_thread(_read_artifact_payload, actual_path, path, download)
-
-    if kind == "file":
-        # Always force download for active content types to prevent script
-        # execution in the application origin when users open generated artifacts.
-        headers = {**_build_attachment_headers(actual_path.name)}
-        file_size = await asyncio.to_thread(lambda: actual_path.stat().st_size)
-        if file_size <= MAX_EDITABLE_ARTIFACT_BYTES:
-            # Real SHA-256 so the browser can skip crypto.subtle (unavailable
-            # on non-secure contexts) when previewing / editing artifacts (#4864).
-            # Skipped for oversized artifacts to avoid a full-file read on every
-            # GET / Range request (raised in review as a performance P1).
-            content_sha256 = await asyncio.to_thread(_sha256_of_file, actual_path)
-            headers["ETag"] = f'"{content_sha256}"'
-        return FileResponse(
-            path=actual_path,
-            filename=actual_path.name,
-            media_type=mime_type,
-            headers=headers,
-        )
-
-    if kind == "inline_file":
-        # FileResponse honors byte-Range requests for large text previews and
-        # media seeking without buffering the full artifact in the Gateway.
-        headers = {"Content-Disposition": _build_content_disposition("inline", actual_path.name)}
-        file_size = await asyncio.to_thread(lambda: actual_path.stat().st_size)
-        if file_size <= MAX_EDITABLE_ARTIFACT_BYTES:
-            # Real SHA-256 so the browser can skip crypto.subtle (unavailable
-            # on non-secure contexts) when previewing / editing artifacts (#4864).
-            # Skipped for oversized artifacts to avoid a full-file read on every
-            # GET / Range request (raised in review as a performance P1).
-            content_sha256 = await asyncio.to_thread(_sha256_of_file, actual_path)
-            headers["ETag"] = f'"{content_sha256}"'
-        return FileResponse(
-            path=actual_path,
-            media_type=mime_type,
-            headers=headers,
-        )
-
-    raise AssertionError(f"Unhandled artifact response kind: {kind!r}")
+    request_headers = request.headers if request is not None else {}
+    selected_range, status_code, range_headers = _http_range(None if request_headers.get("if-range") else request_headers.get("range"), metadata.size)
+    filename = PurePosixPath(relative_path).name
+    mime_type = metadata.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    disposition = "attachment" if download or _is_active_content_mime_type(mime_type) else "inline"
+    headers = {"Content-Disposition": _build_content_disposition(disposition, filename), **range_headers}
+    if metadata.etag:
+        headers["ETag"] = metadata.etag
+    elif metadata.checksum_sha256:
+        headers["ETag"] = f'"{metadata.checksum_sha256}"'
+    if selected_range is None and metadata.size is not None:
+        headers["Content-Length"] = str(metadata.size)
+    return StreamingResponse(
+        _stream_output(outputs, relative_path, selected_range),
+        status_code=status_code,
+        media_type=mime_type,
+        headers=headers,
+    )
 
 
 @router.put(
@@ -537,18 +476,15 @@ async def update_artifact(
     sandbox = None
     try:
         async with reserve_artifact_write(request, thread_id, user_id=effective_user_id):
-            actual_path = await asyncio.to_thread(
-                resolve_outputs_confined_path,
-                thread_id,
-                virtual_path,
-                user_id=effective_user_id,
-            )
-            current, file_stat = await asyncio.to_thread(
-                _load_editable_artifact,
-                actual_path,
-                virtual_path,
-                body.expected_sha256,
-            )
+            outputs = OutputsStorage.from_app_config(safe_app_config(), user_id=effective_user_id, thread_id=str(thread_id))
+            relative_path = outputs.relative_path(virtual_path)
+            try:
+                current = await outputs.read_bytes(relative_path, limit=MAX_EDITABLE_ARTIFACT_BYTES)
+            except Exception as exc:
+                if _object_not_found(exc):
+                    raise HTTPException(status_code=404, detail=f"Artifact not found: {virtual_path}") from None
+                raise
+            _validate_editable_object(current, virtual_path, body.expected_sha256)
             updated = _encode_artifact_update(body.content)
 
             sandbox_provider = get_sandbox_provider()
@@ -572,11 +508,7 @@ async def update_artifact(
             try:
                 if sandbox is not None:
                     await asyncio.to_thread(_sync_artifact_to_sandbox, sandbox, virtual_path, updated)
-                await asyncio.to_thread(_replace_artifact_atomically, actual_path, updated, file_stat)
-                # Invalidate any cached digest for this path so a subsequent GET
-                # serves the fresh SHA-256. The (path, mtime_ns, size) LRU key can
-                # collide on a same-size, sub-nanosecond re-write (review nit).
-                _sha256_of_file_cached.cache_clear()
+                await outputs.write_bytes(relative_path, updated, content_type="text/plain; charset=utf-8")
             except Exception:
                 if sandbox is not None:
                     try:

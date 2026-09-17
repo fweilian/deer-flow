@@ -16,6 +16,7 @@ from starlette.responses import FileResponse
 import app.gateway.routers.artifacts as artifacts_router
 from app.gateway.internal_auth import INTERNAL_OWNER_USER_ID_HEADER_NAME, INTERNAL_SYSTEM_ROLE
 from deerflow.config.paths import Paths, make_safe_user_id
+from deerflow.object_storage import ObjectMetadata, ObjectRead
 from deerflow.sandbox.lease import get_sandbox_lease_manager
 
 # Browsers render any XML MIME type as a document, so an XHTML-namespaced
@@ -34,6 +35,42 @@ ACTIVE_ARTIFACT_CASES = [
 
 def _make_request(query_string: bytes = b"") -> Request:
     return Request({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": query_string})
+
+
+def test_get_artifact_streams_object_storage_range_without_a_local_output_path(monkeypatch) -> None:
+    class Outputs:
+        @classmethod
+        def from_app_config(cls, *_args, **_kwargs):
+            return cls()
+
+        def relative_path(self, path):
+            return path.removeprefix("/mnt/user-data/outputs/")
+
+        async def stat(self, _relative):
+            return ObjectMetadata(key="outputs/report.txt", size=6, etag='"opaque-etag"', content_type="text/plain", last_modified=None, checksum_sha256=None, user_metadata={})
+
+        @asynccontextmanager
+        async def open_read(self, _relative, *, byte_range=None):
+            payload = b"abcdef"
+            if byte_range is not None:
+                payload = payload[byte_range.start : byte_range.end + 1]
+
+            async def chunks():
+                yield payload
+
+            yield ObjectRead(metadata=await self.stat(_relative), chunks=chunks())
+
+    monkeypatch.setattr(artifacts_router, "OutputsStorage", Outputs)
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": [(b"range", b"bytes=1-3")], "query_string": b""})
+    response = asyncio.run(call_unwrapped(artifacts_router.get_artifact, "thread-1", "mnt/user-data/outputs/report.txt", request))
+
+    async def body() -> bytes:
+        return b"".join([chunk async for chunk in response.body_iterator])
+
+    assert asyncio.run(body()) == b"bcd"
+    assert response.status_code == 206
+    assert response.headers["content-range"] == "bytes 1-3/6"
+    assert response.headers["etag"] == '"opaque-etag"'
 
 
 def test_get_artifact_reads_utf8_text_file_on_windows_locale(tmp_path, monkeypatch) -> None:

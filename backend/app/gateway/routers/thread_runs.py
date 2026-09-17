@@ -26,7 +26,7 @@ from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
-from app.gateway.artifact_archive import ArtifactArchiveError, ArtifactArchiveResult, build_artifact_archive
+from app.gateway.artifact_archive import ArtifactArchiveError, ArtifactArchiveResult, build_object_artifact_archive
 from app.gateway.authz import require_cancel_permission_if, require_permission
 from app.gateway.checkpoint_lineage import (
     CheckpointLineageError,
@@ -55,7 +55,8 @@ from app.gateway.services import abuild_checkpoint_state_accessor, build_thread_
 from app.gateway.utils import sanitize_log_param
 from deerflow.agents.middlewares.dynamic_context_middleware import strip_injected_user_message_id_suffix
 from deerflow.authz.sandbox_authz import safe_app_config_async
-from deerflow.config.paths import get_paths, make_safe_user_id
+from deerflow.config.paths import make_safe_user_id
+from deerflow.object_storage import OutputsStorage
 from deerflow.runtime import CancelOutcome, ConflictError, RunRecord, RunStatus, ThreadOperationKind, serialize_channel_values_for_api
 from deerflow.runtime.runs.store.base import format_run_cursor_created_at, normalize_run_created_at_iso
 from deerflow.runtime.secret_context import redact_config_secrets, redact_metadata_secrets
@@ -1541,8 +1542,7 @@ def _archive_response_chunks(result: ArtifactArchiveResult):
 
 
 async def _build_archive_without_abandoning_worker(
-    outputs_dir,
-    user_data_dir,
+    outputs: OutputsStorage,
     presented_paths: list[str],
     *,
     extra_reserved_dir_names: set[str],
@@ -1550,15 +1550,7 @@ async def _build_archive_without_abandoning_worker(
     if _artifact_archive_slots.locked():
         raise ArtifactArchiveError("Too many artifact archives are being created; try again shortly", 429)
     await _artifact_archive_slots.acquire()
-    build_task = asyncio.create_task(
-        asyncio.to_thread(
-            build_artifact_archive,
-            outputs_dir,
-            presented_paths,
-            user_data_dir=user_data_dir,
-            extra_reserved_dir_names=extra_reserved_dir_names,
-        )
-    )
+    build_task = asyncio.create_task(build_object_artifact_archive(outputs, presented_paths, extra_reserved_dir_names=extra_reserved_dir_names))
     try:
         return await asyncio.shield(build_task)
     except asyncio.CancelledError:
@@ -1636,9 +1628,7 @@ async def create_run_artifact_archive(
     app_config = await safe_app_config_async()
     custom_tool_output_dir = getattr(getattr(app_config, "tool_output", None), "storage_subdir", None)
     extra_reserved_dir_names = {custom_tool_output_dir} if isinstance(custom_tool_output_dir, str) else set()
-    paths = get_paths()
-    user_data_dir = paths.sandbox_user_data_dir(thread_id, user_id=effective_user_id)
-    outputs_dir = paths.sandbox_outputs_dir(thread_id, user_id=effective_user_id)
+    outputs = OutputsStorage.from_app_config(app_config, user_id=effective_user_id, thread_id=str(thread_id))
 
     try:
         async with get_run_manager(request).reserve_thread_operation(
@@ -1647,8 +1637,7 @@ async def create_run_artifact_archive(
             user_id=effective_user_id,
         ):
             result = await _build_archive_without_abandoning_worker(
-                outputs_dir,
-                user_data_dir,
+                outputs,
                 presented_paths,
                 extra_reserved_dir_names=extra_reserved_dir_names,
             )

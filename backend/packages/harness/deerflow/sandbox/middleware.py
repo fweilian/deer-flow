@@ -223,6 +223,35 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
             return
         await asyncio.to_thread(provider.release, sandbox_id)
 
+    async def _commit_remote_outputs(self, runtime: Runtime, sandbox_id: str, provider) -> None:
+        """Commit the narrow Phase 5 outputs projection before remote release."""
+        if provider.uses_thread_data_mounts:
+            return
+        sandbox = provider.get(sandbox_id)
+        if sandbox is None:
+            raise SandboxRuntimeError("Sandbox disappeared before remote outputs could be committed")
+        thread_id = (runtime.context or {}).get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise SandboxRuntimeError("Thread ID is unavailable for remote outputs commit")
+
+        from deerflow.config import get_app_config
+        from deerflow.object_storage import OutputsStorage
+        from deerflow.sandbox.output_projection import commit_remote_outputs
+
+        app_config = await asyncio.to_thread(get_app_config)
+        outputs = OutputsStorage.from_app_config(
+            app_config,
+            user_id=resolve_runtime_user_id(runtime),
+            thread_id=thread_id,
+        )
+        await commit_remote_outputs(
+            outputs,
+            sandbox,
+            protected_prefixes=(f"{app_config.tool_output.storage_subdir}/",),
+        )
+        if isinstance(runtime.context, dict):
+            runtime.context["remote_outputs_committed"] = True
+
     @override
     def before_agent(self, state: SandboxMiddlewareState, runtime: Runtime) -> dict | None:
         thread_id = (runtime.context or {}).get("thread_id")
@@ -427,6 +456,7 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
             if fork_restored:
                 # The wrapped value replays the parent thread's sandbox state;
                 # releasing it here would evict the parent's warm sandbox.
+                await self._commit_remote_outputs(runtime, sandbox_id, get_sandbox_provider())
                 logger.info(f"Not releasing fork-restored sandbox {sandbox_id}")
                 return None
             logger.info(f"Releasing sandbox {sandbox_id}")
@@ -463,6 +493,8 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
                 logger.info(f"Not releasing fork-restored sandbox {sandbox_id}")
                 return None
             logger.info(f"Releasing sandbox {sandbox_id}")
+            provider = get_sandbox_provider()
+            await self._commit_remote_outputs(runtime, sandbox_id, provider)
             await self._release_sandbox_async(
                 sandbox_id,
                 owner_id=sandbox_lease_owner(runtime.context),
@@ -472,6 +504,8 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
         if (runtime.context or {}).get("sandbox_id") is not None:
             sandbox_id = runtime.context.get("sandbox_id")
             logger.info(f"Releasing sandbox {sandbox_id} from context")
+            provider = get_sandbox_provider()
+            await self._commit_remote_outputs(runtime, sandbox_id, provider)
             await self._release_sandbox_async(
                 sandbox_id,
                 owner_id=sandbox_lease_owner(runtime.context),

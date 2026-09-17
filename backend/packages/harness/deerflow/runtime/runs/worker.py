@@ -40,7 +40,9 @@ from deerflow.agents.goal_state import GoalEvaluation, GoalState
 from deerflow.agents.middlewares.input_sanitization_middleware import neutralize_untrusted_tags
 from deerflow.config.app_config import AppConfig
 from deerflow.config.database_config import CheckpointChannelMode
+from deerflow.config.paths import get_paths
 from deerflow.constants import CONVERSATION_READER_CONTEXT_KEY, TOOL_RESULTS_DIRNAME
+from deerflow.object_storage import OutputObject, OutputsStorage
 from deerflow.runtime.checkpoint_mode import (
     aensure_checkpoint_mode_compatible,
     inject_checkpoint_mode,
@@ -84,6 +86,7 @@ from deerflow.runtime.stream_bridge import StreamBridge
 from deerflow.runtime.stream_modes import normalize_stream_modes, to_langgraph_stream_modes
 from deerflow.runtime.user_context import get_current_user, get_effective_user_id, resolve_runtime_user_id
 from deerflow.sandbox.lease import SANDBOX_SERVER_OWNED_CONTEXT_KEYS
+from deerflow.sandbox.sandbox_provider import get_sandbox_provider
 from deerflow.trace_context import DEERFLOW_TRACE_METADATA_KEY, ensure_trace_id
 from deerflow.tracing import inject_langfuse_metadata
 from deerflow.utils.assembly_io import run_assembly
@@ -849,6 +852,11 @@ async def run_agent(
     goal_evaluator_model: Any | None = None
     delivery_content: dict[str, Any] | None = None
     produced_output_paths: list[str] | None = None
+    outputs_storage: OutputsStorage | None = None
+    pre_run_outputs: list[OutputObject] | None = None
+    outputs_projection_path = None
+    outputs_use_thread_mounts = False
+    outputs_committed = False
     # Journal construction moved ahead of preflight so every terminal run can
     # emit a receipt. Completion persistence keeps its prior boundary: before
     # #4272 the journal did not exist until preflight had succeeded, so early
@@ -906,6 +914,36 @@ async def run_agent(
             )
             logger.info("Run %s was cancelled", run_id)
 
+    async def _commit_outputs_for_delivery() -> list[str] | None:
+        """Commit a mounted projection, then derive delivery candidates from storage.
+
+        Remote sandboxes commit through ``SandboxMiddleware.aafter_agent`` while
+        their sandbox lease is still live; this worker only reads their shared
+        object-store result.  Mounted sandboxes use the host projection here.
+        """
+        nonlocal outputs_committed, produced_output_paths
+        if outputs_storage is None or pre_run_outputs is None:
+            return produced_output_paths
+        if outputs_committed:
+            return produced_output_paths
+        storage_subdir = ctx.app_config.tool_output.storage_subdir if ctx.app_config is not None else TOOL_RESULTS_DIRNAME
+        if outputs_use_thread_mounts:
+            post_run_outputs = await outputs_storage.commit_projection(
+                outputs_projection_path,
+                protected_prefixes=(f"{storage_subdir}/",),
+            )
+        else:
+            if runtime is not None and isinstance(runtime.context, dict) and runtime.context.get("sandbox_id") and not runtime.context.get("remote_outputs_committed"):
+                raise RuntimeError("Remote sandbox outputs were not committed to shared storage")
+            post_run_outputs = await outputs_storage.list()
+        produced_output_paths = OutputsStorage.changed_paths(
+            pre_run_outputs,
+            post_run_outputs,
+            excluded_dir_names=frozenset({storage_subdir}),
+        )
+        outputs_committed = True
+        return produced_output_paths
+
     try:
         normalized_stream_modes = normalize_stream_modes(stream_modes)
         requested_modes: set[str] = set(normalized_stream_modes)
@@ -957,6 +995,19 @@ async def run_agent(
                 )
             return
         started = True
+
+        # Outputs are a sandbox projection only.  Replace any node-local
+        # residue before the agent can observe it, then use the shared store's
+        # metadata as the delivery-verification baseline.
+        if ctx.app_config is not None:
+            workspace_changes_user_id = get_effective_user_id()
+            outputs_storage = OutputsStorage.from_app_config(ctx.app_config, user_id=workspace_changes_user_id, thread_id=thread_id)
+            outputs_use_thread_mounts = bool(get_sandbox_provider().uses_thread_data_mounts)
+            if outputs_use_thread_mounts:
+                outputs_projection_path = get_paths().sandbox_outputs_dir(thread_id, user_id=workspace_changes_user_id)
+                pre_run_outputs = await outputs_storage.hydrate_projection(outputs_projection_path)
+            else:
+                pre_run_outputs = await outputs_storage.list()
 
         task_id = lead_task_id(run_id)
         if extensions.needs_task_store:
@@ -1390,12 +1441,14 @@ async def run_agent(
             # collects the most severe / first / all reasons) instead of each
             # guard writing directly to the same key.
             stop_reason = runtime_context.get("stop_reason") if runtime_context is not None else None
-            produced_output_paths = await _produced_output_paths(
-                pre_run_workspace_snapshot,
-                thread_id=thread_id,
-                user_id=workspace_changes_user_id,
-                extra_excluded_dir_names=workspace_excluded_dir_names,
-            )
+            produced_output_paths = await _commit_outputs_for_delivery()
+            if produced_output_paths is None:
+                produced_output_paths = await _produced_output_paths(
+                    pre_run_workspace_snapshot,
+                    thread_id=thread_id,
+                    user_id=workspace_changes_user_id,
+                    extra_excluded_dir_names=workspace_excluded_dir_names,
+                )
             delivery_content = _delivery_content_with_outputs(
                 journal.get_delivery_content() if journal is not None else _empty_delivery_content(),
                 produced_output_paths,
@@ -1485,6 +1538,12 @@ async def run_agent(
                     )
                 except Exception:
                     logger.warning("Failed to record workspace changes for run %s", run_id, exc_info=True)
+
+            if not record.ownership_lost and not outputs_committed:
+                try:
+                    await _commit_outputs_for_delivery()
+                except Exception:
+                    logger.warning("Failed to commit outputs for non-successful run %s", run_id, exc_info=True)
 
             # Flush buffered journal events before the terminal receipt. The
             # receipt uses a run-scoped idempotent write shared with recovery, then

@@ -1,8 +1,8 @@
 """Middleware that enforces a per-result budget on tool outputs.
 
-Oversized tool results are persisted to disk and replaced with a compact
-typed synopsis containing a file reference.  When disk persistence is
-unavailable the middleware falls back to head+tail truncation so the
+Oversized tool results are persisted to shared outputs storage and replaced
+with a compact typed synopsis containing a file reference.  When shared
+storage is unavailable the middleware falls back to head+tail truncation so the
 model context is never blown by a single large tool return.
 
 The model-call hooks also budget the other bulky side of a tool call: the
@@ -45,6 +45,8 @@ from deerflow.agents.middlewares.tool_output_synopsis import render_tool_output_
 from deerflow.agents.middlewares.tool_result_meta import TOOL_META_KEY
 from deerflow.agents.middlewares.tool_transform_meta import append_tool_transform
 from deerflow.config.tool_output_config import ToolOutputConfig
+from deerflow.object_storage import OutputsStorage
+from deerflow.runtime.user_context import resolve_runtime_user_id
 from deerflow.sandbox.sandbox_provider import get_sandbox_provider
 
 if TYPE_CHECKING:
@@ -157,87 +159,6 @@ def _build_externalized_filename(*, tool_name: str, tool_call_id: str) -> str:
     return f"{safe_name}-{short_id}.{ext}"
 
 
-def _externalize(
-    content: str,
-    *,
-    tool_name: str,
-    tool_call_id: str,
-    outputs_path: str,
-    storage_subdir: str,
-) -> str | None:
-    """Write *content* to disk and return the virtual path, or ``None`` on failure."""
-    if os.path.isabs(storage_subdir) or ".." in storage_subdir:
-        return None
-    storage_dir = os.path.join(outputs_path, storage_subdir)
-    try:
-        os.makedirs(storage_dir, exist_ok=True)
-    except OSError:
-        return None
-
-    filename = _build_externalized_filename(tool_name=tool_name, tool_call_id=tool_call_id)
-    filepath = os.path.join(storage_dir, filename)
-
-    if not os.path.abspath(filepath).startswith(os.path.abspath(storage_dir)):
-        return None
-
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
-    except OSError:
-        return None
-
-    return f"{_VIRTUAL_OUTPUTS_BASE}/{storage_subdir}/{filename}"
-
-
-def _externalize_to_sandbox(
-    content: str,
-    *,
-    tool_name: str,
-    tool_call_id: str,
-    storage_subdir: str,
-    sandbox: Sandbox,
-) -> str | None:
-    """Write *content* into the sandbox filesystem and return the virtual path.
-
-    Used when the sandbox does not use thread-data mounts (e.g. a remote AIO
-    sandbox): the host-side :func:`_externalize` virtual path would not exist
-    inside the sandbox, so the model's ``read_file`` tool could not read it
-    back (issue #3416). Returns the same virtual-path contract on success, or
-    ``None`` to signal the caller to fall back to inline truncation.
-    """
-    if os.path.isabs(storage_subdir) or ".." in storage_subdir:
-        return None
-    filename = _build_externalized_filename(tool_name=tool_name, tool_call_id=tool_call_id)
-    virtual_dir = f"{_VIRTUAL_OUTPUTS_BASE}/{storage_subdir}"
-    virtual_path = f"{virtual_dir}/{filename}"
-    try:
-        # AIO sandbox write_file does NOT create parent directories, so create
-        # them explicitly before writing. execute_command returns its stdout
-        # verbatim (including an "Error: ..." string on failure) rather than
-        # raising, so we cannot rely on exception propagation here.
-        sandbox.execute_command(f"mkdir -p {shlex.quote(virtual_dir)}")
-        sandbox.write_file(virtual_path, content)
-        # Validate the file landed: execute_command may have silently failed
-        # to create the directory, and write_file backends differ. Refuse to
-        # hand the model an unreadable read_file path.
-        check = sandbox.execute_command(f"test -s {shlex.quote(virtual_path)} && echo OK || echo MISSING")
-        if not isinstance(check, str) or check.strip() != "OK":
-            logger.warning(
-                "Sandbox externalize validation failed: path=%s, check=%r",
-                virtual_path,
-                check,
-            )
-            return None
-    except Exception:
-        logger.exception(
-            "Failed to externalize %s output to sandbox (call_id=%s)",
-            tool_name,
-            tool_call_id,
-        )
-        return None
-    return virtual_path
-
-
 # ---------------------------------------------------------------------------
 # Preview / fallback builders
 # ---------------------------------------------------------------------------
@@ -307,21 +228,6 @@ def _build_fallback(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_outputs_path(request: ToolCallRequest) -> str | None:
-    """Best-effort extraction of the thread outputs path."""
-    runtime = getattr(request, "runtime", None)
-    if runtime is None:
-        return None
-    state = getattr(runtime, "state", None)
-    if state is None:
-        return None
-    thread_data = state.get("thread_data")
-    if not isinstance(thread_data, dict):
-        return None
-    outputs_path = thread_data.get("outputs_path")
-    return outputs_path if isinstance(outputs_path, str) else None
-
-
 def _resolve_sandbox(request: ToolCallRequest) -> Sandbox | None:
     """Resolve the active sandbox for the current tool call, or ``None``.
 
@@ -354,9 +260,7 @@ def _budget_content(
     *,
     tool_name: str,
     tool_call_id: str,
-    outputs_path: str | None,
     config: ToolOutputConfig,
-    sandbox: Sandbox | None = None,
 ) -> tuple[str, str] | None:
     """Apply budget to *content* and name the applied transform.
 
@@ -368,68 +272,6 @@ def _budget_content(
         return None
     if len(content) <= threshold and len(content) <= config.fallback_max_chars:
         return None
-
-    if threshold > 0 and len(content) > threshold:
-        virtual_path: str | None = None
-        # Decide persistence target based on what's available, without touching
-        # the sandbox provider unless a sandbox was actually resolved for this
-        # call. This keeps the legacy host-disk path provider-free, so callers
-        # without a configured sandbox (and CI environments without a
-        # config.yaml) continue to externalize to the host as before.
-        if sandbox is not None:
-            provider = None
-            try:
-                provider = get_sandbox_provider()
-            except Exception:
-                logger.exception("Failed to get sandbox provider for tool-output externalization; falling back to inline truncation")
-            if provider is not None and getattr(provider, "uses_thread_data_mounts", False):
-                # Host-mounted sandbox: host outputs path is bind-mounted into
-                # the sandbox at the same virtual path, so writing host-side is
-                # equivalent. Preserve the original behavior to avoid extra
-                # sandbox round-trips.
-                if outputs_path:
-                    virtual_path = _externalize(
-                        content,
-                        tool_name=tool_name,
-                        tool_call_id=tool_call_id,
-                        outputs_path=outputs_path,
-                        storage_subdir=config.storage_subdir,
-                    )
-            else:
-                virtual_path = _externalize_to_sandbox(
-                    content,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                    storage_subdir=config.storage_subdir,
-                    sandbox=sandbox,
-                )
-        elif outputs_path:
-            # No sandbox in this call (legacy / non-sandbox tools): write to
-            # host outputs path directly, no provider needed.
-            virtual_path = _externalize(
-                content,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                outputs_path=outputs_path,
-                storage_subdir=config.storage_subdir,
-            )
-        if virtual_path is not None:
-            logger.info(
-                "Externalized %s output (%d chars) to %s",
-                tool_name,
-                len(content),
-                virtual_path,
-            )
-            return (
-                _build_preview(
-                    content,
-                    tool_name=tool_name,
-                    virtual_path=virtual_path,
-                    head_chars=config.preview_head_chars,
-                    tail_chars=config.preview_tail_chars,
-                ),
-                "externalized",
-            )
 
     if config.fallback_max_chars > 0 and len(content) > config.fallback_max_chars:
         logger.warning(
@@ -460,8 +302,6 @@ def _budget_content(
 def _patch_tool_message(
     msg: ToolMessage,
     config: ToolOutputConfig,
-    outputs_path: str | None,
-    sandbox: Sandbox | None = None,
 ) -> ToolMessage:
     """Apply budget to a single ToolMessage. Returns the original if unchanged."""
     tool_name = msg.name or "unknown"
@@ -476,9 +316,7 @@ def _patch_tool_message(
         text,
         tool_name=tool_name,
         tool_call_id=msg.tool_call_id or "",
-        outputs_path=outputs_path,
         config=config,
-        sandbox=sandbox,
     )
     if budgeted is None:
         return msg
@@ -535,12 +373,10 @@ def _needs_budget(result: ToolMessage | Command, config: ToolOutputConfig) -> bo
 def _patch_result(
     result: ToolMessage | Command,
     config: ToolOutputConfig,
-    outputs_path: str | None,
-    sandbox: Sandbox | None = None,
 ) -> ToolMessage | Command:
     """Apply budget to a tool call result (ToolMessage or Command)."""
     if isinstance(result, ToolMessage):
-        return _patch_tool_message(result, config, outputs_path, sandbox)
+        return _patch_tool_message(result, config)
 
     update = getattr(result, "update", None)
     if not isinstance(update, dict):
@@ -554,7 +390,7 @@ def _patch_result(
     changed = False
     for msg in messages:
         if isinstance(msg, ToolMessage):
-            patched = _patch_tool_message(msg, config, outputs_path, sandbox)
+            patched = _patch_tool_message(msg, config)
             if patched is not msg:
                 changed = True
             new_messages.append(patched)
@@ -565,6 +401,98 @@ def _patch_result(
         return result
 
     return dc_replace(result, update={**update, "messages": new_messages})
+
+
+def _output_storage_for_request(request: ToolCallRequest, app_config: Any | None) -> OutputsStorage | None:
+    """Resolve the configured shared outputs store for this tool invocation."""
+    runtime = getattr(request, "runtime", None)
+    context = getattr(runtime, "context", None) if runtime is not None else None
+    thread_id = context.get("thread_id") if isinstance(context, dict) else None
+    if not thread_id or app_config is None or runtime is None:
+        return None
+    try:
+        return OutputsStorage.from_app_config(app_config, user_id=resolve_runtime_user_id(runtime), thread_id=str(thread_id))
+    except Exception:
+        logger.exception("Shared output storage is unavailable for tool-output externalization")
+        return None
+
+
+async def _externalize_to_object_storage(
+    content: str,
+    *,
+    tool_name: str,
+    tool_call_id: str,
+    storage_subdir: str,
+    outputs: OutputsStorage,
+    sandbox: Sandbox | None,
+) -> str | None:
+    if os.path.isabs(storage_subdir) or ".." in storage_subdir:
+        return None
+    filename = _build_externalized_filename(tool_name=tool_name, tool_call_id=tool_call_id)
+    relative_path = f"{storage_subdir}/{filename}"
+    try:
+        # Object storage is committed before the sandbox projection.  A failed
+        # projection does not create a local fallback; the next run rehydrates
+        # the authoritative object and remains able to read it.
+        await outputs.write_bytes(relative_path, content.encode("utf-8"), content_type="text/plain; charset=utf-8")
+        if sandbox is not None:
+            virtual_path = outputs.virtual_path(relative_path)
+            await asyncio.to_thread(sandbox.execute_command, f"mkdir -p {shlex.quote(virtual_path.rsplit('/', 1)[0])}")
+            await asyncio.to_thread(sandbox.write_file, virtual_path, content)
+        return outputs.virtual_path(relative_path)
+    except Exception:
+        logger.exception("Failed to externalize %s output to shared object storage", tool_name)
+        return None
+
+
+async def _patch_tool_message_async(
+    msg: ToolMessage,
+    config: ToolOutputConfig,
+    *,
+    outputs: OutputsStorage | None,
+    sandbox: Sandbox | None,
+) -> ToolMessage:
+    if (msg.name or "unknown") in config.exempt_tools:
+        return msg
+    text = _message_text(msg.content)
+    if text is None:
+        return msg
+    tool_name = msg.name or "unknown"
+    threshold = config.tool_overrides.get(tool_name, config.externalize_min_chars)
+    replacement: str | None = None
+    transform_kind: str | None = None
+    if threshold > 0 and len(text) > threshold and outputs is not None:
+        virtual_path = await _externalize_to_object_storage(
+            text,
+            tool_name=tool_name,
+            tool_call_id=msg.tool_call_id or "",
+            storage_subdir=config.storage_subdir,
+            outputs=outputs,
+            sandbox=sandbox,
+        )
+        if virtual_path is not None:
+            replacement = _build_preview(text, tool_name=tool_name, virtual_path=virtual_path, head_chars=config.preview_head_chars, tail_chars=config.preview_tail_chars)
+            transform_kind = "externalized"
+    if replacement is None and config.fallback_max_chars > 0 and len(text) > config.fallback_max_chars:
+        replacement = _build_fallback(text, tool_name=tool_name, max_chars=config.fallback_max_chars, head_chars=config.fallback_head_chars, tail_chars=config.fallback_tail_chars)
+        transform_kind = "truncated"
+    if replacement is None or transform_kind is None:
+        return msg
+    new_kwargs = dict(getattr(msg, "additional_kwargs", None) or {})
+    append_tool_transform(new_kwargs, transform_kind, by="ToolOutputBudgetMiddleware")
+    return msg.model_copy(update={"content": replacement, "additional_kwargs": new_kwargs, "response_metadata": dict(getattr(msg, "response_metadata", None) or {})})
+
+
+async def _patch_result_async(result: ToolMessage | Command, config: ToolOutputConfig, *, outputs: OutputsStorage | None, sandbox: Sandbox | None) -> ToolMessage | Command:
+    if isinstance(result, ToolMessage):
+        return await _patch_tool_message_async(result, config, outputs=outputs, sandbox=sandbox)
+    update = getattr(result, "update", None)
+    if not isinstance(update, dict) or not isinstance(update.get("messages"), list):
+        return result
+    messages = [await _patch_tool_message_async(message, config, outputs=outputs, sandbox=sandbox) if isinstance(message, ToolMessage) else message for message in update["messages"]]
+    if all(before is after for before, after in zip(update["messages"], messages, strict=True)):
+        return result
+    return dc_replace(result, update={**update, "messages": messages})
 
 
 def _patch_model_messages(messages: list[Any], config: ToolOutputConfig) -> list[Any] | None:
@@ -587,7 +515,7 @@ def _patch_model_messages(messages: list[Any], config: ToolOutputConfig) -> list
     changed = False
     for msg in messages:
         if isinstance(msg, ToolMessage):
-            patched = _patch_tool_message(msg, config, outputs_path=None)
+            patched = _patch_tool_message(msg, config)
             if patched is not msg:
                 changed = True
             updated.append(patched)
@@ -713,9 +641,10 @@ def _normalized_path_arg(args: Mapping[str, Any]) -> str | None:
 class ToolOutputBudgetMiddleware(AgentMiddleware[AgentState]):
     """Enforce per-result budget on tool outputs via externalization or truncation."""
 
-    def __init__(self, config: ToolOutputConfig | None = None) -> None:
+    def __init__(self, config: ToolOutputConfig | None = None, *, app_config: Any | None = None) -> None:
         super().__init__()
         self._config = config if config is not None else _default_config()
+        self._app_config = app_config
 
     def release_policy_parameters(self) -> dict[str, object]:
         return {"config": self._config.model_dump(mode="python")}
@@ -724,8 +653,8 @@ class ToolOutputBudgetMiddleware(AgentMiddleware[AgentState]):
     def from_app_config(cls, app_config: Any) -> ToolOutputBudgetMiddleware:
         tool_output = getattr(app_config, "tool_output", None)
         if isinstance(tool_output, ToolOutputConfig):
-            return cls(config=tool_output)
-        return cls()
+            return cls(config=tool_output, app_config=app_config)
+        return cls(app_config=app_config)
 
     # -- tool call hooks ---------------------------------------------------
 
@@ -740,9 +669,10 @@ class ToolOutputBudgetMiddleware(AgentMiddleware[AgentState]):
             return result
         if not _needs_budget(result, self._config):
             return result
-        outputs_path = _resolve_outputs_path(request)
-        sandbox = _resolve_sandbox(request)
-        return _patch_result(result, self._config, outputs_path, sandbox)
+        # Synchronous middleware hooks have no safe way to await the async S3
+        # port.  They deliberately truncate rather than writing persistent
+        # local output; normal Gateway execution uses ``awrap_tool_call``.
+        return _patch_result(result, self._config)
 
     @override
     async def awrap_tool_call(
@@ -755,13 +685,9 @@ class ToolOutputBudgetMiddleware(AgentMiddleware[AgentState]):
             return result
         if not _needs_budget(result, self._config):
             return result
-        outputs_path = _resolve_outputs_path(request)
-        # _resolve_sandbox only touches runtime.state and the provider's
-        # in-memory sandbox registry, so it is safe to call on the event
-        # loop. The actual sandbox I/O (mkdir/write/test) happens inside
-        # _patch_result, which is offloaded to a worker thread below.
+        outputs = _output_storage_for_request(request, self._app_config)
         sandbox = _resolve_sandbox(request)
-        return await asyncio.to_thread(_patch_result, result, self._config, outputs_path, sandbox)
+        return await _patch_result_async(result, self._config, outputs=outputs, sandbox=sandbox)
 
     # -- model call hooks (historical context budgeting) -------------------
 

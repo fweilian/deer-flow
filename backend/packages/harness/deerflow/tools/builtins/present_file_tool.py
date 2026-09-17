@@ -1,4 +1,4 @@
-from pathlib import Path
+import posixpath
 from typing import Annotated
 
 from langchain.tools import InjectedToolCallId, tool
@@ -6,8 +6,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.config import get_config
 from langgraph.types import Command
 
-from deerflow.config.paths import VIRTUAL_PATH_PREFIX, get_paths
-from deerflow.runtime.user_context import resolve_runtime_user_id
+from deerflow.config.paths import VIRTUAL_PATH_PREFIX
 from deerflow.tools.types import Runtime
 
 OUTPUTS_VIRTUAL_PREFIX = f"{VIRTUAL_PATH_PREFIX}/outputs"
@@ -48,36 +47,18 @@ def _normalize_presented_filepath(
         ValueError: If runtime metadata is missing or the path is outside the
             current thread's outputs directory.
     """
-    if runtime.state is None:
-        raise ValueError("Thread runtime state is not available")
-
     thread_id = _get_thread_id(runtime)
     if not thread_id:
         raise ValueError("Thread ID is not available in runtime context or runtime config")
-
-    thread_data = runtime.state.get("thread_data") or {}
-    outputs_path = thread_data.get("outputs_path")
-    if not outputs_path:
-        raise ValueError("Thread outputs path is not available in runtime state")
-
-    outputs_dir = Path(outputs_path).resolve()
-    stripped = filepath.lstrip("/")
-    virtual_prefix = VIRTUAL_PATH_PREFIX.lstrip("/")
-
-    if stripped == virtual_prefix or stripped.startswith(virtual_prefix + "/"):
-        try:
-            actual_path = get_paths().resolve_virtual_path(thread_id, filepath, user_id=resolve_runtime_user_id(runtime))
-        except TypeError:
-            actual_path = get_paths().resolve_virtual_path(thread_id, filepath)
-    else:
-        actual_path = Path(filepath).expanduser().resolve()
-
-    try:
-        relative_path = actual_path.relative_to(outputs_dir)
-    except ValueError as exc:
-        raise ValueError(f"Only files in {OUTPUTS_VIRTUAL_PREFIX} can be presented: {filepath}") from exc
-
-    return f"{OUTPUTS_VIRTUAL_PREFIX}/{relative_path.as_posix()}"
+    if not isinstance(filepath, str) or "\\" in filepath:
+        raise ValueError(f"Only files in {OUTPUTS_VIRTUAL_PREFIX} can be presented: {filepath}")
+    normalized = posixpath.normpath(filepath)
+    if not normalized.startswith(OUTPUTS_VIRTUAL_PREFIX + "/"):
+        raise ValueError(f"Only files in {OUTPUTS_VIRTUAL_PREFIX} can be presented: {filepath}")
+    relative_path = normalized.removeprefix(OUTPUTS_VIRTUAL_PREFIX + "/")
+    if not relative_path or relative_path == "." or relative_path.startswith("../"):
+        raise ValueError(f"Only files in {OUTPUTS_VIRTUAL_PREFIX} can be presented: {filepath}")
+    return f"{OUTPUTS_VIRTUAL_PREFIX}/{relative_path}"
 
 
 @tool("present_files", parse_docstring=True)

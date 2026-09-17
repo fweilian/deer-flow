@@ -13,6 +13,7 @@ from deerflow.config.app_config import AppConfig
 from deerflow.config.paths import Paths
 from deerflow.config.sandbox_config import SandboxConfig
 from deerflow.config.tool_output_config import ToolOutputConfig
+from deerflow.object_storage import ObjectMetadata, OutputObject
 from deerflow.runtime.events.store.memory import MemoryRunEventStore
 from deerflow.runtime.runs.manager import RunManager
 from deerflow.runtime.runs.schemas import RunStatus
@@ -177,6 +178,59 @@ async def test_changed_outputs_succeed_when_a_produced_output_is_presented(monke
 
 
 @pytest.mark.anyio
+async def test_delivery_verification_uses_shared_outputs_not_local_output_scan(tmp_path, monkeypatch):
+    """The worker commits its sandbox projection then verifies object metadata."""
+    projection_holder = {}
+
+    class SharedOutputs:
+        @classmethod
+        def from_app_config(cls, *_args, **_kwargs):
+            return cls()
+
+        async def hydrate_projection(self, projection):
+            projection.mkdir(parents=True, exist_ok=True)
+            projection_holder["path"] = projection
+            return []
+
+        async def commit_projection(self, projection, *, protected_prefixes=()):  # noqa: ARG002
+            assert projection == projection_holder["path"]
+            projection_holder["committed"] = True
+            return [OutputObject("report.md", ObjectMetadata("outputs/report.md", 6, '"etag"', "text/plain", None, None, {}))]
+
+        @staticmethod
+        def changed_paths(_before, _after, *, excluded_dir_names=frozenset()):  # noqa: ARG004
+            return ["/mnt/user-data/outputs/report.md"]
+
+    monkeypatch.setattr("deerflow.runtime.runs.worker.OutputsStorage", SharedOutputs)
+    monkeypatch.setattr("deerflow.runtime.runs.worker.get_paths", lambda: Paths(base_dir=tmp_path))
+    monkeypatch.setattr("deerflow.runtime.runs.worker._produced_output_paths", AsyncMock(side_effect=AssertionError("must not scan local outputs")))
+    monkeypatch.setattr("deerflow.runtime.runs.worker.get_sandbox_provider", lambda: SimpleNamespace(uses_thread_data_mounts=True))
+    run_manager = RunManager()
+    original_set_status = run_manager.set_status_if_not_cancelled
+
+    async def set_status_after_commit(*args, **kwargs):
+        assert projection_holder.get("committed") is True
+        return await original_set_status(*args, **kwargs)
+
+    monkeypatch.setattr(run_manager, "set_status_if_not_cancelled", set_status_after_commit)
+    record = await run_manager.create("thread-1")
+    store = MemoryRunEventStore()
+    app_config = AppConfig(sandbox=SandboxConfig(use="test"), object_storage={"enabled": True, "bucket": "deer-flow-test"})
+
+    class Agent:
+        async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
+            (projection_holder["path"] / "report.md").write_text("report", encoding="utf-8")
+            journal = config["context"]["__run_journal"]
+            journal._remember_current_run_tool_calls(AIMessage(content="", tool_calls=[{"id": "call_1", "name": "present_files", "args": {}}]), caller="lead_agent")
+            journal.on_tool_end(Command(update={"artifacts": ["/mnt/user-data/outputs/report.md"], "messages": [ToolMessage("ok", tool_call_id="call_1")]}), run_id=uuid4())
+            yield {"messages": []}
+
+    await run_agent(_make_bridge(), run_manager, record, ctx=RunContext(checkpointer=None, event_store=store, app_config=app_config), agent_factory=lambda *, config: Agent(), graph_input={}, config={})
+
+    assert (await _delivery_events(store, "thread-1", record.run_id))[0]["content"]["satisfied"] is True
+
+
+@pytest.mark.anyio
 async def test_changed_outputs_fail_closed_when_not_presented(monkeypatch):
     run_manager = RunManager()
     record = await run_manager.create("thread-1")
@@ -263,6 +317,26 @@ async def test_custom_tool_output_storage_subdir_does_not_trigger_delivery_verif
     only the default .tool-results name."""
     paths = Paths(base_dir=tmp_path)
     monkeypatch.setattr("deerflow.workspace_changes.recorder.get_paths", lambda: paths)
+    monkeypatch.setattr("deerflow.runtime.runs.worker.get_paths", lambda: paths)
+    monkeypatch.setattr("deerflow.runtime.runs.worker.get_sandbox_provider", lambda: SimpleNamespace(uses_thread_data_mounts=True))
+
+    class SharedOutputs:
+        @classmethod
+        def from_app_config(cls, *_args, **_kwargs):
+            return cls()
+
+        async def hydrate_projection(self, projection):
+            projection.mkdir(parents=True, exist_ok=True)
+            return []
+
+        async def commit_projection(self, _projection, *, protected_prefixes=()):  # noqa: ARG002
+            return [OutputObject("tool-output-cache/web_fetch-abcdef123456.log", ObjectMetadata("outputs/tool-output-cache/web_fetch-abcdef123456.log", 20000, '"etag"', "text/plain", None, None, {}))]
+
+        @staticmethod
+        def changed_paths(_before, after, *, excluded_dir_names=frozenset()):
+            return [f"/mnt/user-data/outputs/{item.relative_path}" for item in after if item.relative_path.split("/", 1)[0] not in excluded_dir_names]
+
+    monkeypatch.setattr("deerflow.runtime.runs.worker.OutputsStorage", SharedOutputs)
     run_manager = RunManager()
     record = await run_manager.create("thread-1")
     store = MemoryRunEventStore()

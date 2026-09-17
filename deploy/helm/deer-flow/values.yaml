@@ -247,7 +247,7 @@ ingress:
 # -- DeerFlow config.yaml content. Secrets MUST stay as $VAR references — never
 #    inline literal secret values here. The default enables provisioner sandbox.
 config: |
-  config_version: 44
+  config_version: 45
   log_level: info
   recursion_limit: 100
   max_recursion_limit: 1000
@@ -276,6 +276,20 @@ config: |
     postgres_url: $DATABASE_URL
     pool_recycle: 300
     command_timeout: 30
+
+  # Outputs, artifacts, and tool results require shared object storage. This
+  # chart intentionally leaves production endpoint/credential wiring to the
+  # deployment; Goal 5 will add the multi-instance startup gate.
+  object_storage:
+    enabled: false
+    endpoint_url: null
+    bucket: null
+    access_key_id: null
+    secret_access_key: null
+    region: us-east-1
+    force_path_style: true
+    verify_tls: true
+    key_prefix: deer-flow/v1
 
   # The LangGraph Store (cross-thread memory + thread list) reads this legacy
   # `checkpointer:` section — it does NOT fall back to `database:` the way the

@@ -315,6 +315,14 @@ cache is performance-only — results are identical with it disabled — so it i
 never frozen and workers sharing one checkpoint database may safely run
 different cache settings.
 
+The Phase 5 shared object-store foundation is configured through
+`object_storage` in `config.yaml`. It supports S3-compatible endpoints such as
+the bundled MinIO service, and uses path-style addressing by default. Outputs,
+artifacts, and tool results require it: configure a bucket and
+environment-backed credentials before starting a deployment. Object-storage
+callers fail explicitly on an unavailable store and never fall back to
+persistent local disk. These settings are restart-required.
+
 > [!TIP]
 > On Linux, if Docker-based commands fail with `permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock`, add your user to the `docker` group and re-login before retrying. See [CONTRIBUTING.md](CONTRIBUTING.md#linux-docker-daemon-permission-denied) for the full fix.
 

@@ -20,7 +20,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 44
+config_version: 45
 
 # Optional per-model request pacing (inside a models[] entry):
 # request_admission:
@@ -1849,6 +1849,41 @@ database:
   #                           # thread-delete purge fails (purge itself is immediate).
   #                           # 0 explicitly disables expiry (redis maxmemory only)
   #   key_prefix: ""          # default: hash of the database identity
+
+# ============================================================================
+# Shared Object Storage (Phase 5)
+# ============================================================================
+# S3-compatible persistent storage for Phase 5 outputs, artifacts, and
+# tool-results. These migrated domains have no local-disk fallback: a storage
+# failure fails the request. The bundled Docker Compose stack supplies the
+# MinIO endpoint and credentials below.
+#
+# The bundled Docker compose stack provides MinIO at http://minio:9000 and
+# creates the `deer-flow` bucket. For that local environment, use:
+# object_storage:
+#   enabled: true
+#   endpoint_url: http://minio:9000
+#   bucket: deer-flow
+#   access_key_id: $MINIO_ROOT_USER
+#   secret_access_key: $MINIO_ROOT_PASSWORD
+#   region: us-east-1
+#   force_path_style: true
+#   verify_tls: false
+#   key_prefix: deer-flow/v1
+#
+# Omit endpoint_url to use AWS S3 credentials discovered by the SDK. Keep
+# credentials as environment references; never commit literal secrets. All
+# settings are restart-required. TLS is optional for this Phase 5 foundation.
+object_storage:
+  enabled: true
+  endpoint_url: http://minio:9000
+  bucket: $DEER_FLOW_OBJECT_STORAGE_BUCKET
+  access_key_id: $MINIO_ROOT_USER
+  secret_access_key: $MINIO_ROOT_PASSWORD
+  region: us-east-1
+  force_path_style: true
+  verify_tls: false
+  key_prefix: deer-flow/v1
 
 # ============================================================================
 # Run Events Configuration

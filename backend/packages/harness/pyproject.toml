@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "agent-client-protocol>=0.4.0",
     "agent-sandbox>=0.0.30",
+    "aiobotocore>=2.25.0,<3",
     "beautifulsoup4>=4.12",
     "html5lib>=1.1",
     "croniter>=6.0.0",

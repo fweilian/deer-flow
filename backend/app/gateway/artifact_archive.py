@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import stat
 import tempfile
@@ -11,10 +12,11 @@ import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
 from deerflow.constants import TOOL_RESULTS_DIRNAME
+from deerflow.object_storage import OutputsStorage, OutputStorageError
 
 _VIRTUAL_PREFIX = "mnt/user-data/outputs/"
 _EDIT_TEMP_PREFIX = ".artifact-edit-"
@@ -50,6 +52,86 @@ class _ArchiveMember:
     entry: str
     initial: os.stat_result
     components: tuple[tuple[Path, int, int], ...]
+
+
+async def build_object_artifact_archive(
+    outputs: OutputsStorage,
+    virtual_paths: Iterable[str],
+    *,
+    extra_reserved_dir_names: Iterable[str] = (),
+) -> ArtifactArchiveResult:
+    """Build a request-scoped ZIP from object-store streams.
+
+    ZIP needs a seekable destination, so only the archive being returned uses
+    an unlinked temporary file. Artifact inputs stay streamed from the shared
+    outputs source of truth.
+    """
+    deadline = time.monotonic() + BUILD_TIMEOUT_SECONDS
+    paths = list(dict.fromkeys(virtual_paths))
+    if not paths:
+        raise _reject()
+    if len(paths) > MAX_FILES:
+        raise _too_large(f"An artifact archive can contain at most {MAX_FILES} files")
+    reserved = frozenset(name.casefold() for name in {TOOL_RESULTS_DIRNAME, *extra_reserved_dir_names})
+    members: list[tuple[str, str, int]] = []
+    for virtual_path in paths:
+        _check_deadline(deadline)
+        try:
+            relative = outputs.relative_path(virtual_path)
+        except OutputStorageError as exc:
+            raise _reject() from exc
+        parts = PurePosixPath(relative).parts
+        if not _valid_object_archive_parts(parts, reserved):
+            raise _reject()
+        try:
+            metadata = await outputs.stat(relative)
+        except Exception as exc:
+            raise _reject() from exc
+        if metadata.size is None or metadata.size > MAX_FILE_BYTES:
+            raise _too_large(f"Each archived artifact must be at most {MAX_FILE_BYTES} bytes")
+        members.append((relative, relative, metadata.size))
+    if sum(size for _, _, size in members) > MAX_TOTAL_BYTES:
+        raise _too_large(f"Archived artifacts must total at most {MAX_TOTAL_BYTES} bytes")
+    if len({unicodedata.normalize("NFC", entry).casefold() for _, entry, _ in members}) != len(members):
+        raise _reject()
+    output = tempfile.TemporaryFile("w+b")
+    copied_total = 0
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(output.fileno(), 0o600)
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_STORED, allowZip64=False) as archive:
+            for relative, entry, expected_size in members:
+                copied = 0
+                with archive.open(entry, "w", force_zip64=False) as destination:
+                    async with outputs.open_read(relative) as source:
+                        async for chunk in source.chunks:
+                            copied += len(chunk)
+                            if copied > expected_size or copied_total + copied > MAX_TOTAL_BYTES:
+                                raise _too_large(f"An artifact archive can contain at most {MAX_TOTAL_BYTES} bytes")
+                            await asyncio.to_thread(destination.write, chunk)
+                            _check_deadline(deadline)
+                if copied != expected_size:
+                    raise _reject()
+                copied_total += copied
+        size = output.tell()
+        output.seek(0)
+        return ArtifactArchiveResult(output, size, len(members), copied_total)
+    except Exception:
+        output.close()
+        raise
+
+
+def _valid_object_archive_parts(parts: tuple[str, ...], reserved: frozenset[str]) -> bool:
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return False
+    for part in parts:
+        if any(char in _WINDOWS_INVALID_CHARS for char in part) or part.endswith((" ", ".")):
+            return False
+        if part.split(".", 1)[0].rstrip().casefold() in _WINDOWS_DEVICE_NAMES or part.casefold() in reserved:
+            return False
+        if any(unicodedata.category(char).startswith("C") and char not in _ALLOWED_FORMAT_CHARS for char in part):
+            return False
+    return len("/".join(parts).encode()) <= MAX_ENTRY_BYTES
 
 
 def _reject() -> ArtifactArchiveError:
