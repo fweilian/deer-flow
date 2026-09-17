@@ -462,11 +462,11 @@ async def update_artifact(
 ) -> ArtifactUpdateResponse:
     """Update an existing text artifact while the thread has no active run.
 
-    The host-side artifact file is updated first; when the sandbox provider is
-    not thread-mounted, the new content is also synced into the thread's
-    sandbox. Under ``authorization.enabled``, a caller denied
-    ``sandbox:execute`` skips that sandbox sync (the host-side update still
-    completes).
+    The shared output object is the persistent source of truth. When the
+    sandbox provider is not thread-mounted, the new content is also synced
+    into the thread's disposable sandbox projection. Under
+    ``authorization.enabled``, a caller denied ``sandbox:execute`` skips that
+    projection sync while the shared-object update still completes.
     """
     virtual_path = _normalize_editable_artifact_path(path)
     raw_owner_user_id = get_trusted_internal_owner_user_id(request)

@@ -10,7 +10,7 @@ from dataclasses import replace
 import pytest
 
 from app.gateway.artifact_archive import build_object_artifact_archive
-from deerflow.object_storage import ByteRange, ObjectKeyNamespace, ObjectMetadata, ObjectRead, ObjectStorage, OutputsStorage
+from deerflow.object_storage import ByteRange, ObjectKeyNamespace, ObjectMetadata, ObjectRead, ObjectStorage, OutputsStorage, UploadsStorage
 from deerflow.sandbox.output_projection import commit_remote_outputs, hydrate_remote_outputs
 
 
@@ -91,6 +91,35 @@ async def test_projection_is_hydrated_from_and_committed_to_object_storage(tmp_p
     assert objects.objects[outputs._key("old.txt")] == b"updated"
     assert objects.objects[outputs._key("new.txt")] == b"new"
     assert OutputsStorage.changed_paths(before, after) == ["/mnt/user-data/outputs/new.txt", "/mnt/user-data/outputs/old.txt"]
+
+
+@pytest.mark.asyncio
+async def test_thread_persistent_namespaces_copy_and_delete_without_shared_references() -> None:
+    outputs, objects = _outputs()
+    uploads = UploadsStorage(objects, namespace=ObjectKeyNamespace(), user_id="user-1", thread_id="thread-1")
+    await outputs.write_bytes("report.txt", b"source")
+    await outputs.write_bytes(".tool-results/result.txt", b"tool-result")
+
+    async def upload_chunks() -> AsyncIterator[bytes]:
+        yield b"upload"
+
+    await uploads.write_stream("input.txt", upload_chunks())
+    await outputs.copy_to("thread-2")
+    await uploads.copy_to("thread-2")
+
+    branched_outputs = OutputsStorage(objects, namespace=ObjectKeyNamespace(), user_id="user-1", thread_id="thread-2")
+    branched_uploads = UploadsStorage(objects, namespace=ObjectKeyNamespace(), user_id="user-1", thread_id="thread-2")
+    await outputs.write_bytes("report.txt", b"changed-source")
+    assert await branched_outputs.read_bytes("report.txt") == b"source"
+    assert await branched_outputs.read_bytes(".tool-results/result.txt") == b"tool-result"
+    assert await branched_uploads.read_bytes("input.txt") == b"upload"
+
+    await outputs.delete_all()
+    await uploads.delete_all()
+    assert await outputs.list() == []
+    assert await uploads.list() == []
+    assert await branched_outputs.read_bytes("report.txt") == b"source"
+    assert await branched_uploads.read_bytes("input.txt") == b"upload"
 
 
 @pytest.mark.asyncio

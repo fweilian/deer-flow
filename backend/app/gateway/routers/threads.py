@@ -44,8 +44,10 @@ from app.gateway.services import (
 )
 from app.gateway.utils import sanitize_log_param
 from deerflow.agents.thread_state import THREAD_STATE_REDUCER_FIELDS
+from deerflow.config import get_app_config
 from deerflow.config.paths import Paths, get_paths
 from deerflow.config.summarization_config import ContextSize
+from deerflow.object_storage import OutputsStorage, UploadsStorage
 from deerflow.persistence.thread_meta import PROJECT_FILTER_UNSET, THREAD_ARCHIVED_METADATA_KEY, THREAD_PINNED_METADATA_KEY, THREAD_PROJECT_METADATA_KEY, ThreadOwnershipConflictError
 from deerflow.runtime import ThreadOperationKind, serialize_channel_values_for_api
 from deerflow.runtime.checkpoint_mode import CheckpointModeMismatchError, CheckpointModeReconfigurationError
@@ -323,9 +325,14 @@ def _ignore_branch_user_data(directory: str, names: list[str]) -> set[str]:
     return ignored
 
 
-def _copy_branch_user_data_sync(paths: Paths, source_thread_id: str, target_thread_id: str, *, user_id: str) -> str:
-    source = paths.sandbox_user_data_dir(source_thread_id, user_id=user_id)
-    target = paths.sandbox_user_data_dir(target_thread_id, user_id=user_id)
+def _copy_branch_workspace_sync(paths: Paths, source_thread_id: str, target_thread_id: str, *, user_id: str) -> str:
+    """Best-effort copy of the explicitly deferred workspace only.
+
+    Outputs and uploads are no longer copied from this instance-local tree:
+    their persistent branch lifecycle is handled through shared storage below.
+    """
+    source = paths.sandbox_work_dir(source_thread_id, user_id=user_id)
+    target = paths.sandbox_work_dir(target_thread_id, user_id=user_id)
     if not source.exists():
         return "not_found"
 
@@ -333,14 +340,40 @@ def _copy_branch_user_data_sync(paths: Paths, source_thread_id: str, target_thre
     return "current_thread_best_effort"
 
 
-async def _copy_branch_user_data(source_thread_id: str, target_thread_id: str) -> str:
+async def _copy_branch_persistent_objects(source_thread_id: str, target_thread_id: str, *, user_id: str) -> None:
+    """Copy the Phase 5 thread-scoped source-of-truth namespaces."""
+    config = get_app_config()
+    outputs = OutputsStorage.from_app_config(config, user_id=user_id, thread_id=source_thread_id)
+    uploads = UploadsStorage.from_app_config(config, user_id=user_id, thread_id=source_thread_id)
+    try:
+        await outputs.copy_to(target_thread_id)
+        await uploads.copy_to(target_thread_id)
+    except Exception:
+        # A branch has a freshly generated thread ID, so compensating cleanup
+        # cannot erase an existing thread. Do not leave a half-copied shared
+        # namespace behind when the second domain or S3 request fails.
+        target_outputs = OutputsStorage.from_app_config(config, user_id=user_id, thread_id=target_thread_id)
+        target_uploads = UploadsStorage.from_app_config(config, user_id=user_id, thread_id=target_thread_id)
+        for target in (target_outputs, target_uploads):
+            try:
+                await target.delete_all()
+            except Exception:
+                logger.exception(
+                    "Failed to clean partial shared branch data for %s",
+                    sanitize_log_param(target_thread_id),
+                )
+        raise
+
+
+async def _copy_branch_workspace(source_thread_id: str, target_thread_id: str) -> str:
+    """Keep the deferred workspace copy best-effort and separate from Phase 5 data."""
     paths = get_paths()
     user_id = get_effective_user_id()
     try:
-        return await run_file_io(_copy_branch_user_data_sync, paths, source_thread_id, target_thread_id, user_id=user_id)
+        return await run_file_io(_copy_branch_workspace_sync, paths, source_thread_id, target_thread_id, user_id=user_id)
     except Exception:
         logger.warning(
-            "Failed to copy user-data for branch %s -> %s",
+            "Failed to copy deferred workspace for branch %s -> %s",
             sanitize_log_param(source_thread_id),
             sanitize_log_param(target_thread_id),
             exc_info=True,
@@ -611,7 +644,7 @@ class ThreadBranchResponse(BaseModel):
 
 
 def _delete_thread_data(thread_id: str, paths: Paths | None = None, *, user_id: str | None = None) -> ThreadDeleteResponse:
-    """Delete local persisted filesystem data for a thread."""
+    """Delete a thread's local workspace and disposable projections."""
     path_manager = paths or get_paths()
     try:
         path_manager.delete_thread_dir(thread_id, user_id=user_id)
@@ -619,14 +652,23 @@ def _delete_thread_data(thread_id: str, paths: Paths | None = None, *, user_id: 
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except FileNotFoundError:
         # Not critical — thread data may not exist on disk
-        logger.debug("No local thread data to delete for %s", sanitize_log_param(thread_id))
+        logger.debug("No local thread cache to delete for %s", sanitize_log_param(thread_id))
         return ThreadDeleteResponse(success=True, message=f"No local data for {thread_id}")
     except Exception as exc:
         logger.exception("Failed to delete thread data for %s", sanitize_log_param(thread_id))
         raise HTTPException(status_code=500, detail="Failed to delete local thread data.") from exc
 
-    logger.info("Deleted local thread data for %s", sanitize_log_param(thread_id))
+    logger.info("Deleted local thread workspace and projections for %s", sanitize_log_param(thread_id))
     return ThreadDeleteResponse(success=True, message=f"Deleted local thread data for {thread_id}")
+
+
+async def _delete_thread_persistent_objects(thread_id: str, *, user_id: str) -> None:
+    """Remove all Phase 5 shared objects before discarding local projections."""
+    config = get_app_config()
+    outputs = OutputsStorage.from_app_config(config, user_id=user_id, thread_id=thread_id)
+    uploads = UploadsStorage.from_app_config(config, user_id=user_id, thread_id=thread_id)
+    await outputs.delete_all()
+    await uploads.delete_all()
 
 
 async def _fetch_raw_pending_writes(checkpointer: Any, config: dict[str, Any]) -> list[Any]:
@@ -742,7 +784,13 @@ async def _delete_thread_data_with_reservation(thread_id: str, request: Request)
             message="Skipped local data cleanup for legacy thread ID",
         )
     else:
-        response = _delete_thread_data(thread_id, user_id=get_effective_user_id())
+        user_id = get_effective_user_id()
+        try:
+            await _delete_thread_persistent_objects(thread_id, user_id=user_id)
+        except Exception as exc:
+            logger.exception("Failed to delete shared thread data for %s", sanitize_log_param(thread_id))
+            raise HTTPException(status_code=503, detail="Failed to delete shared thread data.") from exc
+        response = _delete_thread_data(thread_id, user_id=user_id)
 
     # Remove checkpoints (best-effort)
     checkpointer = getattr(request.app.state, "checkpointer", None)
@@ -1039,6 +1087,13 @@ async def _branch_thread_with_reservation(
         logger.exception("Failed to write branch checkpoint for thread %s", sanitize_log_param(new_thread_id))
         raise HTTPException(status_code=500, detail="Failed to create branch") from None
 
+    if branch_from_latest_turn:
+        try:
+            await _copy_branch_persistent_objects(thread_id, new_thread_id, user_id=get_effective_user_id())
+        except Exception as exc:
+            logger.exception("Failed to copy shared branch data for %s", sanitize_log_param(new_thread_id))
+            raise HTTPException(status_code=503, detail="Failed to copy shared branch data") from exc
+
     async def _write_branch_row(project_id: str | None) -> None:
         try:
             await thread_store.create(
@@ -1088,7 +1143,7 @@ async def _branch_thread_with_reservation(
         history_seed_mode = "failed"
 
     if branch_from_latest_turn:
-        workspace_clone_mode = await _copy_branch_user_data(thread_id, new_thread_id)
+        workspace_clone_mode = await _copy_branch_workspace(thread_id, new_thread_id)
     else:
         workspace_clone_mode = "skipped_historical_turn"
     return ThreadBranchResponse(

@@ -401,7 +401,10 @@ def test_delete_thread_route_cleans_thread_directory(tmp_path):
     app.state.run_manager = _ThreadTestRunManager()
     app.include_router(threads.router)
 
-    with patch("app.gateway.routers.threads.get_paths", return_value=paths):
+    with (
+        patch("app.gateway.routers.threads.get_paths", return_value=paths),
+        patch("app.gateway.routers.threads._delete_thread_persistent_objects", new_callable=AsyncMock),
+    ):
         with TestClient(app) as client:
             response = client.delete("/api/threads/thread-route")
 
@@ -471,8 +474,9 @@ def test_delete_thread_route_reserves_exclusive_thread_operation():
         )
     )
 
-    with TestClient(app) as client:
-        response = client.delete("/api/threads/thread-delete-reservation")
+    with patch("app.gateway.routers.threads._delete_thread_persistent_objects", new_callable=AsyncMock):
+        with TestClient(app) as client:
+            response = client.delete("/api/threads/thread-delete-reservation")
 
     assert response.status_code == 200
     assert len(app.state.run_manager.reservations) == 1
@@ -3642,13 +3646,9 @@ def test_branch_thread_best_effort_copies_current_workspace(tmp_path) -> None:
     source_thread_id = "source-with-files"
     user_id = "branch-user"
 
-    source_user_data = paths.sandbox_user_data_dir(source_thread_id, user_id=user_id)
-    source_outputs = paths.sandbox_outputs_dir(source_thread_id, user_id=user_id)
-    source_uploads = paths.sandbox_uploads_dir(source_thread_id, user_id=user_id)
-    source_outputs.mkdir(parents=True, exist_ok=True)
-    source_uploads.mkdir(parents=True, exist_ok=True)
-    (source_outputs / "result.txt").write_text("answer", encoding="utf-8")
-    (source_uploads / ".upload-stale.part").write_text("partial", encoding="utf-8")
+    source_workspace = paths.sandbox_work_dir(source_thread_id, user_id=user_id)
+    source_workspace.mkdir(parents=True, exist_ok=True)
+    (source_workspace / "notes.txt").write_text("answer", encoding="utf-8")
 
     human = HumanMessage(id="human-file", content="Make a file")
     ai = AIMessage(id="ai-file", content="Done")
@@ -3660,6 +3660,7 @@ def test_branch_thread_best_effort_copies_current_workspace(tmp_path) -> None:
     with (
         patch("app.gateway.routers.threads.get_paths", return_value=paths),
         patch("app.gateway.routers.threads.get_effective_user_id", return_value=user_id),
+        patch("app.gateway.routers.threads._copy_branch_persistent_objects", new_callable=AsyncMock),
         TestClient(app) as client,
     ):
         created = client.post("/api/threads", json={"thread_id": source_thread_id, "metadata": {}})
@@ -3677,11 +3678,78 @@ def test_branch_thread_best_effort_copies_current_workspace(tmp_path) -> None:
     body = response.json()
     assert body["workspace_clone_mode"] == "current_thread_best_effort"
 
-    target_user_data = paths.sandbox_user_data_dir(body["thread_id"], user_id=user_id)
-    assert target_user_data.exists()
-    assert (target_user_data / "outputs" / "result.txt").read_text(encoding="utf-8") == "answer"
-    assert not (target_user_data / "uploads" / ".upload-stale.part").exists()
-    assert source_user_data.exists()
+    target_workspace = paths.sandbox_work_dir(body["thread_id"], user_id=user_id)
+    assert target_workspace.exists()
+    assert (target_workspace / "notes.txt").read_text(encoding="utf-8") == "answer"
+    assert source_workspace.exists()
+
+
+def test_branch_shared_copy_cleans_partial_target_on_failure(monkeypatch) -> None:
+    """A failed multi-domain copy must not leave a partially usable branch."""
+    events: list[tuple[str, str, str, str | None]] = []
+
+    def backend(domain: str, *, fail_copy: bool = False):
+        class FakeStorage:
+            def __init__(self, thread_id: str) -> None:
+                self.thread_id = thread_id
+
+            @classmethod
+            def from_app_config(cls, _config, *, user_id: str, thread_id: str):
+                assert user_id == "branch-user"
+                return cls(thread_id)
+
+            async def copy_to(self, target_thread_id: str) -> None:
+                events.append((domain, "copy", self.thread_id, target_thread_id))
+                if fail_copy:
+                    raise RuntimeError("object store unavailable")
+
+            async def delete_all(self) -> None:
+                events.append((domain, "delete", self.thread_id, None))
+
+        return FakeStorage
+
+    monkeypatch.setattr(threads, "get_app_config", lambda: object())
+    monkeypatch.setattr(threads, "OutputsStorage", backend("outputs"))
+    monkeypatch.setattr(threads, "UploadsStorage", backend("uploads", fail_copy=True))
+
+    with pytest.raises(RuntimeError, match="object store unavailable"):
+        asyncio.run(threads._copy_branch_persistent_objects("source", "branch", user_id="branch-user"))
+
+    assert events == [
+        ("outputs", "copy", "source", "branch"),
+        ("uploads", "copy", "source", "branch"),
+        ("outputs", "delete", "branch", None),
+        ("uploads", "delete", "branch", None),
+    ]
+
+
+def test_branch_thread_fails_when_shared_copy_fails() -> None:
+    app, _store, checkpointer = _build_thread_app()
+    source_thread_id = "source-copy-failure"
+    human = HumanMessage(id="human-copy-failure", content="Question")
+    ai = AIMessage(id="ai-copy-failure", content="Answer")
+
+    async def _seed(parent_config: dict) -> None:
+        after_human = await _write_checkpoint(checkpointer, source_thread_id, str(uuid6()), [human], step=1, parent_config=parent_config)
+        await _write_checkpoint(checkpointer, source_thread_id, str(uuid6()), [human, ai], step=2, parent_config=after_human)
+
+    with (
+        patch("app.gateway.routers.threads._copy_branch_persistent_objects", new_callable=AsyncMock, side_effect=RuntimeError("object store unavailable")),
+        TestClient(app) as client,
+    ):
+        created = client.post("/api/threads", json={"thread_id": source_thread_id, "metadata": {}})
+        assert created.status_code == 200, created.text
+        initial = asyncio.run(checkpointer.aget_tuple({"configurable": {"thread_id": source_thread_id, "checkpoint_ns": ""}}))
+        assert initial is not None
+        asyncio.run(_seed(initial.config))
+
+        response = client.post(
+            f"/api/threads/{source_thread_id}/branches",
+            json={"message_id": "ai-copy-failure", "message_ids": ["ai-copy-failure"]},
+        )
+
+    assert response.status_code == 503
+    assert [row["thread_id"] for row in asyncio.run(app.state.thread_store.search())] == [source_thread_id]
 
 
 def test_branch_thread_from_historical_turn_skips_workspace_clone(tmp_path) -> None:

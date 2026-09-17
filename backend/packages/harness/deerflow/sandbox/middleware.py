@@ -456,7 +456,6 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
             if fork_restored:
                 # The wrapped value replays the parent thread's sandbox state;
                 # releasing it here would evict the parent's warm sandbox.
-                await self._commit_remote_outputs(runtime, sandbox_id, get_sandbox_provider())
                 logger.info(f"Not releasing fork-restored sandbox {sandbox_id}")
                 return None
             logger.info(f"Releasing sandbox {sandbox_id}")
