@@ -88,7 +88,7 @@ def test_object_key_namespace_is_stable_and_confined():
     assert keys.tool_result("user_1", "thread-1", "call.json") == "deer-flow/v1/users/user_1/threads/thread-1/outputs/.tool-results/call.json"
     assert keys.upload("user_1", "thread-1", "source.pdf") == "deer-flow/v1/users/user_1/threads/thread-1/uploads/source.pdf"
     assert keys.custom_skill("user_1", "release-notes", "SKILL.md") == "deer-flow/v1/users/user_1/skills/custom/release-notes/SKILL.md"
-    assert keys.skill_state("user_1") == "deer-flow/v1/users/user_1/skills/_skill_states.json"
+    assert keys.skill_state("user_1", "release-notes") == "deer-flow/v1/users/user_1/skills/state/release-notes.json"
 
     with pytest.raises(ValueError, match="stay under"):
         keys.artifact("user_1", "thread-1", "../outside")

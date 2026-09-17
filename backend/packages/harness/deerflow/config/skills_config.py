@@ -20,7 +20,7 @@ class SkillsConfig(BaseModel):
 
     use: str = Field(
         default="deerflow.skills.storage.local_skill_storage:LocalSkillStorage",
-        description="Class path of the SkillStorage implementation.",
+        description="Class path of the SkillStorage implementation. Configure ObjectStorageSkillStorage for shared custom skills.",
     )
     path: str | None = Field(
         default=None,

@@ -10,6 +10,7 @@ import threading
 from collections import OrderedDict
 
 from deerflow.skills.storage.local_skill_storage import LocalSkillStorage
+from deerflow.skills.storage.object_storage_skill_storage import ObjectStorageSkillStorage
 from deerflow.skills.storage.skill_storage import SkillStorage
 from deerflow.skills.storage.user_scoped_skill_storage import UserScopedSkillStorage
 from deerflow.skills.types import SkillCategory
@@ -59,6 +60,11 @@ def get_or_new_skill_storage(**kwargs) -> SkillStorage:
         from deerflow.reflection import resolve_class
 
         cls = resolve_class(skills_config.use, SkillStorage)
+        if getattr(cls, "per_user_only", False):
+            # Bundled/public skills are deployment resources, not Phase 5
+            # mutable objects. Keep their global reader local even when the
+            # configured backend owns user custom skills.
+            cls = LocalSkillStorage
         return cls(
             host_path=host_path if host_path is not None else str(skills_config.get_skills_path()),
             container_path=skills_config.container_path,
@@ -136,7 +142,26 @@ def get_or_new_user_skill_storage(user_id: str, **kwargs) -> SkillStorage:
             _user_scoped_storages.move_to_end(safe_id)
             return cached[1]
 
-        storage = UserScopedSkillStorage(safe_id, **kwargs)
+        from deerflow.reflection import resolve_class
+
+        try:
+            storage_class = resolve_class(app_config.skills.use, SkillStorage)
+        except ImportError:
+            # Test-only and legacy callers sometimes supply an in-process
+            # placeholder rather than a reflection path. Preserve the
+            # established local user-scoped fallback for those callers.
+            storage_class = UserScopedSkillStorage
+        # Public/bundled skills remain deployment resources. The configured
+        # shared backend is selected only for per-user custom-skill state.
+        if getattr(storage_class, "per_user_only", False):
+            storage = storage_class(
+                safe_id,
+                host_path=str(app_config.skills.get_skills_path()),
+                container_path=app_config.skills.container_path,
+                app_config=app_config,
+            )
+        else:
+            storage = UserScopedSkillStorage(safe_id, **kwargs)
         _user_scoped_storages[safe_id] = (app_config, storage)
         _user_scoped_storages.move_to_end(safe_id)
         # Evict least-recently-used entry if cache exceeds the ceiling.
@@ -159,7 +184,7 @@ def user_should_see_legacy_skills(user_id: str, **kwargs) -> bool:
     if kwargs:
         from deerflow.config.paths import make_safe_user_id
 
-        storage = UserScopedSkillStorage(make_safe_user_id(user_id), **kwargs)
+        storage = get_or_new_user_skill_storage(make_safe_user_id(user_id), **kwargs)
     else:
         storage = get_or_new_user_skill_storage(user_id)
     return any((skill.category.value if hasattr(skill.category, "value") else skill.category) == SkillCategory.LEGACY.value for skill in storage.load_skills(enabled_only=False))
@@ -199,6 +224,7 @@ def reset_user_skill_storage(user_id: str | None = None) -> None:
 
 __all__ = [
     "LocalSkillStorage",
+    "ObjectStorageSkillStorage",
     "SkillStorage",
     "UserScopedSkillStorage",
     "get_or_new_skill_storage",

@@ -69,6 +69,8 @@ class UserScopedSkillStorage(LocalSkillStorage):
     shadows the global one).
     """
 
+    allow_legacy_custom_fallback = True
+
     def __init__(
         self,
         user_id: str,
@@ -308,7 +310,7 @@ class UserScopedSkillStorage(LocalSkillStorage):
         #    editable/deletable by the user. LEGACY skills are mounted at
         #    /mnt/skills/legacy/<name>/ in the sandbox so their supporting
         #    files (references, templates, scripts, assets) are accessible.
-        if not user_custom_exists:
+        if self.allow_legacy_custom_fallback and not user_custom_exists:
             global_custom_path = self._global_custom_root
             if global_custom_path.exists() and global_custom_path.is_dir():
                 for current_root, dir_names, file_names in os.walk(global_custom_path, followlinks=True):

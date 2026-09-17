@@ -1328,6 +1328,9 @@ verification:
 # Configure skills directory for specialized agent workflows
 
 skills:
+  # User-authored custom skills and their enabled state use the shared Object
+  # Storage backend. Bundled public skills remain deployment resources.
+  use: deerflow.skills.storage.object_storage_skill_storage:ObjectStorageSkillStorage
   # Path to skills directory on the host (relative to project root or absolute)
   # Default: skills under the project root
   # Override with DEER_FLOW_SKILLS_PATH when this field is omitted.

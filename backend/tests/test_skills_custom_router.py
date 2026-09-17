@@ -2,6 +2,7 @@ import errno
 import json
 import stat
 import zipfile
+from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,6 @@ from fastapi.testclient import TestClient
 from app.gateway.auth.models import User
 from app.gateway.deps import get_config
 from app.gateway.routers import skills as skills_router
-from app.gateway.routers import uploads as uploads_router
 from deerflow.skills.security_static_scanner import StaticScannerError
 from deerflow.skills.storage.user_scoped_skill_storage import UserScopedSkillStorage
 from deerflow.skills.types import Skill
@@ -28,6 +28,27 @@ def _make_admin_user() -> User:
 
 def _skill_content(name: str, description: str = "Demo skill") -> str:
     return f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n"
+
+
+def _shared_output_archive(archive: Path):
+    class _Outputs:
+        @staticmethod
+        def from_app_config(*_args, **_kwargs):
+            return _Outputs()
+
+        def relative_path(self, _path: str) -> str:
+            return archive.name
+
+        @asynccontextmanager
+        async def open_read(self, filename: str):
+            assert filename == archive.name
+
+            async def chunks():
+                yield archive.read_bytes()
+
+            yield SimpleNamespace(chunks=chunks())
+
+    return _Outputs
 
 
 async def _async_scan(decision: str, reason: str):
@@ -110,7 +131,7 @@ def test_install_skill_archive_runs_security_scan(monkeypatch, tmp_path):
         skills=SimpleNamespace(get_skills_path=lambda: skills_root, container_path="/mnt/skills", use="deerflow.skills.storage.local_skill_storage:LocalSkillStorage"),
         skill_evolution=SimpleNamespace(enabled=True, moderation_model_name=None),
     )
-    monkeypatch.setattr(skills_router, "resolve_thread_virtual_path", lambda thread_id, path: archive)
+    monkeypatch.setattr(skills_router, "OutputsStorage", _shared_output_archive(archive))
     # Monkeypatch _get_user_skill_storage to return our test storage
     monkeypatch.setattr(skills_router, "_get_user_skill_storage", lambda cfg: storage)
     monkeypatch.setattr("deerflow.skills.installer.scan_skill_content", _scan)
@@ -288,72 +309,59 @@ async def test_bounded_skill_archive_stream_rejects_chunked_oversize(monkeypatch
         await anext(stream)
 
 
-def test_uploaded_skill_archive_installs_sandbox_readable_tree(monkeypatch, tmp_path):
-    home = tmp_path / "home"
-    skills_root = tmp_path / "skills"
-    skills_root.mkdir()
-    refresh_calls = []
+def test_uploaded_skill_archive_is_materialized_from_shared_upload_storage(monkeypatch, tmp_path):
+    installed_paths: list[Path] = []
+    archive = tmp_path / "uploaded-skill.skill"
+    archive.write_bytes(_make_skill_archive_bytes("uploaded-skill"))
 
-    async def _scan(*args, **kwargs):
-        from deerflow.skills.security_scanner import ScanResult
+    class _Uploads:
+        @staticmethod
+        def from_app_config(*_args, **_kwargs):
+            return _Uploads()
 
-        return ScanResult(decision="allow", reason="ok")
+        @asynccontextmanager
+        async def materialize(self, filename: str):
+            assert filename == "uploaded-skill.skill"
+            yield archive
 
-    async def _refresh(user_id: str):
-        refresh_calls.append(("refresh", user_id))
+    class _Storage:
+        async def ainstall_skill_from_archive(self, path: Path) -> dict:
+            installed_paths.append(path)
+            assert path.read_bytes() == archive.read_bytes()
+            return {"success": True, "skill_name": "uploaded-skill", "message": "installed"}
 
-    from deerflow.config.paths import Paths
+    config = SimpleNamespace()
 
-    config = SimpleNamespace(
-        skills=SimpleNamespace(get_skills_path=lambda: skills_root, container_path="/mnt/skills", use="deerflow.skills.storage.local_skill_storage:LocalSkillStorage"),
-        skill_evolution=SimpleNamespace(enabled=True, moderation_model_name=None),
-        uploads=SimpleNamespace(auto_convert_documents=False),
-    )
-    provider = SimpleNamespace(uses_thread_data_mounts=True)
+    async def _refresh(_user_id: str) -> None:
+        return None
 
-    # Monkeypatch paths BEFORE constructing UserScopedSkillStorage
-    monkeypatch.setattr("deerflow.config.paths.get_paths", lambda: Paths(base_dir=tmp_path))
-    monkeypatch.setattr("deerflow.config.paths._paths", None)
-    monkeypatch.setenv("DEER_FLOW_HOME", str(home))
-    monkeypatch.setattr(uploads_router, "get_sandbox_provider", lambda: provider)
-    monkeypatch.setattr("deerflow.skills.installer.scan_skill_content", _scan)
+    monkeypatch.setattr(skills_router, "UploadsStorage", _Uploads)
+    monkeypatch.setattr(skills_router, "_get_user_skill_storage", lambda _config: _Storage())
+    monkeypatch.setattr(skills_router, "get_effective_user_id", lambda: "default")
     monkeypatch.setattr(skills_router, "refresh_user_skills_system_prompt_cache_async", _refresh)
 
-    # Use UserScopedSkillStorage
-    storage = UserScopedSkillStorage("default", host_path=str(skills_root))
-    monkeypatch.setattr(skills_router, "_get_user_skill_storage", lambda cfg: storage)
-    monkeypatch.setattr(skills_router, "get_effective_user_id", lambda: "default")
+    app = _make_test_app(config)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/skills/install",
+            json={"thread_id": "thread-uploaded-skill", "path": "/mnt/user-data/uploads/uploaded-skill.skill"},
+        )
 
-    app = make_authed_test_app(user_factory=_make_admin_user)
-    app.state.config = config
-    app.dependency_overrides[get_config] = lambda: config
-    app.include_router(uploads_router.router)
-    app.include_router(skills_router.router)
+    assert response.status_code == 200
+    assert response.json()["skill_name"] == "uploaded-skill"
+    assert installed_paths == [archive]
 
-    thread_id = "thread-uploaded-skill"
-    archive_bytes = _make_skill_archive_bytes("uploaded-skill")
+
+def test_install_skill_rejects_a_local_workspace_path() -> None:
+    app = _make_test_app(SimpleNamespace())
 
     with TestClient(app) as client:
-        upload_response = client.post(
-            f"/api/threads/{thread_id}/uploads",
-            files=[("files", ("uploaded-skill.skill", archive_bytes, "application/octet-stream"))],
+        response = client.post(
+            "/api/skills/install",
+            json={"thread_id": "thread-1", "path": "/mnt/user-data/workspace/local.skill"},
         )
-        assert upload_response.status_code == 200
-        uploaded_file = upload_response.json()["files"][0]
-        uploaded_path = Path(uploaded_file["path"])
-        assert uploaded_path.is_file()
 
-        install_response = client.post("/api/skills/install", json={"thread_id": thread_id, "path": uploaded_file["virtual_path"]})
-
-    assert install_response.status_code == 200
-    assert install_response.json()["skill_name"] == "uploaded-skill"
-    installed_dir = _user_custom_dir(tmp_path, "default") / "uploaded-skill"
-    nested_dir = installed_dir / "references"
-    assert stat.S_IMODE(installed_dir.stat().st_mode) & 0o055 == 0o055
-    assert stat.S_IMODE(nested_dir.stat().st_mode) & 0o055 == 0o055
-    assert stat.S_IMODE((installed_dir / "SKILL.md").stat().st_mode) & 0o044 == 0o044
-    assert stat.S_IMODE((nested_dir / "guide.md").stat().st_mode) & 0o044 == 0o044
-    assert refresh_calls == [("refresh", "default")]
+    assert response.status_code == 400
 
 
 def test_install_skill_archive_security_scan_block_returns_400(monkeypatch, tmp_path):
@@ -381,7 +389,7 @@ def test_install_skill_archive_security_scan_block_returns_400(monkeypatch, tmp_
         skills=SimpleNamespace(get_skills_path=lambda: skills_root, container_path="/mnt/skills", use="deerflow.skills.storage.local_skill_storage:LocalSkillStorage"),
         skill_evolution=SimpleNamespace(enabled=True, moderation_model_name=None),
     )
-    monkeypatch.setattr(skills_router, "resolve_thread_virtual_path", lambda thread_id, path: archive)
+    monkeypatch.setattr(skills_router, "OutputsStorage", _shared_output_archive(archive))
     monkeypatch.setattr(skills_router, "_get_user_skill_storage", lambda cfg: storage)
     monkeypatch.setattr("deerflow.skills.installer.scan_skill_content", _scan)
     monkeypatch.setattr(skills_router, "refresh_user_skills_system_prompt_cache_async", _refresh)
@@ -425,7 +433,7 @@ def test_install_skill_archive_static_scan_block_returns_findings(monkeypatch, t
         skills=SimpleNamespace(get_skills_path=lambda: skills_root, container_path="/mnt/skills", use="deerflow.skills.storage.local_skill_storage:LocalSkillStorage"),
         skill_evolution=SimpleNamespace(enabled=True, moderation_model_name=None),
     )
-    monkeypatch.setattr(skills_router, "resolve_thread_virtual_path", lambda thread_id, path: archive)
+    monkeypatch.setattr(skills_router, "OutputsStorage", _shared_output_archive(archive))
     monkeypatch.setattr(skills_router, "get_or_new_user_skill_storage", lambda user_id, **kw: storage)
     monkeypatch.setattr(skills_router, "get_effective_user_id", lambda: "default")
     monkeypatch.setattr("deerflow.skills.installer.scan_skill_content", _scan)

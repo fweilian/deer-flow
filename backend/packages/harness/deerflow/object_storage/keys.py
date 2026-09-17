@@ -48,8 +48,17 @@ class ObjectKeyNamespace:
     def custom_skill(self, user_id: str, skill_name: str, relative_path: str) -> str:
         return self._relative(f"{self.custom_skills_prefix(user_id)}/{self._identifier(skill_name, 'skill_name')}", relative_path)
 
-    def skill_state(self, user_id: str) -> str:
-        return self._join("users", self._identifier(user_id, "user_id"), "skills", "_skill_states.json")
+    def skill_state(self, user_id: str, skill_name: str) -> str:
+        """Return the independently writable enabled-state object for one skill."""
+        return f"{self.skill_states_prefix(user_id)}/{self._identifier(skill_name, 'skill_name')}.json"
+
+    def skill_states_prefix(self, user_id: str) -> str:
+        return self._join(
+            "users",
+            self._identifier(user_id, "user_id"),
+            "skills",
+            "state",
+        )
 
     def _join(self, *parts: str) -> str:
         return "/".join((self._prefix, *parts))
