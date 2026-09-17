@@ -42,7 +42,7 @@ from deerflow.config.app_config import AppConfig
 from deerflow.config.database_config import CheckpointChannelMode
 from deerflow.config.paths import get_paths
 from deerflow.constants import CONVERSATION_READER_CONTEXT_KEY, TOOL_RESULTS_DIRNAME
-from deerflow.object_storage import OutputObject, OutputsStorage
+from deerflow.object_storage import OutputObject, OutputsStorage, UploadsStorage
 from deerflow.runtime.checkpoint_mode import (
     aensure_checkpoint_mode_compatible,
     inject_checkpoint_mode,
@@ -1008,6 +1008,9 @@ async def run_agent(
                 pre_run_outputs = await outputs_storage.hydrate_projection(outputs_projection_path)
             else:
                 pre_run_outputs = await outputs_storage.list()
+            if outputs_use_thread_mounts:
+                uploads = UploadsStorage.from_app_config(ctx.app_config, user_id=workspace_changes_user_id, thread_id=thread_id)
+                await uploads.hydrate_projection(get_paths().sandbox_uploads_dir(thread_id, user_id=workspace_changes_user_id))
 
         task_id = lead_task_id(run_id)
         if extensions.needs_task_store:

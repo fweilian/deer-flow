@@ -201,7 +201,17 @@ async def test_delivery_verification_uses_shared_outputs_not_local_output_scan(t
         def changed_paths(_before, _after, *, excluded_dir_names=frozenset()):  # noqa: ARG004
             return ["/mnt/user-data/outputs/report.md"]
 
+    class SharedUploads:
+        @classmethod
+        def from_app_config(cls, *_args, **_kwargs):
+            return cls()
+
+        async def hydrate_projection(self, projection):
+            projection.mkdir(parents=True, exist_ok=True)
+            return []
+
     monkeypatch.setattr("deerflow.runtime.runs.worker.OutputsStorage", SharedOutputs)
+    monkeypatch.setattr("deerflow.runtime.runs.worker.UploadsStorage", SharedUploads)
     monkeypatch.setattr("deerflow.runtime.runs.worker.get_paths", lambda: Paths(base_dir=tmp_path))
     monkeypatch.setattr("deerflow.runtime.runs.worker._produced_output_paths", AsyncMock(side_effect=AssertionError("must not scan local outputs")))
     monkeypatch.setattr("deerflow.runtime.runs.worker.get_sandbox_provider", lambda: SimpleNamespace(uses_thread_data_mounts=True))
@@ -336,7 +346,17 @@ async def test_custom_tool_output_storage_subdir_does_not_trigger_delivery_verif
         def changed_paths(_before, after, *, excluded_dir_names=frozenset()):
             return [f"/mnt/user-data/outputs/{item.relative_path}" for item in after if item.relative_path.split("/", 1)[0] not in excluded_dir_names]
 
+    class SharedUploads:
+        @classmethod
+        def from_app_config(cls, *_args, **_kwargs):
+            return cls()
+
+        async def hydrate_projection(self, projection):
+            projection.mkdir(parents=True, exist_ok=True)
+            return []
+
     monkeypatch.setattr("deerflow.runtime.runs.worker.OutputsStorage", SharedOutputs)
+    monkeypatch.setattr("deerflow.runtime.runs.worker.UploadsStorage", SharedUploads)
     run_manager = RunManager()
     record = await run_manager.create("thread-1")
     store = MemoryRunEventStore()

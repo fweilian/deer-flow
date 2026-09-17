@@ -16,7 +16,7 @@ from langchain_core.runnables import run_in_executor
 from langgraph.runtime import Runtime
 
 from deerflow.agents.middlewares.input_sanitization_middleware import neutralize_untrusted_tags
-from deerflow.config.paths import Paths, get_paths
+from deerflow.object_storage import UploadsStorage
 from deerflow.runtime.user_context import resolve_runtime_user_id
 from deerflow.uploads.manager import is_upload_staging_file
 from deerflow.utils.file_outline import extract_outline_for_file
@@ -25,6 +25,14 @@ from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY, message_content_t
 logger = logging.getLogger(__name__)
 
 _MAX_FILES_PER_CONTEXT_SECTION = 10
+
+
+def _is_missing_upload_error(error: Exception) -> bool:
+    if isinstance(error, FileNotFoundError):
+        return True
+    response = getattr(error, "response", None)
+    code = str((response or {}).get("Error", {}).get("Code", ""))
+    return code in {"404", "NoSuchKey", "NotFound"}
 
 
 def _extension_label(file: dict) -> str:
@@ -66,14 +74,15 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         """Initialize the middleware.
 
         Args:
-            base_dir: Base directory for thread data. Defaults to Paths resolution.
+            base_dir: Deprecated compatibility argument. Upload persistence is
+                always resolved from shared object storage.
             max_files_per_context_section: Maximum number of files listed in
                 each uploaded-files prompt section.
         """
         super().__init__()
         if max_files_per_context_section < 1:
             raise ValueError("max_files_per_context_section must be at least 1")
-        self._paths = Paths(base_dir) if base_dir else get_paths()
+        del base_dir
         self._max_files_per_context_section = max_files_per_context_section
 
     def _format_file_entry(self, file: dict, lines: list[str]) -> None:
@@ -160,7 +169,7 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
 
         return "\n".join(lines)
 
-    def _files_from_kwargs(self, message: HumanMessage, uploads_dir: Path | None = None) -> list[dict] | None:
+    def _files_from_kwargs(self, message: HumanMessage, available: dict[str, int] | None = None) -> list[dict] | None:
         """Extract file info from message additional_kwargs.files.
 
         The frontend sends uploaded file metadata in additional_kwargs.files
@@ -169,8 +178,8 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
 
         Args:
             message: The human message to inspect.
-            uploads_dir: Physical uploads directory used to verify file existence.
-                         When provided, entries whose files no longer exist are skipped.
+            available: Shared-storage filename/size mapping. When supplied,
+                entries absent from object storage are skipped.
 
         Returns:
             List of file dicts with virtual paths, or None if the field is absent or empty.
@@ -186,20 +195,26 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
             filename = f.get("filename") or ""
             if not filename or Path(filename).name != filename or is_upload_staging_file(filename):
                 continue
-            if uploads_dir is not None and not (uploads_dir / filename).is_file():
+            if available is not None and filename not in available:
                 continue
             files.append(
                 {
                     "filename": filename,
-                    "size": int(f.get("size") or 0),
+                    "size": available[filename] if available is not None else int(f.get("size") or 0),
                     "path": f"/mnt/user-data/uploads/{filename}",
                     "extension": Path(filename).suffix,
                 }
             )
         return files if files else None
 
-    @override
-    def before_agent(self, state: UploadsMiddlewareState, runtime: Runtime) -> dict | None:
+    def _before_agent(
+        self,
+        state: UploadsMiddlewareState,
+        runtime: Runtime,
+        *,
+        available: dict[str, int] | None = None,
+        outlines: dict[str, tuple[list[dict], list[str]]] | None = None,
+    ) -> dict | None:
         """Inject current-run uploads before agent execution.
 
         Only files from the current message's additional_kwargs.files are listed.
@@ -217,25 +232,12 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         if not isinstance(last_message, HumanMessage):
             return {"uploaded_files": []}
 
-        # Resolve uploads directory for existence checks
-        thread_id = (runtime.context or {}).get("thread_id")
-        if thread_id is None:
-            try:
-                from langgraph.config import get_config
-
-                thread_id = get_config().get("configurable", {}).get("thread_id")
-            except RuntimeError:
-                pass
-        uploads_dir = self._paths.sandbox_uploads_dir(thread_id, user_id=resolve_runtime_user_id(runtime)) if thread_id else None
-
         # Get newly uploaded files from the current message's additional_kwargs.files
-        new_files = self._files_from_kwargs(last_message, uploads_dir) or []
+        new_files = self._files_from_kwargs(last_message, available) or []
         if not new_files:
             if (last_message.additional_kwargs or {}).get("files"):
                 logger.info(
-                    "UploadsMiddleware: files metadata was present but no files were found on disk (thread_id=%s, uploads_dir=%s)",
-                    thread_id,
-                    uploads_dir,
+                    "UploadsMiddleware: files metadata was present but no files were found in shared storage",
                 )
             # Clear stale uploaded_files so list_uploaded_files doesn't
             # exclude files that became historical after the previous turn.
@@ -243,11 +245,9 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
 
         context_files, omitted_files = self._select_files_for_context(new_files)
 
-        # Attach outlines to context files
-        if uploads_dir:
-            for file in context_files:
-                phys_path = uploads_dir / file["filename"]
-                outline, preview = extract_outline_for_file(phys_path)
+        for file in context_files:
+            if outlines is not None and file["filename"] in outlines:
+                outline, preview = outlines[file["filename"]]
                 file["outline"] = outline
                 file["outline_preview"] = preview
 
@@ -293,16 +293,48 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         }
 
     @override
-    async def abefore_agent(self, state: UploadsMiddlewareState, runtime: Runtime) -> dict | None:
-        """Async hook that offloads the synchronous uploads scan off the event loop.
+    def before_agent(self, state: UploadsMiddlewareState, runtime: Runtime) -> dict | None:
+        """Synchronous fallback that does not touch the filesystem or S3 client."""
+        return self._before_agent(state, runtime)
 
-        ``before_agent`` performs blocking filesystem IO (directory enumeration,
-        ``stat``, reading sibling ``.md`` outlines). When the graph runs async,
-        langgraph would otherwise execute the sync hook directly on the event
-        loop, so it is dispatched to a worker thread via ``run_in_executor``.
-        ``run_in_executor`` copies the current context, preserving both
-        LangGraph's runnable config and DeerFlow's request ContextVar fallback.
-        The runtime itself is also passed explicitly for the authoritative
-        ``runtime.context["user_id"]`` channel.
-        """
-        return await run_in_executor(None, self.before_agent, state, runtime)
+    @override
+    async def abefore_agent(self, state: UploadsMiddlewareState, runtime: Runtime) -> dict | None:
+        """Verify and inspect current uploads through shared object storage."""
+        messages = list(state.get("messages", []))
+        last_message = messages[-1] if messages else None
+        if not isinstance(last_message, HumanMessage):
+            return self._before_agent(state, runtime)
+        thread_id = (runtime.context or {}).get("thread_id")
+        if thread_id is None:
+            try:
+                from langgraph.config import get_config
+
+                thread_id = get_config().get("configurable", {}).get("thread_id")
+            except RuntimeError:
+                pass
+        if not isinstance(thread_id, str):
+            return self._before_agent(state, runtime)
+
+        from deerflow.config import get_app_config
+
+        app_config = await run_in_executor(None, get_app_config)
+        uploads = UploadsStorage.from_app_config(app_config, user_id=resolve_runtime_user_id(runtime), thread_id=thread_id)
+        candidates = self._files_from_kwargs(last_message) or []
+        available: dict[str, int] = {}
+        for candidate in candidates:
+            try:
+                metadata = await uploads.stat(candidate["filename"])
+            except Exception as exc:
+                if _is_missing_upload_error(exc):
+                    logger.info("UploadsMiddleware: current upload %s is absent from shared storage", candidate["filename"])
+                    continue
+                raise
+            available[candidate["filename"]] = metadata.size or 0
+
+        outlines: dict[str, tuple[list[dict], list[str]]] = {}
+        for candidate in candidates[: self._max_files_per_context_section]:
+            if candidate["filename"] not in available:
+                continue
+            async with uploads.materialize(candidate["filename"]) as path:
+                outlines[candidate["filename"]] = await run_in_executor(None, extract_outline_for_file, path)
+        return self._before_agent(state, runtime, available=available, outlines=outlines)

@@ -383,18 +383,29 @@ def _make_upload_app(monkeypatch, provider, *, fail_closed: bool = True):
     return TestClient(app)
 
 
-def test_upload_sandbox_sync_skipped_when_denied(monkeypatch, tmp_path):
-    """Denied role: upload succeeds, sandbox.acquire is never called."""
-    from unittest.mock import AsyncMock, MagicMock
+def _install_shared_upload_storage(monkeypatch):
+    payloads: list[bytes] = []
+
+    class Storage:
+        async def write_stream(self, _filename, chunks, *, content_type=None):  # noqa: ARG002
+            payloads.append(b"".join([chunk async for chunk in chunks]))
+
+    class Factory:
+        @classmethod
+        def from_app_config(cls, *_args, **_kwargs):
+            return Storage()
+
+    monkeypatch.setattr("app.gateway.routers.uploads.UploadsStorage", Factory)
+    return payloads
+
+
+def test_upload_is_independent_of_sandbox_authorization_when_denied(monkeypatch, tmp_path):
+    """Upload persistence does not acquire or depend on a sandbox."""
+    del tmp_path
 
     provider = RbacAuthorizationProvider(roles={"user": {"sandbox": {"allow": []}}})
     client = _make_upload_app(monkeypatch, provider)
-    _isolated_uploads_dir(monkeypatch, tmp_path)
-
-    sandbox_provider = MagicMock()
-    sandbox_provider.uses_thread_data_mounts = False
-    sandbox_provider.acquire_async = AsyncMock(side_effect=AssertionError("must not acquire"))
-    monkeypatch.setattr("app.gateway.routers.uploads.get_sandbox_provider", lambda: sandbox_provider)
+    payloads = _install_shared_upload_storage(monkeypatch)
     monkeypatch.setattr(
         "app.gateway.deps.get_optional_user_from_request",
         AsyncMock(return_value=_request_user()),
@@ -402,22 +413,16 @@ def test_upload_sandbox_sync_skipped_when_denied(monkeypatch, tmp_path):
 
     resp = client.post("/api/threads/upload-test/uploads", files={"files": ("a.txt", b"hello")})
     assert resp.status_code == 200, resp.text
-    sandbox_provider.acquire_async.assert_not_called()
+    assert payloads == [b"hello"]
 
 
-def test_upload_sandbox_sync_proceeds_when_allowed(monkeypatch, tmp_path):
-    """Allowed role: sandbox.acquire_async is called as before."""
-    from unittest.mock import AsyncMock, MagicMock
+def test_upload_is_independent_of_sandbox_authorization_when_allowed(monkeypatch, tmp_path):
+    """An allowed sandbox role does not change shared-upload persistence."""
+    del tmp_path
 
     provider = RbacAuthorizationProvider(roles={"user": {"sandbox": {"allow": "*"}}})
     client = _make_upload_app(monkeypatch, provider)
-    _isolated_uploads_dir(monkeypatch, tmp_path)
-
-    sandbox_provider = MagicMock()
-    sandbox_provider.uses_thread_data_mounts = False
-    sandbox_provider.acquire_async = AsyncMock(return_value="sbx-1")
-    sandbox_provider.get = MagicMock(return_value=MagicMock())
-    monkeypatch.setattr("app.gateway.routers.uploads.get_sandbox_provider", lambda: sandbox_provider)
+    payloads = _install_shared_upload_storage(monkeypatch)
     monkeypatch.setattr(
         "app.gateway.deps.get_optional_user_from_request",
         AsyncMock(return_value=_request_user()),
@@ -425,20 +430,7 @@ def test_upload_sandbox_sync_proceeds_when_allowed(monkeypatch, tmp_path):
 
     resp = client.post("/api/threads/upload-test/uploads", files={"files": ("a.txt", b"hello")})
     assert resp.status_code == 200, resp.text
-    sandbox_provider.acquire_async.assert_called_once()
-
-
-def _isolated_uploads_dir(monkeypatch, tmp_path):
-    """Redirect thread uploads storage to tmp_path (test-isolation).
-
-    Without this the upload route writes into the real global uploads root,
-    polluting other tests that assert on uploads directory state.
-    """
-    uploads_dir = tmp_path / "uploads"
-    uploads_dir.mkdir(parents=True)
-    monkeypatch.setattr("app.gateway.routers.uploads.get_uploads_dir", lambda thread_id, user_id=None: uploads_dir)
-    monkeypatch.setattr("app.gateway.routers.uploads.ensure_uploads_dir", lambda thread_id, user_id=None: uploads_dir)
-    return uploads_dir
+    assert payloads == [b"hello"]
 
 
 def _request_user():
@@ -561,7 +553,24 @@ def test_artifact_sandbox_sync_skipped_when_denied(monkeypatch, tmp_path):
     sandbox_provider.uses_thread_data_mounts = False
     sandbox_provider.acquire_async = AsyncMock(side_effect=AssertionError("must not acquire"))
     monkeypatch.setattr(artifacts_router, "get_sandbox_provider", lambda: sandbox_provider)
-    monkeypatch.setattr(artifacts_router, "resolve_outputs_confined_path", lambda _t, _p, user_id=None: tmp_path / "note.txt")
+
+    class Outputs:
+        content = b"before"
+
+        @classmethod
+        def from_app_config(cls, *_args, **_kwargs):
+            return cls()
+
+        def relative_path(self, _path):
+            return "note.txt"
+
+        async def read_bytes(self, _path, *, limit=None):  # noqa: ARG002
+            return type(self).content
+
+        async def write_bytes(self, _path, content, *, content_type=None):  # noqa: ARG002
+            type(self).content = content
+
+    monkeypatch.setattr(artifacts_router, "OutputsStorage", Outputs)
 
     from contextlib import asynccontextmanager
 
@@ -578,8 +587,6 @@ def test_artifact_sandbox_sync_skipped_when_denied(monkeypatch, tmp_path):
 
     from _router_auth_helpers import call_unwrapped
 
-    artifact_path = tmp_path / "note.txt"
-    artifact_path.write_bytes(b"before")
     request = type("R", (), {})()  # simple object; only passed through to mocked helpers
 
     import asyncio
@@ -598,7 +605,7 @@ def test_artifact_sandbox_sync_skipped_when_denied(monkeypatch, tmp_path):
         )
     )
     sandbox_provider.acquire_async.assert_not_called()
-    assert artifact_path.read_bytes() == b"after"
+    assert Outputs.content == b"after"
 
 
 def test_authorize_sandbox_no_config_file_is_noop(monkeypatch):
@@ -620,31 +627,14 @@ def test_authorize_sandbox_no_config_file_is_noop(monkeypatch):
     authorize_sandbox_execution(context=_context(), app_config=None)  # must not raise
 
 
-def test_upload_gate_tolerates_request_none(monkeypatch, tmp_path):
-    """Direct-call tests pass request=None; the uploads gate must not crash.
-
-    Regression for the blocking-io CI failure: get_optional_user_from_request
-    dereferences request.cookies on the no-state-user path, so request=None
-    raised AttributeError before the None guard.
-    """
+def test_upload_endpoint_tolerates_request_none(monkeypatch, tmp_path):
+    """Direct-call uploads stream to shared storage without a request object."""
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock
 
     from app.gateway.routers import uploads as uploads_router
 
-    _isolated_uploads_dir(monkeypatch, tmp_path)
-
-    sandbox_provider = MagicMock()
-    sandbox_provider.uses_thread_data_mounts = False
-    sandbox_provider.acquire_async = AsyncMock(return_value="sbx-1")
-    sandbox_provider.get = MagicMock(return_value=MagicMock())
-    monkeypatch.setattr(uploads_router, "get_sandbox_provider", lambda: sandbox_provider)
-    # If the request=None guard were missing, this lookup would dereference
-    # request.cookies and raise AttributeError; with the guard it is never called.
-    monkeypatch.setattr(
-        "app.gateway.deps.get_optional_user_from_request",
-        AsyncMock(side_effect=AttributeError("'NoneType' object has no attribute 'cookies'")),
-    )
+    del tmp_path
+    payloads = _install_shared_upload_storage(monkeypatch)
 
     from io import BytesIO
 
@@ -653,10 +643,9 @@ def test_upload_gate_tolerates_request_none(monkeypatch, tmp_path):
 
     config = SimpleNamespace(uploads={"max_files": 5, "max_file_size": 10**6})
     file = UploadFile(filename="a.txt", file=BytesIO(b"hello"))
-    # request=None — the None guard must skip the user lookup entirely.
     result = asyncio.run(call_unwrapped(uploads_router.upload_files, "t-none", request=None, files=[file], config=config))
     assert result.success is True
-    sandbox_provider.acquire_async.assert_called_once()
+    assert payloads == [b"hello"]
 
 
 def test_ensure_sandbox_initialized_async_denies_on_authz_reject(monkeypatch):

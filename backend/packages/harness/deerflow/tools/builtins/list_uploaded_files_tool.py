@@ -6,23 +6,19 @@ this tool lets the agent discover files uploaded in previous turns on demand.
 
 from __future__ import annotations
 
-import logging
-import os
+import asyncio
 from collections import Counter
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 from langchain.tools import tool
 from langgraph.config import get_config
 
 from deerflow.agents.middlewares.input_sanitization_middleware import neutralize_untrusted_tags
-from deerflow.config.paths import get_paths
+from deerflow.object_storage import UploadObject, UploadsStorage
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.tools.types import Runtime
-from deerflow.uploads.manager import is_upload_staging_file
 from deerflow.utils.file_outline import extract_outline_for_file
-
-logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_RESULTS = 20
 _MAX_MAX_RESULTS = 100
@@ -107,143 +103,82 @@ def _matches_filters(
     return True
 
 
-def _list_uploaded_files_impl(
+async def _list_uploaded_files_shared_impl(
     include_outline: bool | list[str] = False,
     max_results: int = _DEFAULT_MAX_RESULTS,
     runtime: Runtime | None = None,
     *,
     query: str | None = None,
     extensions: list[str] | None = None,
-    _paths: Any | None = None,
 ) -> dict:
-    """Core implementation — testable without the @tool wrapper."""
+    """List historical uploads from the shared source of truth."""
     if runtime is None:
         return {"files": [], "message": "No runtime context available."}
-
     thread_id = _resolve_thread_id(runtime)
     if thread_id is None:
         return {"files": [], "message": "Thread not found."}
 
-    user_id = _resolve_user_id(runtime)
-    paths = _paths or get_paths()
-    uploads_dir = paths.sandbox_uploads_dir(thread_id, user_id=user_id)
+    from deerflow.config import get_app_config
 
-    if not uploads_dir.exists():
-        return {"files": [], "message": "No uploads directory for this thread."}
-
-    # Resolve the set of filenames uploaded in the current run so we can exclude them.
+    uploads = UploadsStorage.from_app_config(get_app_config(), user_id=_resolve_user_id(runtime), thread_id=thread_id)
     current_run_filenames: set[str] = set()
-    try:
-        state = runtime.state
-        uploaded = state.get("uploaded_files") if isinstance(state, dict) else getattr(state, "uploaded_files", None)
-        if isinstance(uploaded, list):
-            for entry in uploaded:
-                if isinstance(entry, dict) and entry.get("filename"):
-                    current_run_filenames.add(entry["filename"])
-    except Exception:
-        logger.warning(
-            "Failed to read uploaded_files from runtime.state; current-run files may appear in list_uploaded_files results",
-            exc_info=True,
-        )
+    state = runtime.state
+    uploaded = state.get("uploaded_files") if isinstance(state, dict) else getattr(state, "uploaded_files", None)
+    if isinstance(uploaded, list):
+        current_run_filenames = {entry["filename"] for entry in uploaded if isinstance(entry, dict) and isinstance(entry.get("filename"), str)}
 
-    # Normalize max_results
-    max_results = max(1, min(max_results, _MAX_MAX_RESULTS))
-
-    # Normalize include_outline
-    if isinstance(include_outline, bool):
-        outline_for_all: bool = include_outline
-        outline_filenames: set[str] = set()
-    else:
-        outline_for_all = False
-        outline_filenames = set(include_outline)
-
-    # Collect historical files (sorted by mtime descending).
-    # Skip .md files that are conversion artifacts (have a same-stem non-.md sibling).
-    candidates: list[tuple[float, Path, int]] = []
-    try:
-        # Collect file entries once to build the name set and iterate.
-        entries = [e for e in os.scandir(uploads_dir) if e.is_file() and not e.is_symlink() and not is_upload_staging_file(e.name)]
-        all_names: set[str] = {e.name for e in entries}
-
-        for entry in entries:
-            if entry.name in current_run_filenames:
-                continue
-            # Skip .md files that are conversion artifacts of another file.
-            # Known limitation: if a user manually uploads both report.pdf and
-            # report.md, the .md is hidden as a "conversion artifact".  This is
-            # acceptable for the MVP — triggering this requires uploading files
-            # whose stems collide with converted documents, which is rare.
-            if entry.name.endswith(".md"):
-                stem = entry.name[:-3]  # remove ".md"
-                non_md_siblings = {n for n in all_names if n != entry.name and Path(n).stem == stem}
-                if non_md_siblings:
-                    continue
-            stat = entry.stat()
-            candidates.append((stat.st_mtime, Path(entry.path), stat.st_size))
-    except OSError:
-        return {"files": [], "message": f"Failed to read uploads directory: {uploads_dir}"}
-
-    if not candidates:
-        return {"files": [], "message": "No historical uploaded files in this thread."}
+    objects = [item for item in await uploads.list() if item.filename not in current_run_filenames]
+    all_names = {item.filename for item in objects}
+    candidates: list[UploadObject] = []
+    for item in objects:
+        if item.filename.endswith(".md") and any(name != item.filename and Path(name).stem == Path(item.filename).stem for name in all_names):
+            continue
+        candidates.append(item)
 
     query_filter = _normalize_query(query)
     extension_filter = _normalize_extensions(extensions)
     if query_filter is not None or extension_filter is not None:
-        candidates = [item for item in candidates if _matches_filters(item[1].name, item[1].suffix, query_filter, extension_filter)]
+        candidates = [item for item in candidates if _matches_filters(item.filename, Path(item.filename).suffix, query_filter, extension_filter)]
         if not candidates:
-            return {
-                "files": [],
-                "total_count": 0,
-                "message": "No uploaded files matched the given filters.",
-            }
+            return {"files": [], "total_count": 0, "message": "No uploaded files matched the given filters."}
 
-    # Sort by mtime descending (most recent first)
-    candidates.sort(key=lambda item: item[0], reverse=True)
-
+    candidates.sort(key=lambda item: item.metadata.last_modified.timestamp() if item.metadata.last_modified is not None else 0, reverse=True)
+    max_results = max(1, min(max_results, _MAX_MAX_RESULTS))
     total_count = len(candidates)
-    truncated = total_count > max_results
     visible = candidates[:max_results]
-    omitted_paths = [p.name for _, p, _ in candidates[max_results:]]
+    omitted = [item.filename for item in candidates[max_results:]]
+    if isinstance(include_outline, bool):
+        outline_for_all, outline_filenames = include_outline, set()
+    else:
+        outline_for_all, outline_filenames = False, set(include_outline)
 
     files: list[dict] = []
-    for _, file_path, st_size in visible:
-        filename = file_path.name
+    for item in visible:
+        filename = item.filename
         file_info: dict = {
             "filename": neutralize_untrusted_tags(filename),
-            "size": st_size,
+            "size": item.metadata.size or 0,
             "path": neutralize_untrusted_tags(f"/mnt/user-data/uploads/{filename}"),
-            "extension": neutralize_untrusted_tags(file_path.suffix),
+            "extension": neutralize_untrusted_tags(Path(filename).suffix),
         }
-
-        should_include_outline = outline_for_all or filename in outline_filenames
-        if should_include_outline:
-            outline, preview = extract_outline_for_file(file_path)
+        if outline_for_all or filename in outline_filenames:
+            async with uploads.materialize(filename) as path:
+                outline, preview = await asyncio.to_thread(extract_outline_for_file, path)
             if outline:
                 file_info["outline"] = [{**entry, "title": neutralize_untrusted_tags(entry["title"])} if "title" in entry else entry for entry in outline]
             if preview:
-                file_info["outline_preview"] = [neutralize_untrusted_tags(p) for p in preview]
-
+                file_info["outline_preview"] = [neutralize_untrusted_tags(item) for item in preview]
         files.append(file_info)
 
-    result: dict = {
-        "files": files,
-        "total_count": total_count,
-    }
-
-    if truncated:
+    result: dict = {"files": files, "total_count": total_count, "message": f"Found {total_count} historical file(s)." if files else "No historical uploaded files in this thread."}
+    if total_count > max_results:
         result["truncated"] = True
-        result["omitted_summary"] = _format_omitted_summary(omitted_paths)
-
-    if files:
-        result["message"] = f"Found {total_count} historical file(s)."
-    else:
-        result["message"] = "No historical uploaded files in this thread."
-
+        result["omitted_summary"] = _format_omitted_summary(omitted)
     return result
 
 
 @tool
-def list_uploaded_files(
+async def list_uploaded_files(
     runtime: Runtime,
     include_outline: Annotated[
         bool | list[str],
@@ -282,7 +217,7 @@ def list_uploaded_files(
     Optional filters (`query`, `extensions`) run before the max_results cap, so
     older matching files are not displaced by newer unrelated uploads.
     """
-    return _list_uploaded_files_impl(
+    return await _list_uploaded_files_shared_impl(
         include_outline=include_outline,
         max_results=max_results,
         runtime=runtime,

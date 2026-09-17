@@ -336,11 +336,11 @@ Outlines use ATX syntax (1–6 hashes, space/tab separator, ≤3 leading spaces)
 - Supports: PDF, PPT, Excel, Word documents (converted via `markitdown`)
 - Rejects directories before copying to keep uploads all-or-nothing
 - One conversion worker per request when called from an active event loop
-- Files stored in thread-isolated directories under the resolving user's bucket (`users/{user_id}/threads/{thread_id}/user-data/uploads`). HTTP and embedded callers resolve the bucket from `get_effective_user_id()`; channel ingestion resolves its owner bucket at the adapter boundary
+- Upload objects are stored under the resolving user's shared Object Storage namespace (`users/{user_id}/threads/{thread_id}/uploads/{filename}`). HTTP and embedded callers resolve the bucket from `get_effective_user_id()`; channel ingestion remains a deferred adapter boundary
 - Duplicate filenames within one request get `_N` suffixes to prevent overwrites.
-- Gateway HTTP uploads stage bytes as `.upload-*.part` files and atomically replace the destination only after size validation. These staging files are hidden from upload listings, agent upload context, and sandbox listing/search tools, and swept on Gateway startup if a hard crash leaves one behind.
-- Gateway HTTP upload/list/delete handlers offload filesystem work through `deerflow.utils.file_io.run_file_io`, a dedicated ContextVar-preserving file IO executor. Non-mounted sandbox uploads acquire sandboxes with `SandboxProvider.acquire_async()` and offload `read_bytes()` plus `sandbox.update_file()` together.
-- Mounted uploads skip sandbox acquire/sync. AIO remote/provisioner requires accurate `sandbox.thread_data_mounts: true`; omission keeps backend auto-detection.
+- Gateway HTTP uploads stream request chunks directly to Object Storage while enforcing the configured per-file and total limits. Storage failure fails the request; it never falls back to persistent local uploads.
+- Sandbox upload paths are disposable projections: mounted sandboxes are hydrated before a run, and non-mounted sandboxes are hydrated from shared storage on first use. Document conversion and outline extraction materialize one request/job-scoped temporary file only when a local path is required.
+- User-authored custom skills, supporting package files, enabled state, and revision history use the configured `ObjectStorageSkillStorage` shared backend. Its local custom-skill directory and `skills_view/` are disposable projections rebuilt from Object Storage; bundled public and legacy skills remain deployment resources.
 - `UploadsMiddleware` caps outline titles at 200 characters and previews at 2000 including markers. Titles use `original_user_content`, not upload-prefixed content; attachment-only titles use a sanitized, bounded filename or count.
 
 See [docs/FILE_UPLOAD.md](docs/FILE_UPLOAD.md) for details.
