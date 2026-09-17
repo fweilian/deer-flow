@@ -318,10 +318,15 @@ different cache settings.
 The Phase 5 shared object-store foundation is configured through
 `object_storage` in `config.yaml`. It supports S3-compatible endpoints such as
 the bundled MinIO service, and uses path-style addressing by default. Outputs,
-artifacts, and tool results require it: configure a bucket and
+artifacts, tool results, uploads, and user-authored custom skills require it: configure a bucket and
 environment-backed credentials before starting a deployment. Object-storage
 callers fail explicitly on an unavailable store and never fall back to
-persistent local disk. These settings are restart-required.
+persistent local disk. These settings are restart-required. A production
+deployment (`DEER_FLOW_ENV=production`) also requires
+`AUTH_JWT_SECRET` and `skills.use` set to
+`deerflow.skills.storage.object_storage_skill_storage:ObjectStorageSkillStorage`;
+startup probes the configured bucket and fails before serving traffic when
+these shared-storage requirements are unmet.
 
 > [!TIP]
 > On Linux, if Docker-based commands fail with `permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock`, add your user to the `docker` group and re-login before retrying. See [CONTRIBUTING.md](CONTRIBUTING.md#linux-docker-daemon-permission-denied) for the full fix.

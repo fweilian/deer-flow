@@ -65,8 +65,12 @@ def get_auth_config() -> AuthConfig:
         from dotenv import load_dotenv
 
         load_dotenv()
-        jwt_secret = os.environ.get("AUTH_JWT_SECRET")
+        jwt_secret = os.environ.get("AUTH_JWT_SECRET", "").strip()
         if not jwt_secret:
+            from app.gateway.auth_disabled import is_explicit_production_environment
+
+            if is_explicit_production_environment():
+                raise RuntimeError("AUTH_JWT_SECRET must be explicitly configured in production; the local .jwt_secret fallback is development-only.")
             jwt_secret = _load_or_create_secret()
             os.environ["AUTH_JWT_SECRET"] = jwt_secret
             logger.warning(

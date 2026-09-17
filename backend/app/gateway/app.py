@@ -210,6 +210,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             subagent_batches_config = SubagentBatchesConfig()
         configure_subagent_execution_capacity(subagent_runtime_config)
         configure_logging(startup_config)
+        from app.gateway.phase5_gate import validate_production_phase5_configuration
+
+        validate_production_phase5_configuration(startup_config)
         logger.info("Configuration loaded successfully")
         warn_if_auth_disabled_enabled()
     except Exception as e:
@@ -218,6 +221,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         raise RuntimeError(error_msg) from e
     config = get_gateway_config()
     logger.info(f"Starting API Gateway on {config.host}:{config.port}")
+
+    from app.gateway.phase5_gate import verify_production_phase5_storage
+
+    await verify_production_phase5_storage(startup_config)
 
     from deerflow.skills.projection import ensure_public_skill_projection
 

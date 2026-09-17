@@ -77,7 +77,7 @@ Extensions are optional only in the fallback *search* mode (priority 3-4 above):
 **`config.yaml`** key sections:
 - `models[]` - LLM configs with `use` class path, `supports_thinking`, `supports_vision`, provider-specific fields
 - `logging.enhance` - Log output only (`enabled`, `format`): whether log records carry a `trace_id` field, and in which format. Trace ids are issued unconditionally — the Gateway `X-Trace-Id` header and Langfuse `deerflow_trace_id` metadata are always present whatever this says (see the Request Trace Context section in `packages/harness/deerflow/AGENTS.md`); restart-required
-- `object_storage` - Startup-only S3-compatible shared storage configuration (`enabled`, endpoint, bucket, credentials, region, path style, TLS verification, and stable key prefix). It is opt-in until a Phase 5 file domain migrates; consumers fail closed and never select a local persistent fallback.
+- `object_storage` - Startup-only S3-compatible shared storage configuration (`enabled`, endpoint, bucket, credentials, region, path style, TLS verification, and stable key prefix). Phase 5 persistent-file consumers fail closed and never select a local persistent fallback. With `DEER_FLOW_ENV=production`, Gateway startup additionally requires object storage, the shared custom-skill backend, `AUTH_JWT_SECRET`, and a successful bucket-access probe.
 - vLLM reasoning models should use `deerflow.models.vllm_provider:VllmChatModel`; for Qwen-style parsers prefer `when_thinking_enabled.extra_body.chat_template_kwargs.enable_thinking`, and DeerFlow will also normalize the older `thinking` alias
 - `tools[]` - Tool configs with `use` variable path and `group`
 - `tool_groups[]` - Logical groupings for tools

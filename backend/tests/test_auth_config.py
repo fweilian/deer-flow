@@ -55,6 +55,20 @@ def test_auth_config_missing_secret_generates_and_persists(tmp_path, caplog):
         cfg._auth_config = old
 
 
+def test_auth_config_missing_secret_fails_without_a_local_fallback_in_production(tmp_path):
+    old = cfg._auth_config
+    cfg._auth_config = None
+    try:
+        with patch.dict(os.environ, {"DEER_FLOW_ENV": "production"}, clear=True):
+            with patch("deerflow.config.paths.get_paths") as get_paths:
+                with pytest.raises(RuntimeError, match="AUTH_JWT_SECRET must be explicitly configured"):
+                    cfg.get_auth_config()
+                get_paths.assert_not_called()
+        assert not (tmp_path / ".jwt_secret").exists()
+    finally:
+        cfg._auth_config = old
+
+
 def test_auth_config_reuses_persisted_secret(tmp_path):
     from deerflow.config.paths import Paths
 
