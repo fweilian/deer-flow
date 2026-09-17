@@ -1523,6 +1523,29 @@ async def _hydrate_remote_outputs_if_needed(runtime: Runtime, sandbox: Sandbox, 
     context["remote_outputs_hydrated"] = True
 
 
+async def _hydrate_remote_uploads_if_needed(runtime: Runtime, sandbox: Sandbox, provider) -> None:
+    """Populate a non-mounted sandbox from the shared uploads source of truth."""
+    context = runtime.context
+    if not isinstance(context, dict) or context.get("remote_uploads_hydrated") or provider.uses_thread_data_mounts:
+        return
+    thread_id = _resolve_runtime_thread_id(runtime)
+    if thread_id is None:
+        raise SandboxRuntimeError("Thread ID not available for remote uploads projection")
+
+    from deerflow.config import get_app_config
+    from deerflow.object_storage import UploadsStorage
+    from deerflow.sandbox.upload_projection import hydrate_remote_uploads
+
+    app_config = await asyncio.to_thread(get_app_config)
+    uploads = UploadsStorage.from_app_config(
+        app_config,
+        user_id=resolve_runtime_user_id(runtime),
+        thread_id=thread_id,
+    )
+    await hydrate_remote_uploads(uploads, sandbox)
+    context["remote_uploads_hydrated"] = True
+
+
 def ensure_sandbox_initialized(runtime: Runtime | None = None) -> Sandbox:
     """Ensure sandbox is initialized, acquiring lazily if needed.
 
@@ -1660,6 +1683,7 @@ async def ensure_sandbox_initialized_async(runtime: Runtime | None = None) -> Sa
                 if runtime.context is not None:
                     runtime.context["sandbox_id"] = sandbox_id
                 await _hydrate_remote_outputs_if_needed(runtime, sandbox, provider)
+                await _hydrate_remote_uploads_if_needed(runtime, sandbox, provider)
                 return sandbox
 
     thread_id = _resolve_runtime_thread_id(runtime)
@@ -1688,6 +1712,7 @@ async def ensure_sandbox_initialized_async(runtime: Runtime | None = None) -> Sa
     if runtime.context is not None:
         runtime.context["sandbox_id"] = sandbox_id
     await _hydrate_remote_outputs_if_needed(runtime, sandbox, provider)
+    await _hydrate_remote_uploads_if_needed(runtime, sandbox, provider)
     return sandbox
 
 

@@ -93,6 +93,27 @@ class OutputsStorage:
     async def delete(self, relative_path: str) -> None:
         await self._storage.delete(self._key(relative_path))
 
+    async def copy_to(self, target_thread_id: str) -> None:
+        """Copy this thread's complete outputs namespace to a branch.
+
+        ``.tool-results`` deliberately comes along with ordinary outputs: it is
+        an internal directory in the same source-of-truth namespace, not a
+        separate persistent data type.
+        """
+        target = type(self)(
+            self._storage,
+            namespace=self._namespace,
+            user_id=self._user_id,
+            thread_id=target_thread_id,
+        )
+        for output in await self.list():
+            await self._storage.copy(output.metadata.key, target._key(output.relative_path))
+
+    async def delete_all(self) -> None:
+        """Delete every persistent output for this thread, including tool results."""
+        for output in await self.list():
+            await self._storage.delete(output.metadata.key)
+
     async def read_bytes(self, relative_path: str, *, limit: int | None = None) -> bytes:
         chunks: list[bytes] = []
         total = 0

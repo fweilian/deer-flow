@@ -11,6 +11,7 @@ from deerflow.object_storage.port import (
     S3ObjectStorage,
     get_object_storage,
 )
+from deerflow.object_storage.uploads import UPLOADS_VIRTUAL_PREFIX, UploadObject, UploadsStorage, UploadStorageError
 
 __all__ = [
     "ByteRange",
@@ -19,6 +20,10 @@ __all__ = [
     "OutputObject",
     "OutputStorageError",
     "OutputsStorage",
+    "UPLOADS_VIRTUAL_PREFIX",
+    "UploadObject",
+    "UploadStorageError",
+    "UploadsStorage",
     "ObjectMetadata",
     "ObjectRead",
     "ObjectStorage",
