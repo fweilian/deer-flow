@@ -11,7 +11,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, case, or_, select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -82,8 +82,8 @@ class RunRepository(RunStore):
         d["metadata"] = d.pop("metadata_json", {})
         d["kwargs"] = d.pop("kwargs_json", {})
         # Convert datetime to ISO string for consistency with MemoryRunStore.
-        # SQLite drops tzinfo on read despite ``DateTime(timezone=True)`` —
-        # ``coerce_iso`` normalizes naive datetimes as UTC.
+        # UTCDateTime restores UTC on SQL backends; ``coerce_iso`` also keeps
+        # legacy naive values safe when reading an older schema.
         for key in ("created_at", "updated_at", "lease_expires_at", "cancel_requested_at"):
             val = d.get(key)
             if isinstance(val, datetime):
@@ -560,13 +560,13 @@ class RunRepository(RunStore):
                     lease_expires_at=lease_dt,
                     updated_at=datetime.now(UTC),
                 )
-                .returning(RunRow.run_id, RunRow.cancel_action)
             )
-            row = result.first()
+            if result.rowcount != 1:
+                await session.rollback()
+                return LeaseRenewal(renewed=False)
+            cancel_action = await session.scalar(select(RunRow.cancel_action).where(RunRow.run_id == run_id))
             await session.commit()
-        if row is None:
-            return LeaseRenewal(renewed=False)
-        return LeaseRenewal(renewed=True, cancel_action=row.cancel_action)
+        return LeaseRenewal(renewed=True, cancel_action=cancel_action)
 
     async def request_cancel(self, run_id: str, *, action: str) -> str | None:
         """Atomically persist the first cancellation action on an active run."""
@@ -574,28 +574,23 @@ class RunRepository(RunStore):
             raise ValueError(f"Unsupported cancellation action: {action}")
         now = datetime.now(UTC)
         async with self._sf() as session:
-            result = await session.execute(
-                update(RunRow)
+            row = await session.scalar(
+                select(RunRow)
                 .where(
                     RunRow.run_id == run_id,
                     RunRow.status.in_(("pending", "running")),
                 )
-                .values(
-                    cancel_action=case(
-                        (RunRow.cancel_action.is_(None), action),
-                        else_=RunRow.cancel_action,
-                    ),
-                    cancel_requested_at=case(
-                        (RunRow.cancel_requested_at.is_(None), now),
-                        else_=RunRow.cancel_requested_at,
-                    ),
-                    updated_at=now,
-                )
-                .returning(RunRow.cancel_action)
+                .with_for_update()
             )
-            row = result.first()
+            if row is None:
+                await session.rollback()
+                return None
+            if row.cancel_action is None:
+                row.cancel_action = action
+                row.cancel_requested_at = now
+            row.updated_at = now
             await session.commit()
-        return row.cancel_action if row is not None else None
+        return row.cancel_action
 
     async def finalize_if_not_cancelled(
         self,
@@ -624,9 +619,8 @@ class RunRepository(RunStore):
                     RunRow.cancel_action.is_(None),
                 )
                 .values(**values)
-                .returning(RunRow.run_id)
             )
-            if result.first() is not None:
+            if result.rowcount == 1:
                 await session.commit()
                 return StatusFinalization(finalized=True)
 
@@ -766,7 +760,7 @@ class RunRepository(RunStore):
                     lease_expired = False
                     if row.lease_expires_at is not None:
                         # SQLite drops tzinfo on read despite
-                        # ``DateTime(timezone=True)`` (see ``_row_to_dict``).
+                        # ``UTCDateTime`` (see ``_row_to_dict``).
                         # Treat naive values as UTC — same convention as
                         # ``coerce_iso`` — so the Python-side comparison
                         # against the aware ``cutoff`` does not raise

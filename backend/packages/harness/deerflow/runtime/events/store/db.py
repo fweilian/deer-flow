@@ -50,7 +50,7 @@ class DbRunEventStore(RunEventStore):
         d["metadata"] = d.pop("event_metadata", {})
         val = d.get("created_at")
         if isinstance(val, datetime):
-            # SQLite drops tzinfo on read despite ``DateTime(timezone=True)``;
+            # UTCDateTime restores UTC; legacy SQLite values can still be naive.
             # ``coerce_iso`` normalizes naive datetimes as UTC.
             d["created_at"] = coerce_iso(val)
         d.pop("id", None)

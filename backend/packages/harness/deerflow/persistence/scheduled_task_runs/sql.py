@@ -200,16 +200,11 @@ class ScheduledTaskRunRepository:
                     await session.rollback()
                     raise ActiveScheduledRunConflict(task_id)
             if task is not None:
-                row.occurrence_seq = await session.scalar(
-                    update(ScheduledTaskRow)
-                    .where(ScheduledTaskRow.id == task_id)
-                    .values(
-                        last_occurrence_seq=ScheduledTaskRow.last_occurrence_seq + 1,
-                        # Sequence allocation is not a user-visible task edit.
-                        updated_at=ScheduledTaskRow.updated_at,
-                    )
-                    .returning(ScheduledTaskRow.last_occurrence_seq)
-                )
+                # ``_lock_task`` has locked this parent row. Allocate in
+                # Python so the query remains valid on MySQL, which has no
+                # UPDATE ... RETURNING support.
+                row.occurrence_seq = task.last_occurrence_seq + 1
+                task.last_occurrence_seq = row.occurrence_seq
             session.add(row)
             if coordinate_with_task and task is not None and release_task_lease_status is not None:
                 task.status = release_task_lease_status

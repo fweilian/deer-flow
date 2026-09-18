@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Index, String
+from sqlalchemy import JSON, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from deerflow.persistence.base import Base
+from deerflow.persistence.datetime_compat import UTCDateTime
 
 
 class PersonalAccessTokenRow(Base):
@@ -25,7 +26,7 @@ class PersonalAccessTokenRow(Base):
     token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     # Subset of the route-permission strings owned by ``app.gateway.authz``.
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC))
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)

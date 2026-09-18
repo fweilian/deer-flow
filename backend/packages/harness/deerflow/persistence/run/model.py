@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Index, String, Text, text
+from sqlalchemy import JSON, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from deerflow.persistence.base import Base
+from deerflow.persistence.datetime_compat import UTCDateTime
 
 
 class RunRow(Base):
@@ -49,14 +50,14 @@ class RunRow(Base):
 
     # Multi-worker run ownership
     owner_worker_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     # A non-owning worker records cancellation here; the owner consumes it
     # while renewing its lease. The first action wins.
     cancel_action: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
     __table_args__ = (
         Index("ix_runs_thread_status", "thread_id", "status"),
@@ -72,5 +73,5 @@ class RunRow(Base):
             unique=True,
             sqlite_where=text("status IN ('pending', 'running')"),
             postgresql_where=text("status IN ('pending', 'running')"),
-        ),
+        ).ddl_if(dialect=("sqlite", "postgresql")),
     )

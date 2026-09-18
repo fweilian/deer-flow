@@ -15,10 +15,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, String, Text, UniqueConstraint
+from sqlalchemy import JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from deerflow.persistence.base import Base
+from deerflow.persistence.datetime_compat import UTCDateTime
 
 
 class AgentRow(Base):
@@ -34,9 +35,9 @@ class AgentRow(Base):
     name: Mapped[str] = mapped_column(String(128))
     config: Mapped[dict] = mapped_column(JSON, default=dict)
     soul: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, text
+from sqlalchemy import BigInteger, Boolean, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from deerflow.persistence.base import Base
+from deerflow.persistence.datetime_compat import UTCDateTime
 
 
 class ScheduledTaskRunRow(Base):
@@ -19,16 +20,16 @@ class ScheduledTaskRunRow(Base):
     launch_accounted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     thread_id: Mapped[str] = mapped_column(String(64), index=True)
     run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    scheduled_for: Mapped[datetime] = mapped_column(UTCDateTime())
     trigger: Mapped[str] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(16), index=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         Index("uq_scheduled_task_run_occurrence_seq", "task_id", "occurrence_seq", unique=True),
@@ -50,5 +51,5 @@ class ScheduledTaskRunRow(Base):
             unique=True,
             sqlite_where=text("status IN ('queued', 'launching', 'running')"),
             postgresql_where=text("status IN ('queued', 'launching', 'running')"),
-        ),
+        ).ddl_if(dialect=("sqlite", "postgresql")),
     )

@@ -827,7 +827,7 @@ class TestJsonMatchCompilation:
             with pytest.raises(TypeError, match="JsonMatch value must be"):
                 json_match(t.c.data, "k", bad_value)
 
-    def test_json_match_unsupported_dialect_raises(self):
+    def test_json_match_mysql_compiles(self):
         from sqlalchemy import Column, MetaData, String, Table
         from sqlalchemy.dialects import mysql
         from sqlalchemy.types import JSON
@@ -838,8 +838,9 @@ class TestJsonMatchCompilation:
         t = Table("t", metadata, Column("data", JSON), Column("id", String))
         expr = json_match(t.c.data, "k", "v")
 
-        with pytest.raises(NotImplementedError, match="mysql"):
-            str(expr.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
+        compiled = str(expr.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
+        assert "JSON_TYPE" in compiled
+        assert "JSON_EXTRACT" in compiled
 
     def test_json_match_rejects_out_of_range_int(self):
         from sqlalchemy import Column, MetaData, String, Table

@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.gateway.auth.models import User
 from app.gateway.auth.repositories.base import UserNotFoundError, UserRepository
+from deerflow.persistence.mysql_errors import MYSQL_DUPLICATE_KEY, mysql_duplicate_key_name, mysql_error_code
 from deerflow.persistence.user.model import OAUTH_IDENTITY_INDEX_NAME, UserRow
 
 # ``email`` is ``mapped_column(unique=True, index=True)``, which SQLAlchemy
@@ -46,7 +47,11 @@ def _driver_constraint_name(exc: IntegrityError) -> str | None:
         name = getattr(obj, "constraint_name", None)
         if name:
             return str(name)
-    return None
+    # asyncmy/PyMySQL's duplicate-key errors expose neither PostgreSQL's
+    # ``constraint_name`` nor SQLite's column-list message. They do include
+    # the violated key name, which is the stable application contract here.
+    mysql_key = mysql_duplicate_key_name(exc.orig)
+    return mysql_key.rsplit(".", 1)[-1] if mysql_key else None
 
 
 def _is_oauth_identity_violation(exc: IntegrityError) -> bool:
@@ -94,6 +99,8 @@ def _is_uniqueness_violation(exc: IntegrityError) -> bool:
     sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
     if sqlstate is not None:
         return sqlstate == "23505"  # unique_violation
+    if mysql_error_code(exc.orig) == MYSQL_DUPLICATE_KEY:
+        return True
     message = str(exc.orig).lower()
     return "unique constraint failed" in message or "primary key constraint failed" in message
 

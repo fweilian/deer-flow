@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String, text
+from sqlalchemy import JSON, Boolean, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from deerflow.persistence.base import Base
+from deerflow.persistence.datetime_compat import UTCDateTime
 
 # Single source of truth for the index name, shared with
 # app.gateway.auth.repositories.sqlite._is_oauth_identity_violation (which
@@ -53,7 +54,7 @@ class UserRow(Base):
     system_role: Mapped[str] = mapped_column(String(16), nullable=False, default="user")
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
     )

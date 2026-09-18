@@ -1,6 +1,7 @@
 """Durable per-user preferences; updates touch only explicitly supplied keys."""
 
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -18,7 +19,13 @@ class UserPreferencesRepository:
 
     async def patch(self, user_id: str, values: dict) -> None:
         async with self.sessions() as session, session.begin():
-            insert = pg_insert if session.bind.dialect.name == "postgresql" else sqlite_insert
+            dialect = session.bind.dialect.name
+            if dialect == "postgresql":
+                insert = pg_insert
+            elif dialect == "mysql":
+                insert = mysql_insert
+            else:
+                insert = sqlite_insert
             # Consistent key order also avoids opposite-order row-lock cycles.
             for key, value in sorted(values.items()):
                 statement = insert(UserPreferenceRow).values(user_id=user_id, key=key, value=value)
