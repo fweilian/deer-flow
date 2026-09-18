@@ -26,8 +26,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
+# The legacy PostgreSQL / SQLite chain is intentionally kept separate from
+# the future MySQL chain.  ``_MIGRATIONS_DIR`` remains as a compatibility alias
+# for focused historical-migration tests; new code must choose explicitly by
+# backend through ``_migration_script_location``.
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
-_HEAD_REVISION: str | None = None
+_MYSQL_MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations_mysql"
 _PG_LOCK_KEY = 0x0DEE_12F1_0BEE_3682
 _SQLITE_LOCKS: weakref.WeakKeyDictionary[AsyncEngine, asyncio.Lock] = weakref.WeakKeyDictionary()
 
@@ -50,24 +54,37 @@ def _alembic_safe_url(engine: AsyncEngine) -> str:
     return _escape_url_for_alembic(engine.url.render_as_string(hide_password=False))
 
 
-def _get_alembic_config(engine: AsyncEngine, *, postgres_schema: str = "") -> AlembicConfig:
+def _migration_script_location(backend: str) -> Path:
+    """Return the independently-owned Alembic tree for *backend*.
+
+    This deliberately stays as one explicit backend branch rather than a
+    multi-chain registry.  The MySQL tree is populated by Goal 2; selecting it
+    here must never make Alembic traverse the immutable PostgreSQL history.
+    """
+    if backend == "mysql":
+        return _MYSQL_MIGRATIONS_DIR
+    if backend in {"postgres", "sqlite"}:
+        return _MIGRATIONS_DIR
+    raise ValueError(f"bootstrap: unsupported migration backend {backend!r}")
+
+
+def _get_alembic_config(engine: AsyncEngine, *, backend: str = "postgres", postgres_schema: str = "") -> AlembicConfig:
     cfg = AlembicConfig()
-    cfg.set_main_option("script_location", str(_MIGRATIONS_DIR))
+    cfg.set_main_option("script_location", str(_migration_script_location(backend)))
     cfg.set_main_option("sqlalchemy.url", _alembic_safe_url(engine))
     if postgres_schema:
         cfg.set_main_option("deerflow_pg_schema", postgres_schema)
     return cfg
 
 
-def _get_head_revision() -> str:
-    global _HEAD_REVISION
-    if _HEAD_REVISION is None:
-        cfg = AlembicConfig()
-        cfg.set_main_option("script_location", str(_MIGRATIONS_DIR))
-        _HEAD_REVISION = ScriptDirectory.from_config(cfg).get_current_head()
-    if _HEAD_REVISION is None:
+def _get_head_revision(*, backend: str = "postgres") -> str:
+    """Read the selected chain's current head without process-global cache."""
+    cfg = AlembicConfig()
+    cfg.set_main_option("script_location", str(_migration_script_location(backend)))
+    head = ScriptDirectory.from_config(cfg).get_current_head()
+    if head is None:
         raise RuntimeError("alembic has no head revision -- versions/ directory is empty")
-    return _HEAD_REVISION
+    return head
 
 
 async def _read_database_revision(conn: Any) -> str:
@@ -147,8 +164,8 @@ def _bootstrap_lock(engine: AsyncEngine, *, backend: str):
 
 async def bootstrap_schema(engine: AsyncEngine, *, backend: str, postgres_schema: str = "") -> None:
     """Create and stamp a fresh current schema, never replay legacy DDL."""
-    head = await asyncio.to_thread(_get_head_revision)
-    cfg = _get_alembic_config(engine, postgres_schema=postgres_schema if backend == "postgres" else "")
+    head = await asyncio.to_thread(_get_head_revision, backend=backend)
+    cfg = _get_alembic_config(engine, backend=backend, postgres_schema=postgres_schema if backend == "postgres" else "")
 
     async with _bootstrap_lock(engine, backend=backend):
         async with engine.connect() as conn:

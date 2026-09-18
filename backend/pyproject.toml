@@ -36,6 +36,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["deerflow-harness[postgres]"]
+mysql = ["deerflow-harness[mysql]"]
 redis = ["deerflow-harness[redis]"]
 monocle = ["deerflow-harness[monocle]"]
 ollama = ["deerflow-harness[ollama]"]
