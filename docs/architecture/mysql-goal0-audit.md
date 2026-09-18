@@ -2,6 +2,10 @@
 
 日期：2026-09-18
 
+**状态：DONE** —— 产出提交 `a55e5734`
+（`refactor(runtime): remove channels, background MCP tasks, subagent batches, and LangGraph Store`，
+分支 `feat_portal`，工作区干净）。
+
 ## 运行时依赖扫描
 
 已对 `backend`、`frontend` 和 `config.example.yaml` 执行生产代码扫描，排除不可变的

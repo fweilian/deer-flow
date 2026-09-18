@@ -1,68 +1,20 @@
-# PostgreSQL → MySQL 8.0.24 迁移设计（过程留档）
+# PostgreSQL → MySQL 8.0.24 迁移设计
 
-> 🔴 **本文件不是实施依据。**
-> 它保留了多轮修订的**对照与取舍记录**（"本轮修正 / 上一版 / 已废弃口径"等），
-> 用于追溯每条结论的来历。
->
-> **当前权威口径**：[`mysql-migration-design.md`](./mysql-migration-design.md) ——
-> 已剥离全部过程叙事，只保留当前设计与结论。**实施与评审以它为准。**
->
-> **执行计划**：[`mysql-goals.md`](./mysql-goals.md)。
-
----
-
-> **文档类型**：只读代码调查 + Schema 分析 + 迁移设计（**含多轮修订对照**）
+> **文档类型**：只读代码调查 + Schema 分析 + 迁移设计（**权威口径**）
 > **调查基线**：`deer-flow` 仓库 HEAD = **`a55e5734`**（`feat_portal` 分支）
->   —— `refactor(runtime): remove channels, background MCP tasks, subagent batches, and LangGraph Store`
->   **🔴 该 HEAD 即 Goal 0 的产出提交；本文件的全部"当前状态"描述均以此为准。**
 > **目标数据库**：**MySQL 8.0.24** + InnoDB
-> **结论档位**：**目标 `Moderate`（条件：Gate V5 通过）；当前已证实仍为 `Feasible with significant changes`**
+> **结论档位**：目标 **`Moderate`**（条件：Gate V5 通过）；**V5 通过前按 `Feasible with significant changes` 计**
 >
-> 本文只保留**最终设计与结论**。全部数字均在上述 HEAD 上由 ORM 元数据反射 + 全仓扫描重新统计。
+> 本文只保留**当前设计与结论**，不记录设计演进过程。
+> 全部数字均在上表 HEAD 上由 ORM 元数据反射 + 全仓扫描重新统计（§16 证据清单）。
 >
-> **G0 之后的 Runtime 范围（当前生效）**：
->
-> | 能力 | 当前状态 | 备注 |
-> | --- | --- | --- |
-> | Channel / GitHub Webhook | 🔴 **已删除** | `app/channels/`、`gateway/github/`、3 个路由、`channel_connections` / `webhook_delivery` 两个持久化包 |
-> | `mcp_tasks`（MCP 后台长任务） | 🔴 **已删除** | 含 `persistence/mcp_tasks`、`mcp/tasks/`、`app/mcp_tasks/`、路由与后台任务工具 |
-> | `subagent_batches` / `subagent_batch_items` | 🔴 **已删除** | 含批处理 runtime / service / 路由 / `batch_task` 工具 |
-> | LangGraph Store（`BaseStore` 抽象） | 🔴 **已删除** | `runtime/store/{provider,async_provider}.py` |
-> | 普通 MCP（Tool / Server / OAuth） | ✅ **保留** | 只删了 `mcp_tasks` |
-> | 普通 SubAgent `task` | ✅ **保留** | 只删了 `subagent_batches` |
-> | memory thread metadata | ✅ **能力保留** | `MemoryThreadMetaStore` 改为简单内部 dict，**不再依赖 LangGraph `BaseStore`**（§7.8 决策 6） |
->
-> **目标 Application Schema（当前 ORM 实测）**：**12 张应用表 / 139 列** ——
-> `agents`、`feedback`、`managed_subagents`、`personal_access_tokens`、`projects`、`run_events`、
-> `runs`、`scheduled_task_runs`、`scheduled_tasks`、`threads_meta`、`user_preferences`、`users`。
->
-> **本轮的定性变化**：**企业 MySQL Schema 规范不再作为不可变前提**。
-> 只回答一个问题 —— *让当前真正需要的 Agent Runtime 以最小复杂度稳定运行在 MySQL 8.0.24 上，还需要做什么？*
-> 由此产生四个后果：
-> ① CheckpointSaver **已冻结**为固定版本依赖 `langgraph-checkpoint-mysql[asyncmy]==3.0.0`（MIT，§7 / §0）；
-> ② 引入方式是 **精确版本直接依赖**，**默认不 vendor** —— vendor 只是"确需修改上游内部实现"时
->    对**同一个 3.0.0 版本**做最小 patch 的 fallback，**不再是与直接依赖并列的架构选项**（§7.4 / §7.5）；
-> ③ 纯 Schema 风格要求从核心迁移中剥离为独立的 **Optional Compliance Pass**（§2.5）；
-> ④ 🔴 **生产 Runtime 只使用和验证 Schema，不创建、不修改、不升级 Schema** ——
->    全部生产 DDL 由运维 / DBA 用独立高权限账号显式执行（§11）。
-
-**决策优先级（本轮统一遵循）**：
-
-```
-删除不需要的能力  >  复用成熟实现  >  使用 MySQL 原生能力  >  小范围适配  >  最后才新增自研 abstraction
-```
-
-**🔴 生产硬约束（本轮新增，贯穿全文）**：
-
-> **生产 Application DB 账号无 DDL 权限**（只有 `SELECT` / `INSERT` / `UPDATE` / `DELETE`）。
-> `CREATE DATABASE` / `CREATE TABLE` / `ALTER TABLE` / `DROP TABLE` / `CREATE INDEX` 与一切 Schema 迁移，
-> 一律由运维 / DBA 用**独立的高权限迁移账号**执行。
-> ⇒ 生产 Runtime 的启动路径中**不允许出现任何 DDL**，
-> 该约束同时适用于 **Application Alembic 迁移**与 **Checkpoint Schema 迁移**（§11）。
+> **相关文档**：
+> [`mysql-goals.md`](./mysql-goals.md)（执行计划）、[`mysql-goal0-audit.md`](./mysql-goal0-audit.md)（G0 审计）、
+> [`mysql-migration-plan.md`](./mysql-migration-plan.md)（**过程留档**，含多轮修订的对照与取舍记录，不作为实施依据）。
 
 ---
 
-## 0. 🔴 最终冻结结论（本次迁移的既定前提，不再讨论）
+## 0. 冻结结论
 
 > 本次 MySQL Migration 的 CheckpointSaver **已确定使用**
 > `langgraph-checkpoint-mysql[asyncmy]==3.0.0`。
@@ -78,22 +30,22 @@
 > **Production Runtime 永远不调用 `setup()`，
 > Checkpoint DDL 由运维 / DBA 独立执行。**
 
-**冻结项与"仍待验证项"的边界**（这是本文件最重要的一条区分）：
+**冻结项与"仍待验证项"的边界**（本文件最重要的一条区分）：
 
 | | 内容 | 状态 |
 | --- | --- | --- |
-| **已冻结（不再是问题）** | 用哪个 CheckpointSaver | `langgraph-checkpoint-mysql==3.0.0`，**已定** |
+| **已冻结** | 用哪个 CheckpointSaver | `langgraph-checkpoint-mysql==3.0.0`，**已定** |
 | | 直接依赖还是 vendor | **默认直接依赖**；vendor 仅为同版本 patch fallback，**已定** |
 | | 是否接受第三方 Saver | **接受**（MIT / 纯 Python / MySQL ≥ 8.0.19），**已定** |
 | | 生产是否调用 `saver.setup()` | **永不调用**，**已定** |
-| **仍需验证（V5，G1-B）** | 该固定版本在真实 MySQL 8.0.24 + 当前 Runtime 下 | **未执行** —— 可能通过，也可能发现真实缺口 |
-| **缺口出现时的处置顺序** | 接入方式 → adapter/wrapper → subclass → vendor+patch → architecture blocker | **已定**（§7.5） |
+| | 缺口出现时的处置顺序 | 接入方式 → adapter/wrapper → subclass → vendor+patch → architecture blocker，**已定**（§7.3） |
+| **仍需验证（V5）** | 该固定版本在真实 MySQL 8.0.24 + 当前 Runtime 下的运行语义 | **未执行** —— 可能通过，也可能发现真实缺口 |
+| | 由此决定的档位 | V5 通过 ⇒ `Moderate`；走到第 ⑤ 档 ⇒ 回落 `Feasible with significant changes` |
 
-> ⚠️ **不要把 V5 描述成"肯定通过"。** 它仍是 **G2 之前的阻塞 Gate**：
-> 只有实测通过，档位才从 `Feasible with significant changes` 升为 `Moderate`（§1.1 / §1.4）。
-> 但它**不再是一个选型 Gate** —— 无论结果如何，实现基线都是同一个 3.0.0。
+> ⚠️ **V5 不是"肯定通过"**。它仍是 **G2 之前的阻塞 Gate**。
+> 但它**不是选型 Gate** —— 无论结果如何，实现基线都是同一个 3.0.0。
 
-**依赖清单（默认路径，写进 `pyproject.toml` 的 `mysql` extra）**：
+**依赖清单**（`pyproject.toml` 的 `mysql` extra）：
 
 ```toml
 mysql = [
@@ -104,62 +56,70 @@ mysql = [
 ```
 
 > ⛔ **不启用同步 MySQL CheckpointSaver**（§7.7）。
-> ⛔ **不复制约 1200 行第三方源码进仓库**（那是 fallback，不是默认）。
+> ⛔ **不复制约 1200 行第三方源码进仓库**。
+
+**决策优先级**（贯穿全文）：
+
+```
+删除不需要的能力  >  复用成熟实现  >  使用 MySQL 原生能力  >  小范围适配  >  最后才新增自研 abstraction
+```
+
+**🔴 生产硬约束**：
+
+> **生产 Application DB 账号无 DDL 权限**（只有 `SELECT` / `INSERT` / `UPDATE` / `DELETE`）。
+> `CREATE DATABASE` / `CREATE TABLE` / `ALTER TABLE` / `DROP TABLE` / `CREATE INDEX` 与一切 Schema 迁移，
+> 一律由运维 / DBA 用**独立的高权限迁移账号**执行。
+> ⇒ 生产 Runtime 的启动路径中**不允许出现任何 DDL**，
+> 该约束同时适用于 **Application Alembic 迁移**与 **Checkpoint Schema 迁移**（§11）。
 
 ---
 
-## 1. 结论摘要
+## 1. 概述
 
 ### 1.1 总体判定
 
 | 项 | 结论 |
 | --- | --- |
-| **目标档位** | **`Moderate`** —— 一次"需要仔细做的后端移植"，不再是"significant changes" |
-| **🔴 CheckpointSaver 选型** | **已冻结**：`langgraph-checkpoint-mysql[asyncmy]==3.0.0`（§0）。**不再讨论"用哪个 / 是否第三方"** |
-| **引入方式** | **默认精确版本直接依赖，不 vendor**（§7.4）。vendor 仅为"确需 patch 上游内部实现"时对同一 3.0.0 的最小 patch fallback（§7.5） |
-| **生效条件** | 🔴 **Gate V5 通过** —— 对**已确定的** `langgraph-checkpoint-mysql==3.0.0` 做**兼容性 / 正确性验收**（§7.2 / §13）。⚠️ **V5 不是选型 Gate** |
+| **目标档位** | **`Moderate`** —— 一次"需要仔细做的后端移植" |
+| **生效条件** | 🔴 **Gate V5 通过** —— 对**已确定的** `langgraph-checkpoint-mysql==3.0.0` 做**兼容性 / 正确性验收**（§7.2 / §13） |
 | **V5 未做前的已证实档位** | `Feasible with significant changes` |
-| **V5 失败时的处置** | 按 §7.5 的**固定阶梯**处理：① 先确认是不是项目**接入方式**的问题 → ② adapter / wrapper → ③ subclass 覆写 → ④ 确需改上游内部 SQL / 私有实现 ⇒ **vendor 3.0.0 + 最小 patch** → ⑤ 只有**结构性、无法修复的 correctness 问题**才升级为 **architecture blocker**。⛔ **不重新开启"换不换 CheckpointSaver"的泛化选型讨论，也不重新做第三方 Saver 市场选型** |
+| **V5 失败时的处置** | 按 §7.3 的**固定阶梯**：① 接入方式 → ② adapter / wrapper → ③ subclass 覆写 → ④ vendor 3.0.0 + 最小 patch → ⑤ architecture blocker。⛔ **不重新开启选型讨论** |
 | **性质** | **MySQL fresh-cutover / PostgreSQL backend replacement**（不迁移 PG 历史数据） |
 | **🔴 生产 DDL 权限模型** | **生产 Runtime 零 DDL**；Application Schema 与 Checkpoint Schema 各自有独立迁移产物，由运维 / DBA 执行（§11） |
 | **🔴 Runtime 与 Schema 的关系** | **只验证，不创建、不修改、不升级**；缺失或不匹配时 **fail closed / `readiness=false`**（§11.5） |
 
-### 1.2 本轮复杂度收缩的净效果
+### 1.2 关键数量与范围
 
-| 项 | 收缩前 | 收缩后 | 变化 |
-| --- | --- | --- | --- |
-| **最高风险项** | 自研 MySQL CheckpointSaver（从表结构到全部 SQL 自写） | **固定版本复用第三方 Saver**（`langgraph-checkpoint-mysql==3.0.0`，**已冻结**），从零自研降为"仅当 V5 实测出必须 patch 的缺口才做本地 patch" | 🔻 **架构级降险** |
-| **第三方依赖面** | 新增 `langgraph-checkpoint-mysql[asyncmy]` 一个包（含未使用的 `orjson`） | **只新增这一个包 + 驱动本身**（`asyncmy` + `PyMySQL`）；`orjson` 虽在其 `requires_dist` 中但**包内零命中**，不额外引入 | 🔻 供应链收敛 |
-| **Checkpoint Schema 的创建者** | 生产 Runtime 启动时 `await saver.setup()` 自动建表 | **运维 / DBA 执行迁移产物**；Runtime 只校验 4 张表 + `checkpoint_migrations` 版本（§11.4） | 🔻 消除"运行时隐式 DDL" |
-| **Application Schema 的创建者** | 生产 Runtime `init_engine` → `bootstrap_schema` → `create_all` / `stamp` / `upgrade head` | **运维 / DBA 执行 `alembic upgrade head`**；Runtime 只读 revision 并判定是否满足要求（§11.3） | 🔻 同上 |
-| **生产数据库自动创建** | `_auto_create_postgres_db` 连维护库跑 `CREATE DATABASE` | **删除该逻辑，且不移植到 MySQL**；库由 Docker Compose `MYSQL_DATABASE` 或 DBA 创建，不存在则启动失败（§11.2） | 🔻 消除隐式权限需求 |
-| **Dev/Test 与生产的差异** | 无显式区分（同一个 `init_engine` 都跑 DDL） | **按调用路径隔离**：Runtime provider 无 DDL；Dev/Test bootstrap 可执行 DDL；生产迁移产物由运维执行（§11.6） | 🔻 不再依赖易配错的开关 |
-| Checkpoint blob 存储 | `MEDIUMTEXT(base64)` 内联 + 阈值 + 对象存储溢出 + `blob_ref` + hash + 孤儿 GC | **`LONGBLOB` 单库直存** | 🔻 消除跨存储最终一致性 |
-| JSON 处理 | 20 列 → `TEXT` + 应用层序列化 + 5 个 scalar 拆列 | **保持 `sa.JSON` → MySQL `JSON`**；只补 **1 个文件**的方言分支 | 🔻 消除批量改写与 serialization adapter |
-| FK | 2 处删除 + 应用层级联 + 孤儿巡检 | **保留 FK**（InnoDB 原生支持） | 🔻 消除应用层完整性代码 |
-| 表数 | 15 张应用表 | **12 张**（删 `mcp_tasks` + `subagent_batches` + `subagent_batch_items`） | 🔻 −85 列 |
-| 列数 | 224 | **139** | 🔻 −38% |
-| `with_for_update` | 51 | **28** | 🔻 −45% |
-| `SKIP LOCKED` | 9 | **2** | 🔻 −78% |
-| 索引 | 47 | **31** | 🔻 −34% |
-| FK 数 | 2 | **1** | 🔻 |
-| 新增 abstraction | `acquire_txn_lock` / `allocate_sequence` / `conditional_upsert` + backend capability layer | **不新增**（直接实现 MySQL 最终路径） | 🔻 消除无长期价值的框架层 |
-| 双后端测试矩阵 | `pytest × PG × MySQL` 参数化 113 个文件 | **MySQL 单后端 + PG 专属测试就地替换** | 🔻 消除长期维护成本 |
-| 企业 Schema 规范 | 与核心迁移强耦合 | **剥离为 Optional Compliance Pass** | 🔻 风险归因可分离 |
+| 维度 | 当前值 | 备注 |
+| --- | --- | --- |
+| **应用表** | **12 张 / 139 列** | ORM 反射实测（§2.2） |
+| **框架表** | **5 张** | `alembic_version` + LangGraph checkpoint 4 张 |
+| 索引 | **31** | |
+| 库层 FK | **1** | `user_preferences.user_id → users.id` |
+| `RETURNING`（生产） | **4 处** | 必须改写 |
+| 事务级 advisory lock | **2 处** | 必须替换 |
+| partial unique index | **3 处**（**2 处需生成列**） | OAuth 那处实测语义等价 |
+| `with_for_update` | **28 处** | 需索引核验 |
+| `SKIP LOCKED` | **2 处** | |
+| `DateTime(timezone=True)` | **29 列** | 必须显式 `DATETIME(6)` |
+| `sa.JSON` | **11 列** | 保持原生 `JSON`，不改写 |
+| 数据库能力闸门 | **6 处** | 不扩展即拒绝 MySQL 启动 |
+| 需扩展的 `Literal` | **2 处** | 只造成校验失败 |
+| 新增第三方依赖 | **1 个包** + 2 个驱动 | `langgraph-checkpoint-mysql` / `asyncmy` / `PyMySQL` |
 
 ### 1.3 分职责域难度
 
 | 职责域 | 难度 | 说明 |
 | --- | --- | --- |
 | 数据库驱动替换 | **Easy** | `asyncpg` → `asyncmy`；`psycopg` → `PyMySQL` |
-| 应用 ORM / 查询兼容 | **Moderate** | 4 处 `RETURNING`、2 处 advisory lock、3 处 partial unique（**2 处需生成列**）、1 个 JSON 方言文件 |
-| **Checkpoint 持久化** | **Moderate**（原为 Hard） | **已冻结的固定版本依赖** + 连接池接入 + V5 兼容性/正确性验收；确需改上游内部实现才做本地 patch |
-| 并发语义 | **Moderate–Hard** | 28 处 `FOR UPDATE` 索引核验、`run_events.seq` 串行化（🔴 **V3 实测已失败，方案已定**，§8.6）、RR→RC |
-| 迁移链 / bootstrap | **Easy–Moderate** | 独立链 + 单 revision；**Runtime 侧只留校验，DDL 全部移出** |
-| **生产迁移执行模型** | **Moderate（本轮新增）** | 两份迁移产物（Application / Checkpoint）+ 两份执行方（DBA / 运维）+ Runtime 只读校验（§11） |
+| 应用 ORM / 查询兼容 | **Moderate** | 4 处 `RETURNING`、2 处 advisory lock、3 处 partial unique（2 处需生成列）、1 个 JSON 方言文件 |
+| **Checkpoint 持久化** | **Moderate** | 固定版本依赖 + 连接池接入 + V5 兼容性/正确性验收 |
+| 并发语义 | **Moderate–Hard** | 28 处 `FOR UPDATE` 索引核验、`run_events.seq` 串行化（§8.6）、RR→RC |
+| 迁移链 / bootstrap | **Easy–Moderate** | 独立链 + 单 revision；Runtime 侧只留校验，DDL 全部移出 |
+| **生产迁移执行模型** | **Moderate** | 两份迁移产物 + 两类执行方 + Runtime 只读校验（§11） |
 | 切流与回退 | **Easy** | 单向切流，不设计数据层回滚 |
-| **企业 Schema 规范** | **Easy（且可延后）** | 纯风格，不影响运行正确性（§2.5）；**不进入 Core Migration 的正式 Goal** |
-| **上游代码的长期维护** | **Easy** | 精确版本依赖 ⇒ **零本地 fork**；只有 V5 实测出"必须改上游内部实现"的真实缺口才降级 vendor，届时改动面固定为 6 处 import + `UPSTREAM.md`（§7.4/§7.5） |
+| **企业 Schema 规范** | **Easy（且可延后）** | 纯风格，不影响运行正确性（§2.4）；不进入正式 Goal |
+| **上游代码的长期维护** | **Easy** | 精确版本依赖 ⇒ 零本地 fork；只有 V5 出"必须改上游内部实现"的缺口才降级 vendor（§7.4） |
 
 ### 1.4 结论退化条件
 
@@ -167,35 +127,10 @@ mysql = [
 
 1. **V5 发现结构性、无法修复的 correctness 问题** —— 已冻结的 `langgraph-checkpoint-mysql==3.0.0`
    存在既不能通过**接入方式调整**、也不能通过 **adapter / wrapper / subclass** 绕开，
-   且 **vendor + 最小 patch 也无法消除**的运行语义或 correctness 缺口（§7.5 的第 ⑤ 档）。
-   ⚠️ 注意：单纯的"V5 失败"**不构成**退化条件 —— 先走 §7.5 的前四档；
-   只有走到第 ⑤ 档（architecture blocker）才回落档位；
+   且 **vendor + 最小 patch 也无法消除**的运行语义或 correctness 缺口（§7.3 第 ⑤ 档）。
+   ⚠️ 单纯的"V5 失败"**不构成**退化条件 —— 先走前四档；
 2. ⚠️ 组织要求 **MySQL 必须复用 PostgreSQL 的 Alembic revision 编号体系**
-   （即不允许独立 chain）—— 这会重新引入 multiple-heads 与 `0018` 重放问题。
-
-> ℹ️ **本轮已从退化条件中移除的项**：
-> ① **V3（`run_events.seq` 串行化）** —— 🔴 已在真实 MySQL 8.0.24 上**实测确认
->    `SELECT MAX(seq) ... FOR UPDATE` 不提供串行化**（两个会话读到同一个 MAX，后者 1062），
->    但同一轮也**实测确认了可行方案**（先对 `threads_meta` 行取真实行锁，§8.6）。
->    它已从"待实测风险"变成"**方案已定的实施项**"，不再构成档位退化条件。
-> ② checkpoint 表名 / COMMENT 无法满足 Schema 规范 —— 纯风格，已剥离出核心迁移（§2.5）。
-> ③ 引入第三方依赖的供应链风险 —— 该依赖为 MIT、纯 Python；其 `requires_dist` 里的 `orjson`
->    在包内**零命中**（§7.4）。
-
-### 1.5 为什么本轮可以下调档位（与"范围缩减不能下调"的区别）
-
-前几轮的档位由 **"CheckpointSaver 自研 + 并发语义替换"** 两项支撑。其中：
-**并发语义替换丝毫未减**，但 **CheckpointSaver 自研这一项被"复用成熟实现"消除了**。
-
-> 区别在于：**范围缩减**只是"要迁移的东西变少"，性质不变；
-> 而**复用实现**是"最难的那件事不用自己做了" —— 它改变的是难度本身，不是工作量。
-
-因此档位下调**以 V5 为条件**：只有当**已冻结的**上游 Saver 的运行语义在真实 MySQL 8.0.24 +
-当前 Runtime 下被实测证实可用时，下调才成立。
-⚠️ **"固定依赖"还是"vendor 源码"不改变这条逻辑** —— 两者只影响引入成本、合规冲突
-与本地维护面，**都不替代实测**。
-⚠️ 同时注意：**选型本身已经冻结**（§0）。V5 只回答"这个固定实现在当前 Runtime 下对不对"，
-**不回答"要不要用它"** —— 所以它是一次**兼容性 / 正确性验收**，不是选型评估。
+   （即不允许独立 chain）—— 这会重新引入 multiple-heads 问题。
 
 ---
 
@@ -218,11 +153,7 @@ mysql = [
 
 ### 2.2 量化口径（权威）
 
-> 🔴 **口径已切换到 G0 之后的 HEAD `a55e5734`。**
-> 下表 A 是**当前真实状态**，全部数字由 ORM 元数据反射 + 全仓扫描重新统计（§16 证据清单）。
-> 表 B / C 是**过程口径**，仅保留用于追溯"范围收缩是怎么发生的"，**不再代表当前状态**。
-
-**A. 当前 HEAD（`a55e5734`，G0 已完成）—— 🔴 权威口径**
+> 🔴 **基线 = 当前 HEAD `a55e5734`**（Goal 0 已完成）。全部数字由 ORM 元数据反射 + 全仓扫描统计。
 
 | 维度 | 数值 | 复核方式 |
 | --- | --- | --- |
@@ -236,63 +167,35 @@ mysql = [
 | Partial unique index | **3** | 扫描（**只有 2 处需生成列**，§4.4） |
 | 索引（`ix_`/`idx_`/`uq_`） | **31** | 反射 |
 | `RETURNING`（生产代码） | **4** | 扫描（`run/sql.py` 3 + `scheduled_task_runs/sql.py` 1） |
-| `ON CONFLICT`（生产代码） | **1** | 扫描 |
+| `ON CONFLICT`（生产代码） | **1** | 扫描（`user/preferences.py`） |
 | 事务级 advisory lock | **2** | 扫描（`scheduled_task_runs/sql.py` 1 + `runtime/events/store/db.py` 1） |
 | **`with_for_update`** | **28** | 扫描（按**含该关键字的行数**计，含 `with_for_update=True` 关键字参数写法） |
-| **`SKIP LOCKED`** | **2** | 扫描（`scheduled_tasks/sql.py`） |
+| **`SKIP LOCKED`** | **2** | 扫描（`scheduled_tasks/sql.py:332,530`） |
 | 命中 `postgres` 的 `.py` 文件 | **91**（`packages/harness/deerflow` 39 + `app/` 5 + `tests/` 47） | 扫描；**生产代码 44 个文件** |
 | 数据库能力闸门（拒绝 MySQL 启动） | **6** | 扫描，§12 Goal 4（3 处 `SystemExit` + 2 处 `ValueError` + 1 处健康探针） |
-| 需扩展的 `Literal` 类型定义 | **2**（`database_config.py`、`checkpointer_config.py`） | 扫描 |
+| 需扩展的 `Literal` 类型定义 | **2**（`database_config.py:143`、`checkpointer_config.py:9`） | 扫描 |
 
-**逐表列数（当前 12 张应用表）**：
+**逐表列数（12 张应用表）**：
 `runs` 31、`scheduled_tasks` 23、`scheduled_task_runs` 16、`threads_meta` 10、`run_events` 10、
 `users` 9、`personal_access_tokens` 9、`feedback` 8、`projects` 8、`agents` 7、
 `managed_subagents` 5、`user_preferences` 3 → **合计 139**
 
-**B. 历史口径：G0 之后、删 `mcp_tasks` / `subagent_batches` 之前（15 张应用表）**
+**G0 的范围收缩效果**（当前 139 列口径的由来）：
 
-| 维度 | 数值 |
-| --- | --- |
-| 应用表 | 15 张 |
-| 应用表列数 | 224 列 |
-| `sa.JSON` 列 | 20 |
-| `DateTime(timezone=True)` 列 | 48 |
-| 库层 FK | 2 |
-| 索引 | 47（`ix_` 42 / `idx_` 1 / `uq_` 4） |
-| 未命名唯一约束 | 1（`managed_subagents.name`） |
-| `server_default` 列 | 10 |
-| `nullable=False` / `nullable=True` | 137 / 87 |
-| `with_for_update` | 51 |
-| `SKIP LOCKED` | 9 |
-| 命中 `postgres` 的 `.py` 文件 | 113（`packages/harness/deerflow` 48 + `app/` 8 + `tests/` 57） |
-| PG 专属测试文件 | 8 |
-
-**C. 历史口径：G0 之前、含 5 张渠道表（20 张表，已不成立）**
-
-| 维度 | 数值 |
-| --- | --- |
-| 表 | 20（含 5 张渠道表） |
-| 列 | 274 |
-| `sa.JSON` 列 | 25 |
-| `DateTime(timezone=True)` 列 | 61 |
-| 索引对象 | 58 |
-| 库层 FK | 4 |
-
-**B → A 的收缩量（G0 实际达成）**：
-
-| 维度 | B（G0 前） | A（G0 后） | 变化 |
+| 维度 | G0 前 | 当前 | 变化 |
 | --- | --- | --- | --- |
 | 应用表 | 15 | **12** | −3 |
 | 应用表列数 | 224 | **139** | **−85（−38%）** |
 | `sa.JSON` 列 | 20 | **11** | −9 |
 | `DateTime(timezone=True)` 列 | 48 | **29** | −19 |
+| 索引 | 47 | **31** | −16（−34%） |
 | 库层 FK | 2 | **1** | −1 |
-| 索引 | 47 | **31** | −16 |
 | **`with_for_update`** | 51 | **28** | **−23（−45%）** |
 | **`SKIP LOCKED`** | 9 | **2** | **−7（−78%）** |
+| 能力闸门 | 7 | **6** | −1 |
 | 命中 `postgres` 的 `.py` 文件 | 113 | **91** | −22 |
 | 随模块删除的代码 | — | **3795 行 / 21 个文件** | — |
-| 随模块删除的测试文件 | — | **20 个** | — |
+| 随模块删除的测试 | — | **20 个文件** | — |
 
 > **被删三张表的实测数据**（供核对）：
 > `mcp_tasks` 45 列 / 9 索引 / 5 JSON / 10 时间列；
@@ -303,50 +206,67 @@ mysql = [
 > `0016_subagent_batches.py`）：它们属于**不可变的 PG 历史链**，只作审计用，**不由 Gateway 回放**。
 > **不要因为看到这两个文件就以为模块还在。**
 
-### 2.3 明确不在范围内的能力
+### 2.3 Runtime 范围（G0 之后生效）
+
+| 能力 | 当前状态 | 备注 |
+| --- | --- | --- |
+| Channel / GitHub Webhook | 🔴 **已删除** | `app/channels/`、`gateway/github/`、3 个路由、2 个持久化包 |
+| `mcp_tasks`（MCP 后台长任务） | 🔴 **已删除** | 含 `persistence/mcp_tasks`、`mcp/tasks/`、`app/mcp_tasks/`、路由与后台任务工具 |
+| `subagent_batches` / `subagent_batch_items` | 🔴 **已删除** | 含批处理 runtime / service / 路由 / `batch_task` 工具 |
+| LangGraph Store（`BaseStore` 抽象） | 🔴 **已删除** | `runtime/store/{provider,async_provider}.py` |
+| 普通 MCP（Tool / Server / OAuth） | ✅ **保留** | 只删了 `mcp_tasks` |
+| 普通 SubAgent `task` | ✅ **保留** | 只删了 `subagent_batches` |
+| memory thread metadata | ✅ **能力保留** | `MemoryThreadMetaStore` 改为简单内部 dict，**不再依赖 LangGraph `BaseStore`**（§7.8） |
+
+> **删除依据**：`mcp_tasks` 与 `subagent_batches` 都是**默认关闭、且当前没有任何配置把它们打开的**可选 Runtime
+> （`config.yaml` 中 `enabled: false`；全仓 `task_toolsets` 的声明只在 `backend/tests/`；
+> `subagent_batches` 的 submitter 为 `None`、feature flag 为 `False`）。
+> 删除是纯减法，不影响普通 MCP 与普通 SubAgent `task`。
+> 完整证据链见过程留档 `mysql-migration-plan.md` §2.6 / §2.7 与 §16。
+
+### 2.4 明确不在范围内的能力
 
 以下能力**本次不迁移**。它们不是"以后再做"，而是**本次变更范围里根本不设计**：
 
 | 能力 | 处置 | 理由 |
 | --- | --- | --- |
-| **LangGraph Store（`BaseStore`）** | **整体删除** | §7.8：在 DB 模式下"构造了但从不读写" |
+| **LangGraph Store（`BaseStore`）** | **整体删除** | §7.8：DB 模式下"构造了但从不读写" |
 | **`ag_store` 表** | 不创建 | 同上 |
 | **PG 历史数据兼容设计**（`0024` 基线、重放 `0001`–`0023`、Existing Instance upgrade、backfill、数据转换、dual-read/write、数据层回滚） | 全部删除 | 本次是 fresh-cutover（§2.1） |
-| **Channel / GitHub Webhook** | 先删除，再迁移 | 迁移的**前置条件**（§12 Goal 0） |
-| **`mcp_tasks` 模块**（表 + 运行时 + API + 测试） | **本期不迁移，直接删除** | §2.6：无当前生产消费者 |
-| **`subagent_batches` 模块**（2 张表 + 运行时 + API + 测试） | **本期不迁移，直接删除** | §2.7：无当前生产消费者 |
+| **Channel / GitHub Webhook** | 已删除 | 迁移的**前置条件**（已由 G0 完成） |
+| **`mcp_tasks` / `subagent_batches`** | 已删除 | §2.3 |
 | **Checkpoint blob 的对象存储溢出**（inline threshold / `blob_ref` / `blob_size` / `blob_sha256` / 孤儿 GC / 写入顺序协议） | **不设计** | §7.6：`LONGBLOB` 单库即可承载 |
 | **JSON → TEXT 的批量改写** | **不做** | §6.5：无兼容性/查询正确性依据 |
 | **FK → 应用层级联 + 孤儿巡检** | **不做** | §6.6：InnoDB FK 原生可用 |
-| **🔴 Redis 的全部用途**（checkpoint cache / delta cache / namespace / TTL / 失效钩子 / sandbox ownership 的持久化） | **整体移出本迁移方案**，转为独立跟进设计 | §2.3 下方说明 + §16：本迁移主线**不保留任何 Redis 优化 Goal** |
-| **`langgraph-checkpoint-mysql` 的本地 fork** | **默认不 vendor**；直接**固定版本依赖** `==3.0.0` | §7.4：无本地 fork 维护、无需手工跟踪上游 diff、无需改 import；只有 V5 出**必须 patch 的**缺口才降级 vendor |
-| **同步 MySQL CheckpointSaver** | **不实现**（`langgraph-checkpoint-mysql` 的 `pymysql.py` 类不被使用） | §7.7 |
-| **🔴 生产 Runtime 中的一切 DDL**（`create_all` / `stamp` / `alembic upgrade` / `saver.setup()` / `CREATE DATABASE` / `CREATE SCHEMA`） | **全部移出 Runtime**，由运维 / DBA 执行 | §11：生产 Application DB 账号**无 DDL 权限** |
-| **Runtime 自动创建数据库** | **删除，且不移植到 MySQL** | §11.2：库不存在时 Runtime 必须启动失败 |
+| **🔴 Redis 的全部用途**（checkpoint cache / delta cache / namespace / TTL / 失效钩子 / sandbox ownership 的持久化） | **整体移出本迁移方案**，转为独立跟进设计 | §2.5 |
+| **`langgraph-checkpoint-mysql` 的本地 fork** | **默认不 vendor**；精确版本依赖 `==3.0.0` | §7.4 |
+| **同步 MySQL CheckpointSaver** | **不实现**（上游 `pymysql.py` 类不被引用） | §7.7 |
+| **🔴 生产 Runtime 中的一切 DDL** | **全部移出 Runtime**，由运维 / DBA 执行 | §11 |
+| **Runtime 自动创建数据库** | **删除，且不移植到 MySQL** | §11.3.1：库不存在时 Runtime 必须启动失败 |
 | **索引优化**（冗余索引清理 / query tuning / 索引合并 / 推测 workload 加索引） | 不做 | §9.4 |
 | **bootstrap 分布式数据库锁** | 不做 | §11.8 |
 | **通用 multi-chain migration framework** | 不建 | §11.2 |
 | **双数据库测试参数化矩阵** | 不建 | §12 Goal 4 |
-| **Kubernetes / Helm 的 MySQL 部署形态** | **不在本次范围** | §3.4：当前真实目标只有 compose + external DSN |
+| **Kubernetes / Helm 的 MySQL 部署形态** | **不在本次范围** | §3.4 |
 
-> 🔴 **"Redis 整体移出"的含义（本轮扩大范围）**：
-> 上一版只把 *Redis checkpoint cache* 排除在外。本轮进一步明确：**Redis 不进入本迁移主线**。
-> ① 保持 `checkpoint_channel_mode = full`，不切 `delta`；
-> ② `database.checkpoint_cache.type` 保持默认（不生效）；
-> ③ **不在 MySQL Saver / Schema / 键空间里提前引入 namespace 分层、失效钩子、
-> 级联驱逐、TTL 分级等结构**；
-> ④ **不承载任何 durable truth**；
-> ⑤ Redis 的性能优化 / delta 缓存 / sandbox ownership 的可靠性，**全部作为独立变更另行设计**。
->
+### 2.5 Redis 的边界
+
+**Redis 不进入本迁移主线。** 具体含义：
+
+1. 保持 `checkpoint_channel_mode = full`，不切 `delta`；
+2. `database.checkpoint_cache.type` 保持默认（不生效）；
+3. **不在 MySQL Saver / Schema / 键空间里提前引入 namespace 分层、失效钩子、级联驱逐、TTL 分级等结构**；
+4. **不承载任何 durable truth**；
+5. Redis 的性能优化 / delta 缓存 / sandbox ownership 的可靠性，**全部作为独立变更另行设计**。
+
 > 事实基础：`database.checkpoint_cache.type` 当前是 `memory`（`config.yaml` 未配置该字段），
 > 且 `CachedHistorySaver` **只在 `checkpoint_channel_mode == "delta"` 时才挂载**
 > （`async_provider.py:242-253`）。两个条件同时不成立 ⇒ 缓存层**根本不在执行路径上**。
->
-> 唯一需要保留的**结论性约束**（不是设计，是边界）：
-> sandbox ownership 属于 **lease / correctness state**，**不得**放入"重启即空"的 volatile Redis。
-> 该约束在本轮只作为**边界声明**存在，不产生任何 MySQL 侧设计工作。
 
-### 2.4 目标数据库边界
+**唯一保留的结论性约束**（边界声明，不产生 MySQL 侧设计工作）：
+sandbox ownership 属于 **lease / correctness state**，**不得**放入"重启即空"的 volatile Redis。
+
+### 2.6 目标数据库边界
 
 ```
 Agent Runtime
@@ -362,10 +282,9 @@ Agent Runtime
 > ⚠️ **Checkpoint payload 不进入 Object Storage**（§7.6）。上表中的
 > Object Storage 只承载 Artifacts / Uploads / Tool 结果，这三项**已落地**，本次不动。
 
-### 2.5 🔴 两层划分：Core Migration 与 Optional Compliance Pass
+### 2.7 两层划分：Core Migration 与 Optional Compliance Pass
 
-**这是本轮最重要的结构性结论。** 之前的文档把"运行正确性"与"企业 Schema 风格"
-混在同一批设计里，导致**纯风格问题人为放大了 Runtime 迁移的风险面**。本轮拆分如下。
+**本文件最重要的结构性结论。** "运行正确性"与"企业 Schema 风格"必须分开验收。
 
 #### 第一层：Core Migration（影响运行正确性，必须做）
 
@@ -380,14 +299,14 @@ Agent Runtime
 | 7 | **Health / readiness** —— `mysql` 探针 + **Schema 版本校验** | 无法判断就绪；或**带着过期 Schema 启动** |
 | 8 | **多实例正确性** —— 6 处能力闸门扩展 `mysql` | **进程直接 `SystemExit`** |
 | 9 | **`("sqlite","postgres")` 守卫扩展** | 同上 |
-| 10 | **🔴 生产迁移执行模型** —— Application / Checkpoint 两份迁移产物 + Runtime 只读校验 + 调用路径隔离 | 无 DDL 权限的账号下**进程起不来**，或运维无法安全上线 |
+| 10 | **🔴 生产迁移执行模型** —— 两份迁移产物 + Runtime 只读校验 + 调用路径隔离 | 无 DDL 权限的账号下**进程起不来** |
 
 #### 第二层：Optional Compliance Pass（纯风格，可延后、可独立交付）
 
 | # | 工作 | 判据：不做会怎样 |
 | --- | --- | --- |
 | 1 | 表名 `ag_` 前缀统一（12 张应用表 + 5 张框架表） | **无运行影响** |
-| 2 | 索引命名统一（`uk_` / `idx_`，47 → 31 个） | **无运行影响** |
+| 2 | 索引命名统一（`uk_` / `idx_`） | **无运行影响** |
 | 3 | 全量中文 TABLE / COLUMN COMMENT | **无运行影响** |
 | 4 | 未命名唯一约束补名（`managed_subagents.name`） | **无运行影响** |
 | 5 | 与公司规范的其它纯风格差异 | **无运行影响** |
@@ -406,105 +325,11 @@ Optional Compliance Pass ────────► 可作为**独立变更**�
 **关键约束**：
 
 1. 🔴 **Compliance Pass 不得成为 Core Migration 的前置条件。**
-   唯一例外是 `ag_alembic_version` 的 `version_table` 命名 —— 它必须在
-   `0001_mysql_baseline` 落地时就确定，事后改名要改链根。**该例外已计入 Core**（§11.1）。
+   唯一例外是 `version_table` 的命名 —— 它必须在 `0001_mysql_baseline` 落地时就确定（§11.2）。
 2. 🔴 **不得因为 Compliance Pass 的规范要求，去否决一个运行语义可用的第三方实现**（§7.2）。
 3. 🔴 **两层的验收标准分开写**：Core 用"能否正确运行"验收，Compliance 用"是否满足规范"验收。
-4. 🔴 **Compliance Pass 不进入 Core Migration 的正式 Goal**（§15.11）。
-   主文档**只写边界**（即本节这两张表），详细规范（`ag_` 前缀逐表映射、`uk_`/`idx_` 命名表、
-   COMMENT 文本、约束补名清单）**移入附录或独立文档**。
-   ⇒ 这样做的直接收益：**它不阻塞 Runtime 迁移，也不出现在迁移的验收清单里**。
-   > 迁移验收只看一件事：**Runtime 能否在无 DDL 权限的账号下正确运行**。
-
-### 2.6 为什么 `mcp_tasks` 本期直接删除
-
-**必须区分三件事**（它们的存废互不相关）：
-
-| 概念 | 处置 | 依据 |
-| --- | --- | --- |
-| **MCP Tool / MCP Server / OAuth** | ✅ **保留**（普通 MCP 能力） | `mcp/tools.py`、`mcp/client.py` 与 `mcp_tasks` 无耦合 |
-| **MCP 长任务 Runtime（`mcp_tasks`）** | ❌ **本期删除** | 见下 |
-
-**证据链（四条，全部实测）**：
-
-| # | 断言 | 实测结论 |
-| --- | --- | --- |
-| 1 | 当前是否启用？ | ❌ `config.yaml:248` `mcp_tasks.enabled: false`；`McpTasksConfig.enabled` 默认 `False` |
-| 2 | **是否存在真实的调用路径？** | ❌ **不存在**。`_make_background_submit_tool`（`mcp/tools.py:658`）是唯一把 MCP 工具包装成后台任务的入口，它**只在某个 MCP server 声明了 `task_toolsets` 时**才被调用（`mcp/tools.py:745-763` 的循环遍历 `server_config.task_toolsets`） |
-| 3 | 有 MCP server 声明 `task_toolsets` 吗？ | ❌ **零命中**。全仓 `task_toolsets` 的**唯一实际声明处全在 `backend/tests/`**；`config.yaml` 与 `config.example.yaml` 中**没有**任何 `task_toolsets` |
-| 4 | 运行时的保护行为 | ✅ `mcp/tasks/runtime.py:112-113`：若配置了 `task_toolsets` 但 `enabled=false`，**抛 `McpTaskConfigurationError`**（"DeerFlow will not silently expose these tools as synchronous calls"）⇒ **不会静默降级成同步调用** |
-
-**结论**：`mcp_tasks` 是一个**完整的、默认关闭的、且当前没有任何配置把它打开的**可选 Runtime。
-它拥有 **45 列 / 9 索引 / 5 个 JSON 列 / 4 条独立租约通道（dispatch / poll / notification / cancel）**、
-`FOR SHARE` 归属校验（依赖 PG 四档行锁强度模型，MySQL 上不成立）、
-以及 `with_for_update` **9 处**、`SKIP LOCKED` 若干。
-
-**删除它同时减少**：
-
-| 减少项 | 数量 |
-| --- | --- |
-| 表 | 1 张（45 列，占 224 的 **20%**） |
-| 索引 | 9 个 |
-| `sa.JSON` 列 | 5 个 |
-| `DateTime(timezone=True)` 列 | 10 个 |
-| `with_for_update` | **9 处** |
-| `SKIP LOCKED` | 3 处 |
-| PG 专属行锁强度假设 | **1 处（`mcp_tasks/sql.py:166-169` 的 `FOR SHARE` 论证）** |
-| 代码 | 约 1700 行 / 8 个文件 |
-| 测试文件 | 10 个（含 `test_mcp_task_postgres.py`，即 8 个 PG 专属测试之一） |
-| 待重设计的并发语义 | `FOR SHARE` 归属校验（原风险 #8） |
-
-> **删除方式**：整模块删除（`persistence/mcp_tasks/`、`mcp/tasks/`、`app/mcp_tasks/`、
-> `routers/mcp_tasks.py`、`tools/builtins/background_tasks_tool.py`、相关测试），
-> 并移除 `deps.py:500,517,676,683` 的注入点与 `app.py:341-396` 的 lifespan 段。
-> `0001_mysql_baseline` **从不创建** `ag_mcp_tasks`。
-
-### 2.7 为什么 `subagent_batches` 本期直接删除
-
-**同样必须区分两件事**：
-
-| 概念 | 处置 | 依据 |
-| --- | --- | --- |
-| **普通 SubAgent `task` 委派** | ✅ **保留** | `bind_task_tool`（`factory.py:351-356`）与 batch 完全独立 |
-| **Batch SubAgent Runtime（`subagent_batches`）** | ❌ **本期删除** | 见下 |
-
-**证据链（四条，全部实测）**：
-
-| # | 断言 | 实测结论 |
-| --- | --- | --- |
-| 1 | 默认状态？ | ❌ `config.yaml:113` `subagent_batches.enabled: false`；`SubagentBatchesConfig.enabled` 默认 `False` |
-| 2 | 存在实际生产消费者吗？ | ❌ **不存在**。`app.py:413-416`：只有 `subagent_batches_config.enabled` 为真时才 `await batch_service.start()` + `set_subagent_batch_submitter(batch_service)` + `subagent_batches_available = True`。当前 `enabled=false` ⇒ **服务不启动、submitter 为 `None`、可用标志为 `False`** |
-| 3 | 删除会影响普通 `task` 吗？ | ❌ **不影响**。`factory.py:358-373`：batch 工具只在 `subagent_runtime.batch_submitter is not None` 或 `is_subagent_batch_runtime_available()` 时挂载；`task` 工具由 `factory.py:351-356` 独立挂载 |
-| 4 | API 层行为 | ✅ `routers/subagent_batches.py:86`：`if not getattr(request.app.state, "subagent_batches_available", False):` ⇒ 直接拒绝。**前端拿到的 feature flag 也是 false**（`routers/features.py:57,64`） |
-
-> ⚠️ **一个容易误判的细节**：`deps.py:518` 在 `sf is not None` 时**无条件**构造
-> `app.state.subagent_batch_repo = SubagentBatchRepository(sf)` —— 与已删除的 Store 是同一个模式。
-> 但这只是**构造一个对象**（无 I/O、无轮询），真正决定"是否运行"的是 `app.py:413` 的 `enabled`。
-> ⇒ **它是"被构造但从不运行"的模块**，与 `mcp_tasks` 结论一致。
-
-**删除它同时减少**：
-
-| 减少项 | 数量 |
-| --- | --- |
-| 表 | **2 张**（17 + 23 = 40 列） |
-| 索引 | 7 个 |
-| `sa.JSON` 列 | 4 个 |
-| `DateTime(timezone=True)` 列 | 9 个 |
-| **库层 FK** | **1 处**（`subagent_batch_items.batch_id → subagent_batches.id`） |
-| `with_for_update` | **14 处**（全仓单文件最高） |
-| `SKIP LOCKED` | 4 处 |
-| 代码 | 约 1900 行 / 10 个文件 |
-| 测试文件 | 10 个 |
-| 待迁移的 API | 2 个路由 + feature flag |
-
-> **删除方式**：整模块删除（`persistence/subagent_batches/`、`subagents/batch_runtime.py`、
-> `subagents/batch_service.py`、`app/subagent_batches/`、`routers/subagent_batches.py`、
-> `tools/builtins/batch_task_tool.py`、相关测试），
-> 并移除 `deps.py:506,518` 与 `app.py:398-416` 的接线、
-> `factory.py:358-373` 的 batch 工具挂载、`lead_agent/prompt.py` 的 `batch_task` 说明段。
-> ⚠️ `app.py:405` 的 `RuntimeError` 守卫（`("sqlite","postgres")` 判定）**随模块一并删除**，
-> 能力闸门从 **7 处降为 6 处**（§12 Goal 4）。
-> `0001_mysql_baseline` **从不创建** `ag_subagent_batches` / `ag_subagent_batch_items`。
+4. 🔴 **Compliance Pass 不进入正式 Goal**（§15.5）。
+   主文档**只写边界**（本节两张表），详细规范移入附录或独立文档。
 
 ---
 
@@ -560,7 +385,7 @@ MySQL 侧只需扩展两个 `Literal`：
 | `persistence/engine.py:117-131` | `backend == "postgres"` 时**硬性** `import asyncpg`，缺失即 `ImportError` | 改为 `import asyncmy` |
 | `persistence/postgres_schema.py`（258 行） | `CREATE SCHEMA`、`search_path` 注入、libpq `options` 分词/合并/转义 | **整体不适用**（MySQL 的 schema ≡ database，无 `search_path`） |
 | `config/postgres_schema.py` | `POSTGRES_SCHEMA_PATTERN` + 校验 | 不适用 |
-| `persistence/engine.py:58-92` | `_auto_create_postgres_db`：连维护库 `CREATE DATABASE` | 🔴 **整段删除，且不移植到 MySQL**（库由 compose `MYSQL_DATABASE` / 运维创建，不存在则启动失败，§11.3.1） |
+| `persistence/engine.py:58-92` | `_auto_create_postgres_db`：连维护库 `CREATE DATABASE` | 🔴 **整段删除，且不移植到 MySQL**（§11.3.1） |
 | `persistence/migrations/env.py:92-101` | 通过 `deerflow_pg_schema` 注入 search_path | MySQL 链不复用（§11.2） |
 
 ### 3.3 两条连接池，不同生命周期
@@ -572,7 +397,7 @@ MySQL 侧只需扩展两个 `Literal`：
 - 两者**共用同一个数据库 URL，但持有各自独立的连接池**（`database_config.py:14-15` 注释明确）。
 - MySQL 侧同样保持两条池（§7.4 给出 `asyncmy` 池的接入方式）。
 
-### 3.4 当前部署形态与本次的真实部署目标
+### 3.4 部署形态与本次的部署目标
 
 **现状**
 
@@ -586,31 +411,29 @@ MySQL 侧只需扩展两个 `Literal`：
 | 对象存储 | **已落地**（S3/MinIO） | `config.example.yaml:1877-1886` |
 | 初始化脚本 | **没有任何 SQL schema / Docker init 脚本**；Schema 由 bootstrap 状态机生成 | `persistence/bootstrap.py` |
 
-**本次的真实部署目标（按真实环境收缩）**
+**本次的部署目标（按真实环境收缩）**
 
 | 项 | 本次要做 | 说明 |
 | --- | --- | --- |
-| **Docker / Docker Compose** | ✅ **要做** | 在 `docker/*.yaml` 增加 MySQL 8.0.24 服务（当前连 PG 服务都没有，说明 compose 路径本就未接 PG） |
-| **external MySQL DSN** | ✅ **要做** | `database.mysql_url` 支持外部 DSN；🔴 **`_auto_create_postgres_db` 直接删除，不移植到 MySQL**（库不存在时 Runtime 启动失败，§11.3.1） |
-| **一次性迁移 job** | ✅ **要做** | 先 Application Schema，再 Checkpoint Schema（§11.0 的生产发布流程） |
+| **Docker / Docker Compose** | ✅ **要做** | 在 `docker/*.yaml` 增加 MySQL 8.0.24 服务（当前连 PG 服务都没有） |
+| **external MySQL DSN** | ✅ **要做** | `database.mysql_url` 支持外部 DSN；🔴 **`_auto_create_postgres_db` 直接删除，不移植**（§11.3.1） |
+| **一次性迁移 job** | ✅ **要做** | 先 Application Schema，再 Checkpoint Schema（§11.0） |
 | **health / readiness** | ✅ **要做** | `app/gateway/health.py` 新增 `mysql` 探针；`_probe_checkpointer_backend` 的 `Literal` 扩展 |
 | **多实例运行** | ✅ **要做** | 6 处能力闸门扩展 `mysql`（§12 Goal 4） |
-| **Kubernetes / Helm 的 MySQL StatefulSet** | ⛔ **不做** | 当前没有 K8s 生产需求。Helm 侧只需在**Goal 5** 移除既有 PG StatefulSet 配置，**不新增 MySQL 部署形态** |
+| **Kubernetes / Helm 的 MySQL StatefulSet** | ⛔ **不做** | 当前没有 K8s 生产需求。Helm 侧只需在 Goal 5 移除既有 PG StatefulSet 配置，**不新增 MySQL 部署形态** |
 
 > ⚠️ **不要为了数据库迁移同时扩展不使用的部署形态。**
-> 若未来确有 K8s 生产需求，MySQL 的 StatefulSet / Operator 选型应作为**独立变更**评估，
-> 它不改变本次迁移的任何设计结论。
+> 若未来确有 K8s 生产需求，MySQL 的 StatefulSet / Operator 选型应作为**独立变更**评估。
 
 ### 3.5 命名现状
 
-- **20 张表全部无前缀**（应用表与框架表均无）。
+- **17 张表全部无前缀**（12 张应用表 + 5 张框架表）。
 - Alembic 版本表名为默认的 `alembic_version`。
-- 索引命名三套并存：`ix_` × 42、`idx_` × 1、`uq_` × 4（+ 1 个未命名约束）。
+- 索引命名三套并存：`ix_` × 约 27、`idx_` × 1、`uq_` × 3（+ 1 个未命名约束）。
 - **0 个 TABLE COMMENT、0 个 COLUMN COMMENT**。
 
-> ⚠️ **以上全部属于 Optional Compliance Pass（§2.5）**。
-> 唯一必须计入 Core 的是 `version_table` 的命名（`ag_alembic_version`），
-> 因为它必须与 `0001_mysql_baseline` 同时落地（§11.2）。
+> ⚠️ **以上全部属于 Optional Compliance Pass**（§2.7）。
+> 唯一必须计入 Core 的是 `version_table` 的命名 —— 它必须与 `0001_mysql_baseline` 同时落地（§11.2）。
 > **若组织允许，最简单的做法是 MySQL 链继续使用默认表名 `alembic_version`** ——
 > 它天然与 PG 链的 `alembic_version` 隔离（两条链在同一实例的不同 database 中）。
 
@@ -627,7 +450,7 @@ MySQL 侧只需扩展两个 `Literal`：
 | --- | --- | --- | --- |
 | 1 | `asyncpg`（应用 ORM 异步驱动） | `persistence/engine.py:117-131` 强制 import | 替换为 **`asyncmy`** |
 | 2 | `psycopg` + `psycopg-pool` | `runtime/checkpointer/async_provider.py:53-54,96`、`app/gateway/health.py:194-215` | 替换为 **`asyncmy` 池**（§7.4） |
-| 3 | `langgraph-checkpoint-postgres` | `runtime/checkpointer/{provider,async_provider}.py` | 🔻 **替换为 `langgraph-checkpoint-mysql==3.0.0`（已冻结的精确版本依赖，§0/§7.2/§7.4）**；只有 §7.3.2 第 4️⃣ 档被触发时才走 vendor + patch |
+| 3 | `langgraph-checkpoint-postgres` | `runtime/checkpointer/{provider,async_provider}.py` | 🔻 **替换为 `langgraph-checkpoint-mysql==3.0.0`**（已冻结的精确版本依赖，§0/§7.2/§7.4）；只有 §7.3 第 4️⃣ 档被触发时才走 vendor + patch |
 | 4 | 同步驱动（`psycopg`） | `persistence/agents/sql.py:52` 同步 `create_engine` | 替换为 **`PyMySQL`**（§7.7） |
 
 ### 4.2 专有 SQL（非测试生产代码，逐条）
@@ -643,11 +466,8 @@ MySQL 侧只需扩展两个 `Literal`：
 | `persistence/run/sql.py:577-594` | `UPDATE runs … .returning(cancel_action)` | 首次取消动作胜出 |
 | `persistence/run/sql.py:619-627` | `UPDATE runs … .returning(run_id)` | "完成仅在取消之前"的原子判定 |
 | `persistence/user/preferences.py:21-25` | `pg_insert(...).on_conflict_do_update(...)` | 逐 key 偏好 upsert |
-| `persistence/migrations/versions/0018_oauth_identity_pg_partial.py:50,68` | `SELECT indpred FROM pg_index WHERE indexrelid = to_regclass(...)` | 读 PG 系统目录判断索引是否 partial |
+| `persistence/migrations/versions/0018_oauth_identity_pg_partial.py:50,68` | `SELECT indpred FROM pg_index WHERE indexrelid = to_regclass(...)` | 读 PG 系统目录判断索引是否 partial（**只服务 PG 链**） |
 | `persistence/json_compat.py:225-227` | `@compiles(JsonMatch)` → `raise NotImplementedError` | 自定义 JSON 匹配编译器，**只支持 sqlite / postgresql** |
-
-> 🔻 **本轮删除的专有 SQL**：`mcp_tasks/sql.py` 的 `FOR SHARE` 行锁强度论证（§2.6）
-> 与 `subagent_batches/sql.py` 的全部语句（§2.7）随模块删除，不再需要替换设计。
 
 ### 4.3 JSON 路径表达式（`->` / `->>` 语义）
 
@@ -658,12 +478,12 @@ MySQL 侧只需扩展两个 `Literal`：
 | `persistence/scheduled_task_runs/sql.py:847` | `metadata_json["scheduled_task_run_id"].as_string()` |
 | `persistence/thread_meta/sql.py:230,247,261` | 经 `json_match()` 生成置顶/归档过滤条件 |
 
-> 🔴 **本轮的关键澄清**：SQLAlchemy 的 `.as_string()` 索引语法（前 3 行）
+> 🔴 **关键澄清**：SQLAlchemy 的 `.as_string()` 索引语法（前 3 行）
 > **不是 PostgreSQL 专有** —— 它在 MySQL 方言下编译为 `JSON_UNQUOTE(JSON_EXTRACT(...))`，
 > 是**方言中立**的 ORM 能力。**它们不需要任何改写**。
 >
 > **真正需要方言分支的只有一个文件**：`persistence/json_compat.py`。
-> 它用 `@compiles` 手工生成 SQL，且 `@compiles(JsonMatch)` 的默认分支
+> 它用 `@compiles` 手工生成 SQL，且默认分支
 > **直接 `raise NotImplementedError`**（`json_compat.py:225-227`）⇒
 > 在 MySQL 上**编译期就会大声失败**（不是静默错误，这是好事）。
 >
@@ -672,7 +492,7 @@ MySQL 侧只需扩展两个 `Literal`：
 > `:247`（`metadata_json` 过滤）、`:261`（`deerflow_archived` 排序）。
 > ⇒ **整个"JSON 运算符"迁移面 = 1 个文件 / 3 个调用点 / 1 个列**。
 
-### 4.4 Partial unique index（3 处）—— 🔴 **本轮已实测定性：只有 2 处需要生成列**
+### 4.4 Partial unique index（3 处）—— 只有 2 处需要生成列
 
 | 索引名 | 表 | 列 | 谓词 | 业务含义 | MySQL 处置 |
 | --- | --- | --- | --- | --- | --- |
@@ -682,11 +502,7 @@ MySQL 侧只需扩展两个 `Literal`：
 
 全部同时声明 `sqlite_where` 与 `postgresql_where`。
 
-> 🔻 删 `mcp_tasks` / `subagent_batches` 后，**partial unique 仍是 3 处**（它们不含 partial index），
-> 但**其中只有 2 处需要生成列 workaround** —— `idx_users_oauth_identity` 已实测定性为
-> **可直接建全量唯一索引**（§4.4）。
-
-#### 🔴 第 3 处（OAuth）为什么**不需要**生成列 —— 两条独立证据
+#### 第 3 处（OAuth）为什么不需要生成列 —— 两条独立证据
 
 **证据 A：PostgreSQL 生产环境上跑的本来就是"全量唯一索引"，不是 partial。**
 
@@ -710,7 +526,7 @@ MySQL 侧只需扩展两个 `Literal`：
 **⇒ 结论：`UNIQUE (oauth_provider, oauth_id)` 在 MySQL 上不是"语义等价"，而是
 "与生产 PG 今天实际运行的索引是同一个对象"。**
 
-**证据 B：在真实 MySQL 8.0.24 上逐项实测（本轮新增）**
+**证据 B：在真实 MySQL 8.0.24 上逐项实测**
 
 | 用例 | 期望 | 实测结果 |
 | --- | --- | --- |
@@ -719,7 +535,7 @@ MySQL 侧只需扩展两个 `Literal`：
 | 2 行 `(NULL, 'oid-1')` 共存 | 允许 | ✅ 2 行共存 |
 | 重复 `('github','oid-9')` | **必须拒绝** | ✅ `ERROR 1062 Duplicate entry 'github-oid-9' for key '…idx_users_oauth_identity'` |
 
-**⇒ 语义完全等价。因此按本轮原则"使用 MySQL 原生能力"：**
+**⇒ 语义完全等价。因此按"使用 MySQL 原生能力"：**
 
 - ✅ **不新增 generated column**；
 - ✅ **不做 `CONCAT`**；
@@ -731,16 +547,16 @@ MySQL 侧只需扩展两个 `Literal`：
 
 > ⚠️ **唯一需要额外做的一件事在别处**：`idx_users_oauth_identity` 这个名字被
 > `app/gateway/auth/repositories/sqlite.py` 用来**区分是哪个约束被违反**，
-> 而该判别逻辑在 MySQL 上会失效 —— 详见 §4.9。
+> 而该判别逻辑在 MySQL 上会失效 —— 详见 §4.9-D。
 
-**⇒ 生成列 workaround 的适用范围收缩为恰好 2 处**：每 thread 至多一个 active run；
+**⇒ 生成列 workaround 的适用范围恰好 2 处**：每 thread 至多一个 active run；
 每 scheduled task 至多一个 active occurrence。生成列写法已在真实 8.0.24 上验证可行（§8.4）。
 
 ### 4.5 PostgreSQL 特性使用矩阵
 
 | 特性 | 是否使用 | 位置 |
 | --- | --- | --- |
-| JSON / JSONB 列 | ✅ 重度 | 应用 **11 列**（删三模块后）+ LangGraph `checkpoints.checkpoint`/`metadata` |
+| JSON / JSONB 列 | ✅ 重度 | 应用 **11 列** + LangGraph `checkpoints.checkpoint`/`metadata` |
 | JSONB 函数 / 运算符 | ✅（仅第三方 + 1 个自有文件） | checkpointer `SELECT_SQL`（`jsonb_each_text`）、DeltaChannel 动态列、`json_compat.py` |
 | ARRAY | ✅（仅第三方） | `array_agg(...)`、`ANY(%s)`、`unnest(%s::text[])` |
 | BYTEA | ✅（仅第三方） | `checkpoint_blobs.blob`、`checkpoint_writes.blob` |
@@ -753,8 +569,8 @@ MySQL 侧只需扩展两个 `Literal`：
 | GIN / GiST / Expression Index | ❌ | 无 |
 | Advisory Lock | ✅ **2 处事务级** + 1 处会话级 | §4.2 |
 | `LISTEN` / `NOTIFY` | ❌ | — |
-| `SKIP LOCKED` | ✅ **2 处**（删三模块后） | `scheduled_tasks/sql.py:332,530` |
-| `FOR UPDATE`（含 `read=True`） | ✅ **28 处**（删三模块后） | §8.7 |
+| `SKIP LOCKED` | ✅ **2 处** | `scheduled_tasks/sql.py:332,530` |
+| `FOR UPDATE`（含 `read=True`） | ✅ **28 处** | §8.7 |
 | `hashtext()` | ✅ | `runtime/events/store/db.py:148` |
 | `make_interval` | ❌ 0 处 | 随渠道删除后已无 |
 | `SET LOCAL idle_in_transaction_session_timeout` | ✅ | `bootstrap.py:552` |
@@ -775,7 +591,7 @@ MySQL 侧只需扩展两个 `Literal`：
 4. `persistence/scheduled_task_runs/sql.py:203-212` —— `UPDATE … RETURNING` 作为序号分配原语。
 5. LangGraph checkpointer 的全部 SQL（第三方，不可改，只能替换）。
 
-> 🔴 **改写原则（本轮明确）**：对第 2 项，**优先给 `JsonMatch` 补一个 MySQL 方言分支**
+> 🔴 **改写原则**：对第 2 项，**优先给 `JsonMatch` 补一个 MySQL 方言分支**
 > （复用现有 `_build_clause` 机制，约 15 行），而**不是**把 11 个 JSON 列改成 `TEXT`
 > 再拆 scalar 列 —— 后者是"为了一个文件的方言问题，改动 11 个列 + 5 个索引"，
 > 违反"小范围适配"优先级。
@@ -788,12 +604,12 @@ MySQL 侧只需扩展两个 `Literal`：
 | libpq `options=-c key=value` | `postgres_schema.py:46-126` | 无对应概念 |
 | `SET LOCAL idle_in_transaction_session_timeout` | `bootstrap.py:552` | 无此变量 |
 | 事务级 advisory lock | §4.2 | 无等价物 |
-| PG 四档行锁强度（`FOR KEY SHARE`/`FOR SHARE`/`FOR NO KEY UPDATE`/`FOR UPDATE`） | ~~`mcp_tasks/sql.py:166-169`~~ | 🔻 **随 `mcp_tasks` 删除而消失**，不再是迁移问题 |
+| PG 四档行锁强度（`FOR KEY SHARE`/`FOR SHARE`/`FOR NO KEY UPDATE`/`FOR UPDATE`） | — | 🔻 **已随 `mcp_tasks` 删除而消失**，不再是迁移问题 |
 | PG 系统目录 | `0018_oauth_identity_pg_partial.py:50,68` | 需改 `information_schema` 或跳过（该 revision 只服务 PG 链，MySQL 链不重放） |
 
-### 4.8 🔴 真正的 MySQL 不兼容 vs 企业 Schema 规范
+### 4.8 真正的 MySQL 不兼容 vs 企业 Schema 规范
 
-**这张表是 §2.5 两层划分的证据基础。**
+**这张表是 §2.7 两层划分的证据基础。**
 
 | # | 事项 | 类别 | 处置 |
 | --- | --- | --- | --- |
@@ -811,19 +627,19 @@ MySQL 侧只需扩展两个 `Literal`：
 | 12 | **表名 `ag_` 前缀** | 🟡 **企业规范** | Compliance Pass |
 | 13 | **索引命名 `uk_` / `idx_`** | 🟡 **企业规范** | Compliance Pass |
 | 14 | **中文 COMMENT** | 🟡 **企业规范** | Compliance Pass |
-| 15 | **禁止 `JSON` 列** | 🟡 **企业规范** | **本轮不采纳**：MySQL 原生 `JSON` 类型可用，无正确性问题 |
-| 16 | **禁止 `BLOB` / `LONGBLOB`** | 🟡 **企业规范** | **本轮不采纳**：`LONGBLOB` 是 checkpoint payload 的正确容器（§7.6） |
-| 17 | **禁止 FK** | 🟡 **企业规范** | **本轮不采纳**：InnoDB FK 原生可用（§6.6） |
+| 15 | **禁止 `JSON` 列** | 🟡 **企业规范** | **不采纳**：MySQL 原生 `JSON` 类型可用，无正确性问题 |
+| 16 | **禁止 `BLOB` / `LONGBLOB`** | 🟡 **企业规范** | **不采纳**：`LONGBLOB` 是 checkpoint payload 的正确容器（§7.6） |
+| 17 | **禁止 FK** | 🟡 **企业规范** | **不采纳**：InnoDB FK 原生可用（§6.6） |
 | 18 | **禁止数据库专有业务逻辑** | 🟡 **企业规范** | 部分重叠：#1–#4 恰好也是"专有 SQL"，但它们的驱动力是**不兼容**而非风格 |
 | 19 | **至少一个 PK** | ✅ **已满足** | 12 张应用表 + 5 张框架表全部有 PK |
 
 > **判据**：第 1–11 项**不做的后果是"跑不起来或静默错误"**；
 > 第 12–18 项**不做的后果是"不符合公司规范"**。两类必须分开陈述、分开验收、分开排期。
 
-### 4.9 🔴 本轮新增实测发现：**编译通过、运行失败**的静默失效面
+### 4.9 编译通过、运行失败的静默失效面
 
 本节全部结论来自**真实 MySQL 8.0.24 容器** + **项目自带的 SQLAlchemy 2.0.49** 双向探针
-（方言编译探针 + 服务端执行探针）。这是本轮新增的证据面，也是 Goal 3 的输入。
+（方言编译探针 + 服务端执行探针）。
 
 #### A. 方言编译层"静默放行"清单
 
@@ -836,9 +652,9 @@ MySQL 侧只需扩展两个 `Literal`：
 | `sa.extract('epoch', col)` | **原样输出 `EXTRACT(epoch FROM …)`** | `ERROR 1064` | 🔴 **静默** |
 | `INSERT … ON CONFLICT DO NOTHING` | ✅ **`UnsupportedCompilationError`（编译期就炸）** | 到不了运行期 | ✅ **响亮失败** |
 
-> 🔴 **这就是本迁移最容易踩的坑**：SQLAlchemy 的 MySQL 方言**不校验**这些构造。
+> 🔴 **这是本迁移最容易踩的坑**：SQLAlchemy 的 MySQL 方言**不校验**这些构造。
 > ⇒ **编译期通过、单测通过、只在运行期 1064 / 1305。**
-> ⇒ 因此 Goal 3 的验收不能只看单测，**必须有真实 MySQL 上跑过一遍的集成验收**（Goal 4）。
+> ⇒ Goal 3 的验收不能只看单测，**必须有真实 MySQL 上跑过一遍的集成验收**（Goal 4）。
 
 **已确认无问题、不需要改写的**：
 
@@ -857,7 +673,7 @@ MySQL 侧只需扩展两个 `Literal`：
 | `sa.LargeBinary` | MySQL → **`BLOB`**；PG → `BYTEA` | 写入 100 KB → **`ERROR 1406 Data too long for column`**（`BLOB` 上限 64 KB）；`LONGBLOB` 正常 | 🔴 **应用 ORM 目前无 `LargeBinary` 列**（已核）；checkpoint 表由上游用 `LONGBLOB`（已实测），**两侧都安全**，但**不得在 MySQL 上引入裸 `LargeBinary`** |
 | `sa.String(n)` | `VARCHAR(n)` | 一致 | ✅ |
 
-#### C. `JSON_TYPE()` 返回**大写**（Gate V6 已实测确认）
+#### C. `JSON_TYPE()` 返回**大写**
 
 ```
 JSON_TYPE('1')    -> INTEGER      JSON_TYPE('"s"') -> STRING
@@ -867,7 +683,7 @@ JSON_TYPE('[]')   -> ARRAY
 ```
 
 ⇒ `json_compat.py` 的 `@compiles(JsonMatch, "mysql")` 分支里，**类型字面量必须用大写**。
-用小写会让谓词**恒为假**且不报错 —— 这是纯静默错误（§6.5 / Gate V6）。
+用小写会让谓词**恒为假**且不报错 —— 纯静默错误（§6.5 / Gate V6）。
 
 #### D. 🔴 授权层"约束判别"逻辑在 MySQL 上会整体失效
 
@@ -934,7 +750,6 @@ JSON_TYPE('[]')   -> ARRAY
 ### 5.2 结论
 
 **MySQL 8.0.24 足以承载 Application Data 层的全部查询模式，也足以承载 Checkpoint 层。**
-后者是本轮最重要的修正 —— 见 §7.2 的运行语义验收。
 
 需要处理的只有：
 
@@ -948,12 +763,8 @@ JSON_TYPE('[]')   -> ARRAY
   `EXTRACT(epoch)` / partial index）—— 它们**不会**在单测里暴露；
 - 🔴 **补 §4.9-D 的授权层约束判别 MySQL 分支**（否则冲突错误退化为 500）。
 
-> ⚠️ 上一版此处写"Checkpoint 层无法通过配置迁移" ——
-> 那是**基于 Schema 规范**（禁止 JSON/BLOB）得出的结论。
-> 本轮不再以该规范为前提后，**上游 Saver 的表结构在 MySQL 8.0.24 上可以直接执行**
-> —— 这一条本轮已**不再停留在推断**：已把上游 22 条 migration 逐条渲染后
-> 在真实 8.0.24 上执行，**全部成功**，并导出了最终 schema（§7.4 / §11.4）。
-> 且本轮选择把它**作为固定版本依赖使用**（§7.4）。
+> Checkpoint 层的可行性不再是推断：上游 22 条 migration 已逐条渲染并在真实 8.0.24 上
+> **全部执行成功**，最终 schema 已导出（§7.4 / §11.4）。
 
 ---
 
@@ -988,17 +799,17 @@ JSON_TYPE('[]')   -> ARRAY
 
 > ⚠️ `migrations/_env_filters.py:30-37` 的 `LANGGRAPH_OWNED_TABLES`
 > 显式声明后 4 张为 LangGraph 所有，Alembic 必须回避。
-> 🔴 **这 4 张表由上游 `MIGRATIONS`（22 条）定义，由运维执行 `database/mysql/checkpoint/`
-> 的迁移产物创建**，**不进入 MySQL 链的 revision、不由 Runtime 创建**（§11.4）。
-> ⚠️ 默认路径（**精确版本依赖**）下这 4 个表名是**上游的、不可改的**
-> —— 改名的代价是 **57 处 SQL 字符串 + `LANGGRAPH_OWNED_TABLES` + 一个单测断言**（§6.4），
-> 且只有在**走 vendor 路径**（§7.3.2 第 4️⃣ 档）时才技术上可行。
+> 🔴 **这 4 张表由上游 `MIGRATIONS`（22 条）定义，由运维执行迁移产物创建**，
+> **不进入 MySQL 链的 revision、不由 Runtime 创建**（§11.4）。
+> ⚠️ 默认路径下这 4 个表名是**上游的、不可改的** —— 改名的代价是
+> **57 处 SQL 字符串 + `LANGGRAPH_OWNED_TABLES` + 一个单测断言**（§6.4），
+> 且只有在**走 vendor 路径**（§7.3 第 4️⃣ 档）时才技术上可行。
 > ⛔ **"表名不合规范"本身不构成 vendor 理由**（§7.3.3 / §7.4）。
-> ⇒ **默认不改名**，把它列为一条明确的规范例外（§15.12 Q2）。
+> ⇒ **默认不改名**，把它列为一条明确的规范例外（§15.6）。
 
 **已删除的表**：`channel_connections`、`channel_conversations`、`channel_credentials`、
-`channel_oauth_states`、`webhook_deliveries`（Goal 0）；
-`mcp_tasks`、`subagent_batches`、`subagent_batch_items`（Goal 0，§2.6/§2.7）。
+`channel_oauth_states`、`webhook_deliveries`；
+`mcp_tasks`、`subagent_batches`、`subagent_batch_items`（§2.3）。
 
 ### 6.2 逐表业务语义
 
@@ -1016,14 +827,6 @@ JSON_TYPE('[]')   -> ARRAY
 | `scheduled_task_runs` | **定时任务的每一次触发**（occurrence）。`launching` 是**短租约抢占态**，保证多 gateway 实例不重复启动同一行；`launch_accounted` 标记是否已计入父任务配额。 | 同上 | `0003`；`0007`/`0015`/`0022` |
 | `agents` | **用户自建智能体定义**，`(user_id, name)` 唯一。`config` 存完整 `AgentConfig` 文档，`soul` 存人格文本。**用文档列而非逐字段列是刻意的**：`AgentConfig` 加字段不需要 schema 变更。 | `routers/agents.py` | `0006_agents` |
 | `managed_subagents` | **运维统管的子代理定义**：system prompt、工具白名单、技能、模型、轮次与超时。`name` **全局**唯一，强制禁用 `task`/`ask_clarification`/`present_files`。 | `routers/subagents.py` | `0014_managed_subagents` |
-
-**已删除表的业务语义（存档，便于日后恢复评估）**
-
-| 表名 | 业务含义 | 删除理由 |
-| --- | --- | --- |
-| `mcp_tasks` | MCP 远程长任务的本地镜像：四条独立通道各有租约、版本号与尝试计数 —— 派发、轮询、通知回灌、取消。 | 无当前生产消费者（§2.6） |
-| `subagent_batches` | 一次批量子代理派发的批次头：`submission_key` 幂等、并发上限、`execution_spec`。 | 无当前生产消费者（§2.7） |
-| `subagent_batch_items` | 批次中的每个条目：prompt、验收标准与裁决、状态、尝试次数、租约、结果与截断标志、token 用量。 | 同上 |
 
 **框架表**
 
@@ -1062,10 +865,6 @@ users ──> threads_meta ──> runs ──> run_events
 
 > `assistant_id` 的取值是 `'lead_agent'` 或自定义智能体名，按**名字**关联到
 > `agents.name` / `managed_subagents.name`，库层面没有任何约束。
->
-> 🔻 **本轮修正**：上一版要求"迁移到 MySQL 后真实 FK 必须删除，所有关联退化为
-> 应用层保证 + 普通索引"。**该要求基于企业规范，本轮不采纳**（§6.6）。
-> 唯一真实 FK（`user_preferences.user_id → users.id`）**保留**。
 
 **五个容易误解的点**
 
@@ -1100,10 +899,10 @@ users ──> threads_meta ──> runs ──> run_events
 | LangGraph 表过滤 | `migrations/_env_filters.py:28-35` `LANGGRAPH_OWNED_TABLES` |
 | Migration | 新 revision 中的 `op.create_table` / `op.add_column` 的 `table=` 参数 |
 | Health check | `app/gateway/health.py` |
-| 🔴 **上游 Saver（checkpoint 4 张表）** | ⛔ **默认路径下改不了** —— 表名硬编码在依赖包的 SQL 字符串里。改动面是：**57 处 SQL 字符串**（`checkpoints` 32 / `checkpoint_blobs` 10 / `checkpoint_writes` 12 / `checkpoint_migrations` 3，分布在 `base.py` / `aio_base.py`）+ `LANGGRAPH_OWNED_TABLES`（`_env_filters.py:30-37`）+ `test_persistence_migrations_env.py:60-63` 的**等值断言**。⚠️ **"表名不符合规范"不构成 vendor 理由**（§7.3.3）⇒ 要改名只能走 §7.3.2 第 4️⃣ 档，且**不应该为它单独触发**。**建议不改名**（列为明确的规范例外，§15.12 Q2）—— 收益是风格，成本是永久的本地 diff 与升级冲突 |
+| 🔴 **上游 Saver（checkpoint 4 张表）** | ⛔ **默认路径下改不了** —— 表名硬编码在依赖包的 SQL 字符串里。改动面是：**57 处 SQL 字符串**（`checkpoints` 32 / `checkpoint_blobs` 10 / `checkpoint_writes` 12 / `checkpoint_migrations` 3）+ `LANGGRAPH_OWNED_TABLES` + `test_persistence_migrations_env.py:60-63` 的**等值断言**。⚠️ **"表名不符合规范"不构成 vendor 理由**（§7.3.3）⇒ 要改名只能走 §7.3 第 4️⃣ 档，且**不应该为它单独触发**。**建议不改名**（列为明确的规范例外，§15.6） |
 
 > ⚠️ **`bootstrap.py` 的 `_CANONICAL_0019_SCHEMA_FLOOR` /
-> `_BASELINE_TABLE_NAMES` / `_BASELINE_INDEX_NAMES` 保持原样、不动**（§11.4）。
+> `_BASELINE_TABLE_NAMES` / `_BASELINE_INDEX_NAMES` 保持原样、不动**（§11.7）。
 > 它们只服务旧 PostgreSQL bootstrap，MySQL 侧**不新增**同类常量，也**不做"缩减"**。
 
 **主键**：**12 张应用表全部已有 PK**，合规。
@@ -1114,9 +913,6 @@ users ──> threads_meta ──> runs ──> run_events
 ### 6.5 类型映射
 
 #### JSON：保持 `sa.JSON` → MySQL 原生 `JSON`
-
-🔻 **本轮修正**：上一版要求"20 个 `sa.JSON` 列统一改为 `sa.Text` + 应用层序列化 +
-拆 5 个 scalar 列"。**该要求基于企业规范，本轮不采纳。**
 
 | 判断依据 | 结论 |
 | --- | --- |
@@ -1154,7 +950,7 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
     return _build_clause(compiler, typeof, extract, element.value, _MYSQL, **kw)
 ```
 
-> 🔴 **两个必须验证的细节**（属 Gate V5 之外的 **V6** 小项）：
+> 🔴 **两个必须验证的细节**（Gate V6）：
 > ① **MySQL 的 `JSON_TYPE()` 返回值是大写**（`'INTEGER'` / `'STRING'` / `'BOOLEAN'` /
 > `'NULL'` / `'DOUBLE'` / `'OBJECT'` / `'ARRAY'`），而 SQLite 返回小写 ——
 > `_Dialect` 的字面量必须大写，否则**静默不匹配**（谓词恒为 false）。
@@ -1170,7 +966,7 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
 必须显式改为 `mysql.DATETIME(fsp=6)`，并在应用层统一
 "UTC aware → naive UTC" 的写入边界转换。
 
-#### 类型分布（139 列，删三模块后）
+#### 类型分布（139 列）
 
 | 类型 | 列数 | 备注 |
 | --- | --- | --- |
@@ -1183,18 +979,14 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
 | `BigInteger` | 2 | `scheduled_tasks.last_occurrence_seq`、`scheduled_task_runs.occurrence_seq` |
 | **合计** | **139** | |
 
-> ⚠️ 上表的 `String` / `Integer` / `Text` / `Boolean` 为**按删除比例估算**；
-> 精确逐列口径由 `/tmp/slim_probe.py` 的完整输出给出，实施前应以
-> `0001_mysql_baseline` 的 review 为准重新反射一次。
+> ⚠️ 上表的 `String` / `Integer` / `Text` / `Boolean` 为**按比例估算**；
+> 精确逐列口径应在 `0001_mysql_baseline` 的 review 时重新反射一次。
 
 ### 6.6 外键：**保留**
-
-🔻 **本轮修正**：上一版要求"删除 2 处 FK + 应用层级联 + 孤儿巡检"。**该要求基于企业规范，本轮不采纳。**
 
 | 位置 | 约束 | 语义 | 处置 |
 | --- | --- | --- | --- |
 | `persistence/user/model.py:37` | `user_preferences.user_id → users.id` `ON DELETE CASCADE` | 删用户即删偏好 | ✅ **保留**（InnoDB 原生支持 FK 与级联） |
-| ~~`persistence/subagent_batches/model.py:44`~~ | ~~`subagent_batch_items.batch_id → subagent_batches.id`~~ | ~~删批次即删条目~~ | 🔻 **随模块删除而消失**（§2.7） |
 
 **为什么保留 FK 是安全的**：
 
@@ -1210,10 +1002,9 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
 
 ### 6.7 NOT NULL / DEFAULT
 
-#### 🔴 本轮审计：**默认不新增 `server_default`**
+#### 审计结论：**默认不新增 `server_default`**
 
-**审计结论：上一版那份"必须补 `server_default`"的清单，绝大部分不需要新增。**
-判定标准是 —— **只有同时满足以下四条时，才值得为 MySQL 迁移新增 `server_default`**：
+判定标准 —— **只有同时满足以下四条时，才值得为 MySQL 迁移新增 `server_default`**：
 
 | # | 条件 |
 | --- | --- |
@@ -1223,11 +1014,11 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
 | 4 | 该默认值**当前 PG schema 里本来就有**（而不是为 MySQL 新加的） |
 
 **审计结果（实测）**：在**存活表**中带 `server_default` 的字段只有 **4 个**，
-且**全部是既有设计**（PG 里已有），**并非本轮新增**：
+且**全部是既有设计**（PG 里已有）：
 
 | 表 | 列 | 现状 | 处置 |
 | --- | --- | --- | --- |
-| `scheduled_task_runs` | `attempt_count` | `default=0, server_default="0"` | ✅ **保留**（PG 已有，两者并存是既有设计） |
+| `scheduled_task_runs` | `attempt_count` | `default=0, server_default="0"` | ✅ **保留** |
 | `runs` | `operation_kind` | `default="run", server_default=text("'run'")` | ✅ **保留** |
 | `runs` | `token_usage_by_model` | `default=dict, server_default=text("'{}'")` | ✅ **保留** |
 | `scheduled_tasks` | `last_occurrence_seq` | `default=0, server_default="0"` | ✅ **保留** |
@@ -1237,14 +1028,12 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
 | 类别 | 结论 |
 | --- | --- |
 | `runs.status` / `multitask_strategy` / 8 个计数列、`threads_meta.status` / `metadata_json`、`agents.config` / `soul`、`projects.*`、`managed_subagents.definition`、`personal_access_tokens.scopes`、`scheduled_tasks.*`、`users.*` | ⛔ **不加 `server_default`**。理由：前三条满足，但**第 4 条不成立**（PG schema 里本来就没有）⇒ 为 MySQL 单独加等于**新增一套规则** |
-| 被删模块的字段（`mcp_tasks` 5 个、`webhook_deliveries.first_seen`） | 随模块 / 表删除，**无需考虑** |
 
 > 🔴 **为什么不"顺手全加"**：`server_default` 一旦加上，就形成
 > **`Python default` + `DB server_default` 两套规则并存**的局面。
 > 两套规则在**长期演进中必然漂移**（改了一处忘另一处），
 > 而漂移的表现是"**不同写入路径得到不同的默认值**"这种极难排查的问题。
-> ⇒ 本轮原则：**只在"DB 默认值本身承载语义"时才保留 / 新增**；
-> 纯粹为了让 DDL 看起来完整的 `server_default`，**一律不加**。
+> ⇒ 原则：**只在"DB 默认值本身承载语义"时才保留 / 新增**。
 >
 > ✅ **审计前提已核实**：全仓绕过 ORM 的 raw `INSERT INTO` 只出现在
 > `community/aio_sandbox/network_proxy.py`（自有 SQLite）与
@@ -1252,7 +1041,7 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
 > **没有任何一处写应用 ORM 表**。ORM 写入全部是 `session.add` / `add_all`（14 处）
 > 加 1 处 `insert(UserPreferenceRow).values(...)`。⇒ 条件 1 对应用表成立。
 
-> ⚠️ **一个语法注意点**（本轮不需要用，但要知道）：若将来**确实**要为
+> ⚠️ **一个语法注意点**：若将来**确实**要为
 > `run_events.content`（`Text`）或 JSON 列加默认值，
 > MySQL 要求写成**表达式形式** `DEFAULT ('')` / `DEFAULT ('{}')`（8.0.13+）。
 
@@ -1267,11 +1056,8 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
 
 **统计**：139 列中 `nullable=False` 约 **85** 个、`nullable=True` 约 **54** 个。
 
-> 🔻 **本轮取消的 backfill 清单**：上一版列出的 7 个"必须补 backfill 再切 NOT NULL"的列中，
-> `mcp_tasks.dispatch_version` 随模块删除；其余 6 列（`runs.user_id`、`run_events.user_id`、
-> `threads_meta.user_id`、`feedback.user_id`、`scheduled_task_runs.occurrence_seq`、
-> `scheduled_task_runs.launch_accounted`）**在 fresh cutover 下不存在历史行**
-> ⇒ **没有 backfill 需求**，`0001_mysql_baseline` 直接按最终 nullable 形态建表。
+> ✅ **fresh cutover 下没有 backfill 需求** —— 不存在历史行，
+> `0001_mysql_baseline` 直接按最终 nullable 形态建表。
 >
 > ⚠️ **隐式 nullable 必须显式化**：所有 `Mapped[X | None]` 但未显式写 `nullable=` 的列，
 > 以及 `Mapped[str | None] = mapped_column(String(N))` 这类"无注解也无默认"的列，
@@ -1295,13 +1081,11 @@ MySQL 的 `COMMENT` 是表/列定义的一部分，应在 `create_table` / `add_
 | `personal_access_tokens` | 个人访问令牌 | `token_digest`（哈希，非明文）、`scopes`、`revoked_at` |
 | `feedback` | 用户反馈 | `rating`、`message_id` |
 | `managed_subagents` | 托管子 Agent 定义 | `definition` |
-| `checkpoints` / `checkpoint_blobs` / `checkpoint_writes` | LangGraph checkpoint 三表 | ❌ **默认路径下加不了** —— 上游的 `MIGRATIONS` DDL 字符串是包内代码，不可编辑。⚠️ **且"没有中文 COMMENT"不构成 vendor 理由**（§7.3.3 / §7.4）⇒ 只能列为规范例外 |
+| `checkpoints` / `checkpoint_blobs` / `checkpoint_writes` | LangGraph checkpoint 三表 | ❌ **默认路径下加不了** —— 上游的 `MIGRATIONS` DDL 字符串是包内代码，不可编辑。⚠️ **且"没有中文 COMMENT"不构成 vendor 理由**（§7.3.3）⇒ 只能列为规范例外 |
 
-> 🔻 **本轮变化**：上一版把这条列为"可解"（vendor 后 DDL 字符串可直接编辑）。
-> 现在默认是**精确版本直接依赖** ⇒ **该冲突重新成立**，
-> 处理方式是把它列为**明确的规范例外**（§15.12 Q2），
+> 🔴 **处理方式**：把它列为**明确的规范例外**（§15.6），
 > **而不是为了 COMMENT 去 vendor** —— 纯风格理由已被明确排除在 vendor 判据之外（§7.3.3）。
-> ⇒ 若组织坚持要 COMMENT，正确做法是把它写进 **Optional Compliance Pass 的例外清单**，
+> 若组织坚持要 COMMENT，正确做法是写进 **Optional Compliance Pass 的例外清单**，
 > **不改变 CheckpointSaver 的引入方式**。
 
 > 注释语言：全部中文（表级 + 列级）；枚举列的注释必须列出**全部合法取值及其语义**。
@@ -1321,12 +1105,10 @@ MySQL 的 `COMMENT` 是表/列定义的一部分，应在 `create_table` / `add_
 
 > ✅ **没有任何主键 / 唯一键越界。**
 >
-> 🔻 **本轮的重要简化**：上一版担心"`checkpoint_ns` 会因嵌套子图增长导致索引键长超限"，
-> 并把 **V2（实测 `checkpoint_ns` 最大长度）列为阻塞性 Gate**。
-> 第三方包的 schema 通过 **`checkpoint_ns_hash BINARY(16)` 进主键**
-> 已经把这个问题**从设计上消除** ——
+> 上游包的 schema 通过 **`checkpoint_ns_hash BINARY(16)` 进主键**
+> 把"`checkpoint_ns` 会因嵌套子图增长导致索引键长超限"这个问题**从设计上消除** ——
 > `checkpoint_ns` 本身放宽到 `VARCHAR(2000)`，而主键只用 16 字节的 MD5 摘要。
-> ⇒ **V2 从"阻塞性 Gate"降级为"运行期长度断言的确认项"**（§13）。
+> ⇒ **V2 不需要实测、不需要断言兜底**（§13）。
 >
 > ⚠️ 仍需保留这条字节估算检查在 `0001_mysql_baseline` 的 review 中，
 > 防止后续新增复合唯一键时重新越界。
@@ -1346,8 +1128,8 @@ MySQL 的 `COMMENT` 是表/列定义的一部分，应在 `create_table` / `add_
 | 官方可用的 checkpoint 后端 | `base`、`memory`、`postgres`、`serde`、`sqlite` | `ls .venv/.../langgraph/checkpoint/` |
 | **官方 MySQL 后端** | **不存在** | `grep -rli mysql .venv/.../langgraph/` → **零命中** |
 | **第三方 MySQL 后端** | ✅ **存在且可用**（见 §7.2） | `langgraph-checkpoint-mysql` **3.0.0** |
-| **引入方式** | 🔴 **已冻结**：`langgraph-checkpoint-mysql[asyncmy]==3.0.0`（§0 / §7.4 默认路径） | §7.4：**精确版本依赖；不 vendor、不改源码、不 fork** |
-| 当前已安装？ | ❌ 未安装（**将来按依赖正常安装**） | `ls .venv/.../site-packages \| grep langgraph_checkpoint_mysql` → 当前零命中 |
+| **引入方式** | 🔴 **已冻结**：`langgraph-checkpoint-mysql[asyncmy]==3.0.0`（§0 / §7.4） | 精确版本依赖；**不 vendor、不改源码、不 fork** |
+| 当前已安装？ | ❌ 未安装（按依赖正常安装） | `ls .venv/.../site-packages \| grep langgraph_checkpoint_mysql` → 当前零命中 |
 
 **当前 Saver**
 
@@ -1357,11 +1139,11 @@ MySQL 的 `COMMENT` 是表/列定义的一部分，应在 `create_table` / `add_
 | 同步（`DeerFlowClient` / 测试） | `langgraph.checkpoint.postgres.PostgresSaver`，`from_conn_string`（`runtime/checkpointer/provider.py:132-147`） |
 | Delta 模式包装 | `CachedHistorySaver`（`runtime/checkpointer/cached_saver.py`） |
 
-### 7.2 🔴 已冻结 Saver 的运行语义验收（**本轮核心**）
+### 7.2 已冻结 Saver 的运行语义验收
 
-> 🔴 **本节的性质已经改变**：`langgraph-checkpoint-mysql==3.0.0` **不再是一个"候选"**，
+> 🔴 **本节的性质**：`langgraph-checkpoint-mysql==3.0.0` **不是"候选"**，
 > 而是**本次迁移已确定的 Runtime dependency**（§0）。
-> 本节的内容是对该固定实现做**逐项运行语义核对**，为 §13 的 **V5（兼容性 / 正确性 Gate）** 提供检查清单。
+> 本节是对该固定实现做**逐项运行语义核对**，为 §13 的 **V5（兼容性 / 正确性 Gate）** 提供检查清单。
 
 #### 已冻结的选型
 
@@ -1416,7 +1198,7 @@ MySQL 的 `COMMENT` 是表/列定义的一部分，应在 `create_table` / `add_
 它用 `raise NotImplementedError`（`base/__init__.py:318,329,348,372,415`）。
 ⇒ **缺失这三个方法不会导致实例化失败**，只在该方法被调用时报错。
 
-**那么它们会被调用吗？全仓实测**：
+**全仓实测其调用点**：
 
 | 方法 | 生产调用点 | 结论 |
 | --- | --- | --- |
@@ -1455,29 +1237,19 @@ MySQL 的 `COMMENT` 是表/列定义的一部分，应在 `create_table` / `add_
 | # | 细节 | 风险 | 建议 |
 | --- | --- | --- | --- |
 | 1 | `UPSERT_CHECKPOINT_BLOBS_SQL` 与 `INSERT_CHECKPOINT_WRITES_SQL` 使用 **`INSERT IGNORE`**（`base.py:219, 241`） | ⚠️ `INSERT IGNORE` 会把**可忽略错误降级为 warning**（含字符串截断）⇒ 理论上存在静默丢失路径 | V5 中核对：目标列是 `LONGBLOB` / `JSON` / `VARCHAR(150)`，**截断不可能发生**；但应在 review 中确认 `VARCHAR(150)` 的取值长度确实 ≤150（`thread_id` 是 UUID/短 id，`channel` 是固定短名） |
-| 2 | `SELECT_SQL` 用 `json_arrayagg(json_array(..., bl.blob))` 把二进制塞进 JSON（`base.py:169-198`），MySQL 会**自动 base64 编码并加 `base64:type251:` 前缀**，客户端 `decode_base64_blob` 还原（`utils.py:10-14`） | ⚠️ **线路膨胀约 33%**，且 DB 侧需**完整物化**整个 JSON；受 **`max_allowed_packet`** 约束 | V5 中做**大 checkpoint 的吞吐/内存实测**，并记录 `max_allowed_packet` 的实际上限（这是性能/容量项，不是正确性项）。**默认路径下 `SELECT_SQL` 不可改**；确需优化 ⇒ 走 §7.3.2 第 4️⃣ 档（vendor 同一个 3.0.0 后直接改 `SELECT_SQL` 并登记进 `UPSTREAM.md`） |
+| 2 | `SELECT_SQL` 用 `json_arrayagg(json_array(..., bl.blob))` 把二进制塞进 JSON（`base.py:169-198`），MySQL 会**自动 base64 编码并加 `base64:type251:` 前缀**，客户端 `decode_base64_blob` 还原（`utils.py:10-14`） | ⚠️ **线路膨胀约 33%**，且 DB 侧需**完整物化**整个 JSON；受 **`max_allowed_packet`** 约束 | V5 中做**大 checkpoint 的吞吐/内存实测**，并记录 `max_allowed_packet` 的实际上限（性能/容量项，不是正确性项）。**默认路径下 `SELECT_SQL` 不可改**；确需优化 ⇒ 走 §7.3 第 4️⃣ 档 |
 | 3 | `BaseAsyncMySQLSaver.__init__` 调 **`asyncio.get_running_loop()`** 并存进 `self.loop`（`aio_base.py:34-43`）；同步方法是 `asyncio.run_coroutine_threadsafe(..., self.loop)` 的**转发**（`aio_base.py:403-544`），**不是 stub** | ⚠️ **必须在运行中的事件循环内构造**；若在 A 循环构造、从 B 循环调同步方法 ⇒ `InvalidStateError` | 现有 `_async_checkpointer` / `_async_checkpointer_from_database` **本身就是 async generator**（`async_provider.py:108,150`）⇒ 天然满足。**只需确认不在模块导入期构造**，并确认"图子进程"内也是先建池、再建 saver |
 
 #### 判定
 
-> **✅ 选型已冻结：`langgraph-checkpoint-mysql==3.0.0` 就是本次迁移的实现基线。**
->
-> 上一版否决它的理由是"企业 Schema 规范不匹配"（无 `ag_` 前缀、无 COMMENT、
-> 用 JSON/BLOB、索引命名不合规）—— 那些是 Optional Compliance Pass 的关注点，
-> **不是运行语义问题**。该否决已被推翻，且**不再复议**。
->
-> 🔴 **同时冻结"引入方式"**：上一版把 vendor 当作默认。现在明确 ——
-> **默认精确版本直接依赖**；vendor 只是"确需修改上游内部实现"时对**同一个 3.0.0**
-> 做最小 patch 的 fallback，**不是并列的架构选项**（§7.4 / §7.5）。
-> `orjson` 未被使用 / 表名不合规 / COMMENT 缺失 / 索引命名 / JSON / LONGBLOB，
-> **都不构成 vendor 的理由**。
+> **✅ `langgraph-checkpoint-mysql==3.0.0` 就是本次迁移的实现基线。**
 >
 > ⚠️ **上表的 22 项是"读源码得出的静态结论"，不能替代 V5 的真实运行验证。**
-> 它把 V5 的**范围**收敛到一张明确清单（见 §7.3.1），但不预设 V5 一定通过。
+> 它把 V5 的**范围**收敛到一张明确清单（见 §7.3），但不预设 V5 一定通过。
 
-### 7.3 🔴 V5 的职责与缺口处置阶梯
+### 7.3 V5 的职责与缺口处置阶梯
 
-#### 7.3.1 V5 是 **compatibility / correctness Gate**，不是 selection Gate
+#### 7.3.1 V5 是 compatibility / correctness Gate，不是 selection Gate
 
 ```
 CheckpointSaver 选型已经冻结：
@@ -1493,16 +1265,16 @@ V5 的职责：
 | 组 | 验证项 | 依据 |
 | --- | --- | --- |
 | **核心 5 方法** | `aget_tuple`、`alist`、`aput`、`aput_writes`、`adelete_thread` | §7.2 第 1–5 项 |
-| **LangGraph 语义** | pending writes、resume、interrupt、retry、rollback、**branch / regenerate** | §7.2 第 6–11 项；branch 走 `aget_tuple` + `aput`（§7.2"关于线程 branch 复制"） |
+| **LangGraph 语义** | pending writes、resume、interrupt、retry、rollback、**branch / regenerate** | §7.2 第 6–11 项；branch 走 `aget_tuple` + `aput` |
 | **并发与规模** | **concurrent checkpoint writes**、long conversation | §7.2 第 12–13 项（进程内 `asyncio.Lock` + `_cursor` 事务） |
 | **模式匹配** | `checkpoint_channel_mode=full` ⇒ 非 shallow 的 `AsyncMySaver` 即正确类 | §7.2 第 14 项 |
 | **接入正确性** | **asyncmy pool integration**（`_ainternal.get_connection` 的池鸭子类型）、**event-loop lifecycle**（`__init__` 的 `asyncio.get_running_loop()`） | §7.2 第 18 项 + 三处实现细节第 3 条 |
 | **容量与边界** | **大 checkpoint payload**（吞吐 / 内存 / base64 膨胀约 33%）、**`max_allowed_packet`** 上限、`INSERT IGNORE` 风险核对 | 三处实现细节第 1–2 条；§7.6 |
 
 > 🔴 **V5 仍然是 G2 之前的阻塞 Gate**（§12 Goal 1 / §13）。
-> 但 **V5 不再重新讨论"是否使用这个包"** —— 无论结果如何，实现基线都是同一个 3.0.0。
+> 但 **V5 不重新讨论"是否使用这个包"** —— 无论结果如何，实现基线都是同一个 3.0.0。
 
-#### 7.3.2 🔴 V5 失败时的处置阶梯（**顺序固定，不得跳档**）
+#### 7.3.2 V5 失败时的处置阶梯（**顺序固定，不得跳档**）
 
 ```
 V5 发现问题
@@ -1530,14 +1302,14 @@ V5 发现问题
 **阶梯的硬约束**：
 
 1. 🔴 **`langgraph-checkpoint-mysql==3.0.0` 是确定的实现基线** ——
-   `vendor` 只是对这个版本进行本地 patch 的 fallback，**不再是与"直接依赖"并列的架构选项**；
-2. 🔴 **不要重新进行第三方 Saver 市场选型**（§0 冻结结论）；
+   `vendor` 只是对这个版本进行本地 patch 的 fallback，**不是与"直接依赖"并列的架构选项**；
+2. 🔴 **不进行第三方 Saver 市场选型**（§0 冻结结论）；
 3. 🔴 **不得跳档**：能在第 1–3 档解决的，不许直接 vendor；
 4. 🔴 **不得把"来源是第三方"本身当作风险否决项** —— 它是 MIT、纯 Python，
    且**设计目标就是跟随官方 postgres 实现**；
 5. 🔴 **判定"必须 vendor"或"必须自研"时，证据必须是运行语义或 correctness**，不能是风格。
 
-#### 7.3.3 ⛔ 不构成 vendor / 自研理由的项（白名单外一律不认）
+#### 7.3.3 ⛔ 不构成 vendor / 自研理由的项
 
 ```
 · orjson 是未使用的传递依赖
@@ -1548,19 +1320,19 @@ V5 发现问题
 · 使用 LONGBLOB
 ```
 
-这些**要么无害，要么属于 Optional Compliance Pass**（§2.5），**都不能推翻已冻结的选型**。
+这些**要么无害，要么属于 Optional Compliance Pass**（§2.7），**都不能推翻已冻结的选型**。
 
-### 7.4 接入方式：**默认精确版本直接依赖**（vendor 仅为同版本 patch fallback）
+### 7.4 接入方式：**默认精确版本直接依赖**
 
-**决策（已冻结）：把 `langgraph-checkpoint-mysql[asyncmy]==3.0.0` 作为精确版本依赖引入。
+**决策：把 `langgraph-checkpoint-mysql[asyncmy]==3.0.0` 作为精确版本依赖引入。
 不 vendor、不复制约 1200 行第三方源码进仓库。**
 
-> 🔴 **vendor 的定位已经改变**：它**不再**是与"直接依赖"并列的架构选项，
+> 🔴 **vendor 的定位**：它**不是**与"直接依赖"并列的架构选项，
 > 而是**对同一个 3.0.0 版本做本地 patch 的 fallback** ——
-> 只在"确实必须修改 package 内部 SQL / 私有实现"时才启用（§7.3.2 第 4️⃣ 档）。
+> 只在"确实必须修改 package 内部 SQL / 私有实现"时才启用（§7.3 第 4️⃣ 档）。
 > ⇒ **换包 / 换实现 / 重新选型都不在选项内。**
 
-| 维度 | **精确版本直接依赖（默认，已冻结）** | vendor 源码（**同版本 patch fallback**） |
+| 维度 | **精确版本直接依赖（默认）** | vendor 源码（**同版本 patch fallback**） |
 | --- | --- | --- |
 | 依赖声明 | `langgraph-checkpoint-mysql[asyncmy]==3.0.0`（写进 `[mysql]` extra） | 从 extra 删掉该行，源码进仓库 |
 | 传递依赖 | 额外拉入 `orjson>=3.10.1`（包内**零命中**，但它是**声明**的依赖，正常安装） | 无 |
@@ -1569,22 +1341,21 @@ V5 发现问题
 | import 改写 | ✅ **不需要** | ⚠️ 需改 6 处 |
 | 上游修复 / 兼容升级 | ✅ `pip` 升版本即得 | ⚠️ 手工合并 |
 | 源码可控性 | ❌ 黑盒：`INSERT IGNORE` / `SELECT_SQL` / 表名不可改 | ✅ 全部可改 |
-| Schema 合规冲突 | ⚠️ 表名 / COMMENT 不可改 —— 但**属于 Optional Compliance Pass，不阻塞 Core**（§2.5） | ✅ 可解 |
+| Schema 合规冲突 | ⚠️ 表名 / COMMENT 不可改 —— 但**属于 Optional Compliance Pass，不阻塞 Core**（§2.7） | ✅ 可解 |
 | 供应链 | 新增 1 个非官方依赖（MIT、纯 Python、`>=8.0.19`） | ✅ 不新增 |
 
 **🔴 进入 vendor（= 对 3.0.0 做本地 patch）的唯一判据**：
 
 | # | 触发条件 | 判据（必须是可验证的事实，不是感觉） |
 | --- | --- | --- |
-| 1 | **V5 发现真实的 Runtime / correctness 缺口，且必须修改上游内部 SQL / 私有实现** | 有可复现的失败用例；且 §7.3.2 的第 1️⃣–3️⃣ 档（接入方式 / adapter-wrapper / subclass 覆写）**已被逐一排除** |
+| 1 | **V5 发现真实的 Runtime / correctness 缺口，且必须修改上游内部 SQL / 私有实现** | 有可复现的失败用例；且 §7.3 的第 1️⃣–3️⃣ 档**已被逐一排除** |
 | 2 | **组织以书面规则禁止引入该第三方 Runtime 依赖** | 有**书面的**依赖准入规则。⚠️ 此时仍然**只能 vendor 同一个 3.0.0**（因为实现基线不换），不是换包 |
 
-> ⛔ **明确不构成 vendor 理由的项**（同 §7.3.3，此处再列一次以防误用）：
+> ⛔ **明确不构成 vendor 理由的项**（同 §7.3.3）：
 > `orjson` 是传递依赖 · checkpoint 表**没有 `ag_` 前缀** · 表**没有中文 COMMENT** ·
 > **索引命名不符合企业风格** · 使用 **JSON** · 使用 **LONGBLOB**。
-> 这些**要么无害，要么属于 Optional Compliance Pass**，**都不能推翻已冻结的 CheckpointSaver 选型**。
 
-**为什么默认用依赖**（结合决策优先级）：
+**为什么默认用依赖**：
 
 1. **"复用成熟实现"首先意味着"走成熟的分发渠道"** —— 精确版本依赖是最低摩擦的复用方式；
 2. vendor 引入的是**长期维护面**（fork 漂移、手工 diff、import 改写），
@@ -1592,15 +1363,8 @@ V5 发现问题
 3. `orjson` 虽未被使用，但它是一个**正常安装的传递依赖**，
    **不构成"必须去掉"的缺陷**，也**不构成 vendor 的理由**；
 4. 🔴 **顺序要求**：`先验证原包 → 通过则直接固定版本使用 → 确需改上游内部实现时才 vendor`。
-   **⛔ 不要在 V5 之前把第三方源码复制进正式 Runtime 代码。**
 
-> ℹ️ 下面保留完整的 **vendor 路径实施细节**（落点 / 文件集 / import 清单），
-> 因为它是**§7.3.2 第 4️⃣ 档被触发时的既定方案**，且已用真实工具链**验证过该路径可行**
-> （6 处 import 改写全部命中、改写后零残留上游 import、改写后的包可正常导入并渲染出
-> 22 条 migration）—— 详见 §16 证据清单。
-> **但默认路径不是它。默认路径是精确版本直接依赖。**
-
-#### 附 A：vendor 路径的落点与文件集（**仅 §7.3.2 第 4️⃣ 档 / §7.4 判据被触发时执行**）
+#### 附 A：vendor 路径的落点与文件集（**仅 §7.3 第 4️⃣ 档触发时执行**）
 
 落点在 `deerflow` 包内 ⇒ **自动进入 harness wheel**
 （`harness/pyproject.toml:82-83` 的 `packages = ["deerflow"]` 已覆盖，**无需改打包配置**）：
@@ -1611,38 +1375,37 @@ backend/packages/harness/deerflow/runtime/checkpointer/mysql/
 ├── pool.py            # 自写（约 30 行）：DSN 解析 + asyncmy 建池
 ├── LICENSE            # 上游 MIT 全文（Copyright (c) 2024 Theodore Ni）—— 必须保留
 ├── UPSTREAM.md        # 来源 / 版本 / commit / 本地改动清单 / 升级步骤
-├── utils.py           # 上游原样（86 行）
-├── _ainternal.py      # 上游原样（83 行）
-├── base.py            # 上游，仅 1 处 import 改写（414 行）
-├── aio_base.py        # 上游，仅 3 处 import 改写（544 行）
-└── asyncmy.py         # 上游，2 处 import 改写 + 删 1 个类（115 → 约 70 行）
+├── utils.py           # 上游原样
+├── _ainternal.py      # 上游原样
+├── base.py            # 上游，仅 1 处 import 改写
+├── aio_base.py        # 上游，仅 3 处 import 改写
+└── asyncmy.py         # 上游，2 处 import 改写 + 删 1 个类
 ```
 
-> 📌 上表中的 `__init__.py` 与 `pool.py` 是**项目自己的代码**，**两条路径都需要**
-> （默认依赖路径下它们落在 `runtime/checkpointer/mysql/` 作为普通模块；
-> 降级为 vendor 时与上游文件同目录）。`LICENSE` / `UPSTREAM.md` **只在 vendor 路径**存在。
+> 📌 `__init__.py` 与 `pool.py` 是**项目自己的代码**，**两条路径都需要**。
+> `LICENSE` / `UPSTREAM.md` **只在 vendor 路径**存在。
 
-**必需集与丢弃集（逐个文件）**：
+**必需集与丢弃集**：
 
-| 上游文件 | 行数 | 处置 | 理由 |
-| --- | --- | --- | --- |
-| `base.py` | 414 | ✅ **必需** | `MIGRATIONS`（**22 条，已实测**）+ 7 条 SQL 常量 + `BaseMySQLSaver` |
-| `aio_base.py` | 544 | ✅ **必需** | `BaseAsyncMySQLSaver`：5 个异步方法 + `_cursor` 事务 |
-| `asyncmy.py` | 115 | ✅ **必需（裁剪）** | 具体 `AsyncMySaver`；删掉 deprecated 的 `ShallowAsyncMySaver` |
-| `utils.py` | 86 | ✅ **必需** | `decode_base64_blob` + 3 个 `deserialize_*` + `mysql_mariadb_branch` |
-| `_ainternal.py` | 83 | ✅ **必需** | `get_connection` 的**池鸭子类型识别**（关键） |
-| `__init__.py` | 442 | ⛔ **丢弃** | 只提供 `BaseSyncMySQLSaver` + `Conn` 别名；同步 Saver 不启用（§7.7）⇒ 自写 12 行 |
-| `_internal.py` | 81 | ⛔ **丢弃** | 只被 `__init__.py`(7) / `pymysql.py`(2) / `shallow.py`(6) 引用；**异步链零引用** |
-| `pymysql.py` | 114 | ⛔ **丢弃** | 同步 Saver（§7.7 不启用） |
-| `aio.py` | 117 | ⛔ **丢弃** | aiomysql 驱动的 Saver（项目用 asyncmy） |
-| `shallow.py` | 899 | ⛔ **丢弃** | `ShallowAsyncMySaver` 已 deprecated；`checkpoint_channel_mode=full` 不用 `DeltaChannel` |
-| `langgraph/store/mysql/**` | 7 文件 / 约 32 KB | ⛔ **丢弃** | LangGraph Store 整体删除（§7.8） |
-| `py.typed` | 0 | ⛔ **丢弃** | 需要时自己加 |
+| 上游文件 | 处置 | 理由 |
+| --- | --- | --- |
+| `base.py` | ✅ **必需** | `MIGRATIONS`（**22 条**）+ 7 条 SQL 常量 + `BaseMySQLSaver` |
+| `aio_base.py` | ✅ **必需** | `BaseAsyncMySQLSaver`：5 个异步方法 + `_cursor` 事务 |
+| `asyncmy.py` | ✅ **必需（裁剪）** | 具体 `AsyncMySaver`；删掉 deprecated 的 `ShallowAsyncMySaver` |
+| `utils.py` | ✅ **必需** | `decode_base64_blob` + 3 个 `deserialize_*` + `mysql_mariadb_branch` |
+| `_ainternal.py` | ✅ **必需** | `get_connection` 的**池鸭子类型识别**（关键） |
+| `__init__.py` | ⛔ **丢弃** | 只提供 `BaseSyncMySQLSaver` + `Conn` 别名；同步 Saver 不启用（§7.7）⇒ 自写 |
+| `_internal.py` | ⛔ **丢弃** | 只被 `__init__.py` / `pymysql.py` / `shallow.py` 引用；**异步链零引用** |
+| `pymysql.py` | ⛔ **丢弃** | 同步 Saver（§7.7 不启用） |
+| `aio.py` | ⛔ **丢弃** | aiomysql 驱动的 Saver（项目用 asyncmy） |
+| `shallow.py` | ⛔ **丢弃** | `ShallowAsyncMySaver` 已 deprecated；`checkpoint_channel_mode=full` 不用 `DeltaChannel` |
+| `langgraph/store/mysql/**` | ⛔ **丢弃** | LangGraph Store 整体删除（§7.8） |
+| `py.typed` | ⛔ **丢弃** | 需要时自己加 |
 
-⇒ **vendor 总量：5 个上游文件（裁剪后约 1197 行）+ 2 个自写文件（约 42 行）
-+ 2 个文档/许可文件 ≈ 1240 行代码**，相对整包 3830 行**只取 31%**。
+⇒ **vendor 总量：5 个上游文件 + 2 个自写文件 + 2 个文档/许可文件**，
+相对整包 3830 行**只取约 31%**。
 
-#### 附 B：import 改写清单（vendor 路径唯一的源码改动，共 6 处 —— **本轮已实测可全部命中**）
+#### 附 B：import 改写清单（vendor 路径唯一的源码改动，共 6 处 —— 已实测可全部命中）
 
 | 文件:行 | 原 | 改为 |
 | --- | --- | --- |
@@ -1651,28 +1414,22 @@ backend/packages/harness/deerflow/runtime/checkpointer/mysql/
 | `aio_base.py:22` | `from langgraph.checkpoint.mysql.base import BaseMySQLSaver` | `from deerflow.runtime.checkpointer.mysql.base import BaseMySQLSaver` |
 | `aio_base.py:23` | `from langgraph.checkpoint.mysql.utils import (…)` | `from deerflow.runtime.checkpointer.mysql.utils import (…)` |
 | `asyncmy.py:13` | `from langgraph.checkpoint.mysql.aio_base import BaseAsyncMySQLSaver` | `from deerflow.runtime.checkpointer.mysql.aio_base import BaseAsyncMySQLSaver` |
-| `asyncmy.py:14` | `from langgraph.checkpoint.mysql.shallow import BaseShallowAsyncMySQLSaver` | ⛔ **删除**（连同 `asyncmy.py:70-113` 的 `ShallowAsyncMySaver` 类与 `__all__` 中对应项） |
+| `asyncmy.py:14` | `from langgraph.checkpoint.mysql.shallow import BaseShallowAsyncMySQLSaver` | ⛔ **删除**（连同 `ShallowAsyncMySaver` 类与 `__all__` 中对应项） |
 
 **保持不变的 import**（全部来自官方包，无需改写）：
-
-| 来源 | 用途 |
-| --- | --- |
-| `langchain_core.runnables.RunnableConfig` | 类型 |
-| `langgraph.checkpoint.base`（`WRITES_IDX_MAP` / `ChannelVersions` / `Checkpoint` / `CheckpointMetadata` / `CheckpointTuple` / `get_checkpoint_id` / `get_serializable_checkpoint_metadata`） | 基类接口 |
-| `langgraph.checkpoint.serde.base.SerializerProtocol` | serde |
-| `langgraph.checkpoint.serde.types.TASKS` | pending sends 迁移 |
-| `typing_extensions`（`Self` / `override`） | 项目**已装 4.15.0** ✅ |
+`langchain_core.runnables.RunnableConfig`、`langgraph.checkpoint.base.*`、
+`langgraph.checkpoint.serde.*`、`typing_extensions`（项目已装 4.15.0 ✅）。
 
 > 🔴 **不要把 vendor 目录放回 `langgraph/checkpoint/mysql/` 的原始命名空间。**
 > `langgraph` 是 **namespace package**，把第三方源码混进去会与 pip 安装的
-> `langgraph-checkpoint*` 冲突且行为不可预期。**必须改名为 `deerflow.*`**（上表即按此写）。
+> `langgraph-checkpoint*` 冲突且行为不可预期。**必须改名为 `deerflow.*`**。
 
 #### 附 C：依赖影响（**默认路径**）
 
 | 依赖 | 处置 | 说明 |
 | --- | --- | --- |
 | `langgraph-checkpoint-mysql==3.0.0` | ✅ **引入并固定版本** | MIT、纯 Python；`Requires-Python >=3.10`；要求 MySQL `>=8.0.19`（目标 8.0.24 满足） |
-| `orjson>=3.10.1` | ⚠️ **随上游声明一并安装** | 上游声明但**包内零命中**；它是正常的传递依赖，**不需要为它做任何事** |
+| `orjson>=3.10.1` | ⚠️ **随上游声明一并安装** | 上游声明但**包内零命中**；正常的传递依赖，**不需要为它做任何事** |
 | `langgraph-checkpoint>=2.1.2` | ✅ 已装 **4.1.1** | 满足 |
 | `typing-extensions>=4.12.2` | ✅ 已装 **4.15.0** | 满足 |
 | `asyncmy>=0.2.10` | ✅ **新增** | 异步驱动本身（C 扩展） |
@@ -1692,26 +1449,20 @@ mysql = [
 > ⚠️ **版本用 `==` 精确固定**（不是 `>=`）。理由：Checkpoint Schema 的 DDL 由该包的
 > `MIGRATIONS` 决定，而 `MIGRATIONS` 的条目数会随上游版本变化（当前 3.0.0 是 **22 条**）。
 > Runtime 的 Schema 校验要拿它当基准（§11.5），**版本漂移会直接导致校验基线漂移**。
->
-> 🔻 **若 §7.4 的 vendor 判据被触发（§7.3.2 第 4️⃣ 档）**：从 extra 里删掉该行，
-> 按"附 A/B"落 5 个文件 + 6 处 import 改写，并保留 `LICENSE` 与 `UPSTREAM.md`。
-> ⚠️ 此时 vendor 的**仍然是同一个 3.0.0**，`MIGRATIONS` 基线不变。
-> 此时 `asyncmy` / `PyMySQL` 两行**不变**（它们无论如何都要装）。
 
-#### 许可与上游跟踪（**仅 vendor 路径必做**；默认依赖路径**不需要**）
+#### 许可与上游跟踪（**仅 vendor 路径必做**）
 
-> ✅ **默认路径（固定版本依赖）下本节全部不适用** —— 许可随 pip 分发自带，
-> 上游跟踪由版本号承担。下面只在**降级为 vendor** 时执行。
+> ✅ **默认路径（固定版本依赖）下本节不适用** —— 许可随 pip 分发自带，
+> 上游跟踪由版本号承担。
 
 MIT 要求"在软件的所有副本或实质性部分中包含上述版权声明与许可声明"⇒
 
 | 项 | 要求 |
 | --- | --- |
-| **`LICENSE`** | 把上游 `dist-info/licenses/LICENSE` **全文**复制到 vendor 目录（1068 字节，`Copyright (c) 2024 Theodore Ni`）。**不得删改** |
-| **`UPSTREAM.md`** | 记录 ① 上游仓库 URL；② 版本 **3.0.0**；③ 发布日 **2026-01-23**；④ **vendor 时的上游 commit SHA**；⑤ **逐文件改动状态表**（原样 / 仅 import 改写 / 裁剪）；⑥ 本地新增改动（§6.4 表名、§6.8 COMMENT、§7.6 `SELECT_SQL` 优化等）；⑦ **升级步骤** |
-| 项目许可 | 仓库自身 LICENSE **不受影响**；第三方许可放子目录即可 |
-| **升级步骤**（写入 `UPSTREAM.md`） | ① 下载上游新版本 wheel 并解包；② `diff -u` 上游 `{base,aio_base,asyncmy,utils,_ainternal}.py` vs vendor 目录；③ **重放本文件的改动状态表**（6 处 import + 裁剪 + 本地 patch）；④ 重跑 V5 回归 |
-| ⛔ **不做** | 不引入自动同步工具 / 脚本 / git submodule / 补丁队列 —— **不为一次性迁移加通用机制**（决策优先级） |
+| **`LICENSE`** | 把上游 `dist-info/licenses/LICENSE` **全文**复制到 vendor 目录（`Copyright (c) 2024 Theodore Ni`）。**不得删改** |
+| **`UPSTREAM.md`** | 记录 ① 上游仓库 URL；② 版本 **3.0.0**；③ 发布日 **2026-01-23**；④ **vendor 时的上游 commit SHA**；⑤ **逐文件改动状态表**；⑥ 本地新增改动；⑦ **升级步骤** |
+| **升级步骤**（写入 `UPSTREAM.md`） | ① 下载上游新版本 wheel 并解包；② `diff -u` 上游 5 个文件 vs vendor 目录；③ **重放改动状态表**（6 处 import + 裁剪 + 本地 patch）；④ 重跑 V5 回归 |
+| ⛔ **不做** | 不引入自动同步工具 / 脚本 / git submodule / 补丁队列 |
 | **触发复查的信号** | ① 上游修了我们 V5 发现的问题；② `langgraph-checkpoint` 大版本升级导致基类接口变化；③ 距 vendor 已满 6 个月 |
 
 #### 改动点 1（代码）：`runtime/checkpointer/async_provider.py` 新增 `mysql` 分支
@@ -1769,16 +1520,16 @@ if config.type == "mysql":
 `asyncmy.Pool` 有 `acquire()`（返回异步上下文管理器）⇒ **走池分支**。
 ⇒ **不需要改上游源码，也不需要传单连接。**
 
-> 🔴 **为什么必须自建池，而不能用上游的 `from_conn_string`**（本轮实测）：
+> 🔴 **为什么必须自建池，而不能用上游的 `from_conn_string`**（实测）：
 > 上游 `AsyncMySaver.from_conn_string`（`asyncmy.py:39-62`）内部是
 > **`async with asyncmy.connect(...)`** —— 它给的是**单连接**，不是池。
 > 单连接下所有并发 run 的 checkpoint 读写会在**同一个连接上串行化**，
 > 与现有 PG 分支（`_build_postgres_pool` 建 `AsyncConnectionPool`）的能力不对等。
-> ⇒ `pool.py`（约 30 行：DSN 解析 + `asyncmy.create_pool`）是**项目自己的代码**，
+> ⇒ `pool.py`（DSN 解析 + `asyncmy.create_pool`）是**项目自己的代码**，
 > **两条路径（依赖 / vendor）都需要它**，它**不属于 vendor 文件集**。
 > 可直接复用上游 `AsyncMySaver.parse_conn_string`（`asyncmy.py:21-37`，公开静态方法）做 DSN 解析。
 
-**改动点 2：`setup()` 在生产路径不调用**
+#### 改动点 2：`setup()` 在生产路径不调用
 
 | 场景 | 是否调用 `setup()` | 理由 |
 | --- | --- | --- |
@@ -1791,50 +1542,50 @@ if config.type == "mysql":
 > **但幂等性不解决权限问题**，也不满足"生产 Runtime 零 DDL"这条硬约束。
 > ⇒ 判定依据不是"它安全不安全"，而是"**它是否属于 Runtime 的职责**"。**不属于。**
 
-**改动点 3：`config` 的 `Literal` 与守卫**
+#### 改动点 3：`config` 的 `Literal` 与守卫
 
 - `database_config.py:143`、`checkpointer_config.py:9` 追加 `"mysql"`；
 - `health.py` 的 `_probe_checkpointer_backend` `Literal` 扩展。
 
-**改动点 4：`checkpoint_channel_mode` 保持 `full`** ⇒ **不挂载 `CachedHistorySaver`**（`async_provider.py:242-253` 的条件不成立）。
+#### 改动点 4：`checkpoint_channel_mode` 保持 `full`
 
-**改动点 5：同步路径**。同步 Saver **不启用**
-⇒ `runtime/checkpointer/provider.py` 的同步分支**不加 `mysql`**（§7.7）。
+⇒ **不挂载 `CachedHistorySaver`**（`async_provider.py:242-253` 的条件不成立）。
+
+#### 改动点 5：同步路径
+
+同步 Saver **不启用** ⇒ `runtime/checkpointer/provider.py` 的同步分支**不加 `mysql`**（§7.7）。
 
 **总改动面（默认路径）**：`[mysql]` extra 1 行 + 本分支约 20 行
 + `pool.py` 约 30 行 + `verify_checkpoint_schema` 约 40 行 + 2 处 `Literal`。
 **没有本地 fork、没有 import 改写、没有 `UPSTREAM.md`。**
 
-### 7.5 Fallback：V5 缺口出现时的处置阶梯（**接入 → 包装 → 子类化 → vendor+patch → blocker**）
+### 7.5 Fallback：V5 缺口出现时的处置阶梯（可执行细节）
 
 **仅在 V5 发现明确的运行语义 / correctness 缺口时启用。**
-🔴 **本节的顺序是固定的，且不得跳档**（与 §7.3.2 是同一套阶梯，此处给出可执行细节）。
+🔴 **顺序固定，不得跳档**（与 §7.3 是同一套阶梯，此处给出可执行细节）。
 
 > ⛔ **进入本节前必须先确认：不重新开启"换不换 CheckpointSaver"的讨论。**
 > 实现基线永远是 `langgraph-checkpoint-mysql==3.0.0`（§0）。
-
-#### 处置阶梯
 
 | 顺序 | 手段 | 适用条件 | 说明 |
 | --- | --- | --- | --- |
 | 1️⃣ | **确认是不是项目接入方式的问题** | 永远是第一步 | 逐项排查：池有没有正确传入（`_ainternal.get_connection` 要求 `hasattr(conn, "acquire")`）· saver 是否在**运行中的事件循环内**构造（`__init__` 调 `asyncio.get_running_loop()`）· `checkpoint_channel_mode` 是否 `full` · 配置分支 / `Literal` 是否漏改 · Schema 校验是否前置。**多数问题会停在这一档，且不需要碰上游** |
 | 2️⃣ | **adapter / wrapper** | 缺口能被一层薄封装吸收 | **不改上游源码**：在项目侧包一层，做参数转换 / 结果后处理 / 重试与降级 |
-| 3️⃣ | **subclass 覆写**（**在"精确版本依赖"下就能做，不需要 vendor**） | 缺口集中在少数可覆写的方法 / 钩子 / 类属性上 | `class DeerFlowMySQLSaver(AsyncMySaver)`，只覆写确有缺口的部分。**零 fork 成本** |
+| 3️⃣ | **subclass 覆写**（**在"精确版本依赖"下就能做**） | 缺口集中在少数可覆写的方法 / 钩子 / 类属性上 | `class DeerFlowMySQLSaver(AsyncMySaver)`，只覆写确有缺口的部分。**零 fork 成本** |
 | 4️⃣ | **vendor 3.0.0 + 最小 patch** | 缺口在**模块级 SQL 常量**（`SELECT_SQL` / `UPSERT_*`）或**私有辅助函数**上，前三档确实够不到 | 改动量小（< 50 行）；逐条登记进 `UPSTREAM.md`。⚠️ 这是 **fallback**，不是默认路径 |
 | 5️⃣ | **升级为 architecture blocker** | 出现**结构性、无法修复的 correctness 问题** | 档位回落（§1.4），并重新评估迁移路径 —— **这是唯一允许跳出"3.0.0 基线"的情形** |
 
-> 🔴 **顺序修正**：上一版把"直接 patch vendor 源码"放在首位，隐含了"已经 vendor"这个前提。
-> 现在默认不 vendor ⇒ **首位必须是"接入方式排查"与"零 fork 成本的子类化"**；
+> 🔴 **顺序要求**：**首位必须是"接入方式排查"与"零 fork 成本的子类化"**；
 > 只有当缺口在模块级 SQL 常量上、前三档确实够不到时，才动用 vendor + patch。
 
-#### 各手段的改动面（相对"从零自研"版本**显著缩小**）
+**各手段的改动面**：
 
-| 项 | 上一版（从零自研） | 本轮 fallback |
+| 项 | 自研方案（已放弃） | 本方案 fallback |
 | --- | --- | --- |
 | 表结构 | 自研 `ag_checkpoint*` + `uk_`/`idx_` 命名 + 中文 COMMENT | **直接沿用上游 `MIGRATIONS` 的表结构**，只在确有缺口处改 |
 | blob 存储 | `MEDIUMTEXT(base64)` + 阈值 + 对象存储溢出 | **`LONGBLOB` 直存不变**（§7.6） |
-| SQL 重写 | 重写 `SELECT_SQL`（`jsonb_each_text`/`array_agg`）、全部 `UPSERT_*`、DeltaChannel 两阶段 | **以上游已可运行的 MySQL SQL 为基线**，只改有缺口的部分 |
-| `setup()` 迁移链 | 自研 | **沿用上游 `MIGRATIONS` 列表**（它是可运行的 MySQL DDL 序列） |
+| SQL 重写 | 重写 `SELECT_SQL`、全部 `UPSERT_*`、DeltaChannel 两阶段 | **以上游已可运行的 MySQL SQL 为基线**，只改有缺口的部分 |
+| `setup()` 迁移链 | 自研 | **沿用上游 `MIGRATIONS` 列表** |
 | DeltaChannel | 需重写两阶段动态列 SQL | **不需要**（`checkpoint_channel_mode=full`） |
 | **是否需要 fork 一个包** | 需要 | ❌ **不需要** —— 默认是依赖；即使降级为 vendor，也只是把源码放进仓库，不是 fork 发布 |
 
@@ -1843,19 +1594,13 @@ if config.type == "mysql":
 > 都做成了**类属性**（`base.py:246-251`），可直接覆盖；
 > `SELECT_SQL` 走 `_select_sql()` 静态方法 ⇒ 覆写该静态方法即可。
 
-**工作量估算**：取决于缺口数量。**但无论如何，它不再需要"从零设计表结构与全部 SQL"**
-—— 这是本轮相对上一版最大的降险。
 **若走到第 5️⃣ 档，档位仍须回到 `Feasible with significant changes`。**
 
-### 7.6 Blob 存储：**`LONGBLOB` 单库直存**
-
-🔻 **本轮修正**：上一版设计 `MEDIUMTEXT(base64) 内联 + inline threshold + Object Storage overflow
-+ blob_ref + blob_size + blob_sha256 + orphan GC + 5 步写入顺序协议`。
-**该设计基于"禁止 BLOB"的企业规范，本轮不采纳。**
+### 7.6 Blob 存储：`LONGBLOB` 单库直存
 
 #### A / B 方案比较
 
-| | **A. MySQL 原生 `BLOB` 直存**（本轮采用） | B. inline + Object Storage overflow（上一版） |
+| | **A. MySQL 原生 `LONGBLOB` 直存**（采用） | B. inline + Object Storage overflow（已放弃） |
 | --- | --- | --- |
 | Schema | `blob LONGBLOB`（1 列） | `blob MEDIUMTEXT` + `blob_ref` + `blob_size` + `blob_sha256`（4 列 + 1 张映射） |
 | 事务性 | ✅ **单库单事务**，原子 | ❌ MySQL + Object Storage **跨存储最终一致** |
@@ -1869,7 +1614,7 @@ if config.type == "mysql":
 
 #### 判定
 
-> **✅ 首版采用 A（`LONGBLOB` 单库直存）。**
+> **✅ 采用 A（`LONGBLOB` 单库直存）。**
 >
 > **不实现**：Object Storage overflow、`inline_blob_threshold`、`blob_ref`、
 > `blob_size`、`blob_sha256`、孤儿 GC、5 步写入顺序协议。
@@ -1878,9 +1623,9 @@ if config.type == "mysql":
 
 1. **上游包的 schema 已经就是这么做的** —— `base.py:45,56` 写的是
    `` `blob` LONGBLOB ``，且它跟随官方 postgres 实现（官方 PG 用 `BYTEA` 直存，**没有 overflow 机制**）。
-   🔴 **本轮已实测**：把上游 22 条 migration 在真实 MySQL 8.0.24 上执行后，
+   🔴 **已实测**：把上游 22 条 migration 在真实 MySQL 8.0.24 上执行后，
    `mysqldump` 导出的 `checkpoint_blobs.blob` / `checkpoint_writes.blob` 均为 **`longblob`** ——
-   **不需要改任何 DDL**（§16 证据）。
+   **不需要改任何 DDL**。
 2. **MySQL `LONGBLOB` 上限 4 GB**，远超任何现实的 checkpoint payload。
 3. **`MEDIUMTEXT` 路线的原始动机是 `TEXT` 的 64 KB 上限** ——
    这个动机只在"禁止 BLOB"的前提下存在。🔴 反过来，**裸 `BLOB` 才是真陷阱**：
@@ -1898,9 +1643,9 @@ if config.type == "mysql":
 
 > ⚠️ **Object Storage 只作为后续独立优化**：当且仅当实测出现
 > "单 blob 逼近 `max_allowed_packet`"或"DB 存储成本不可接受"时，
-> 才把 overflow 作为**独立变更**引入。届时 §7.6-B 的设计仍然有效，可直接启用。
+> 才把 overflow 作为**独立变更**引入。
 >
-> **这不影响已存在的 Artifact / Upload Object Storage**（§2.4 / §10.3），
+> **这不影响已存在的 Artifact / Upload Object Storage**（§2.6 / §10.3），
 > 这里只讨论 checkpoint payload。
 
 ### 7.7 只启用 async CheckpointSaver
@@ -1908,14 +1653,12 @@ if config.type == "mysql":
 **决策：第一阶段只启用 async CheckpointSaver，不启用同步 MySQL Saver。
 但同步数据库驱动必须保留。**
 
-> 🔻 **本轮的简化**：上一版需要"**实现** async Saver、**不实现** 同步 Saver"。
-> 本轮**复用上游包** ⇒ 同步 Saver（`PyMySQLSaver` / `AIOMySQLSaver`）**根本不会被引用**：
+> 🔻 **复用上游包带来的简化**：同步 Saver（`PyMySQLSaver` / `AIOMySQLSaver`）**根本不会被引用** ——
 > 只从 `langgraph.checkpoint.mysql.asyncmy` 导入 `AsyncMySaver`，
 > ⇒ "不实现"变成"**不导入**"，工作量归零。
-> （上游包里确实存在同步类，但**不引用即不进入执行路径** —— 不构成"仓库里留下未使用代码"；
-> 这是"用依赖"相对"vendor"的一个附带好处。）
+> （上游包里确实存在同步类，但**不引用即不进入执行路径**。）
 >
-> ⚠️ 若将来因 §7.4 条件降级为 vendor，则**只复制异步链的 5 个文件**，
+> ⚠️ 若因 §7.4 判据降级为 vendor，则**只复制异步链的 5 个文件**，
 > `pymysql.py` / `aio.py` / `__init__.py` / `_internal.py` / `shallow.py` **都不进仓库**（§7.4 附 A）。
 
 #### 同步 Saver 的消费者（完整清单）
@@ -1975,8 +1718,8 @@ PyMySQL  → 同步路径，唯一用途：SqlAgentStore（graph subprocess 里�
 | 4 | **Agent Memory** | `agents/memory/`（`deermem` / `mem0` / `honcho` / `openviking` / `noop`） | **本地文件 + SQLite FTS5** | ❌ **完全无关** | ✅ 是 | ✅ **保留，本来就不动** |
 | 5 | **Agent definition persistence** | `persistence/agents/*` + `persistence/managed_subagents/` | `agents` / `managed_subagents` 表或文件 | ✅（走**同步** SQLAlchemy） | ✅ 是 | ✅ **保留并迁移** |
 
-> ⚠️ **上游包也提供了一个 `langgraph/store/mysql/`**（`Store` 的 MySQL 实现，7 个文件）。
-> **本方案完全不使用它** —— 因为 LangGraph Store 整体删除（Goal 0 的 0-D）。
+> ⚠️ **上游包也提供了一个 `langgraph/store/mysql/`**（`Store` 的 MySQL 实现）。
+> **本方案完全不使用它** —— 因为 LangGraph Store 整体删除。
 > 默认路径（依赖引入）下它随包安装但**不被 import**；降级为 vendor 时**一并丢弃**（§7.4）。
 > ⇒ 代码里**不会出现**这个模块的任何引用，也不会建任何 Store 表。
 
@@ -1993,7 +1736,6 @@ PyMySQL  → 同步路径，唯一用途：SqlAgentStore（graph subprocess 里�
 
 > **结论**：在 `database.backend: postgres`（⇒ MySQL）下，LangGraph Store 是一份
 > **"构造了但没有任何生产读写"** 的设施；它唯一的真实用途是 **memory 模式的线程元数据兜底**。
-> ⇒ **删除它比原先假设的更安全。**
 
 #### 删除清单（**3 处非显然耦合必须一起处理**）
 
@@ -2004,14 +1746,14 @@ PyMySQL  → 同步路径，唯一用途：SqlAgentStore（graph subprocess 里�
 | 3 | 删除 `deps.py:379` 的 import 与 `:435` 的 `app.state.store = ...make_store(config)` | `app/gateway/deps.py` | 它是**无条件构造** —— 删掉即彻底消除"要不要写 MySQL Store"这个问题 |
 | 4 | 删除 `store=` 管线（**5 处**） | `deps.py:716`、`worker.py:806/1257`、`checkpoint_state.py:129`、`services.py:1195` | 纯挂载，无读取 |
 | 5 | 🔴 **`make_thread_store(sf, app.state.store)` → `make_thread_store(sf)`** | `deps.py:498`、`persistence/thread_meta/__init__.py:36-47` | 该工厂的 `store` 参数**只为 memory 模式服务** |
-| 6 | 🔴 **`MemoryThreadMetaStore` 改为内部 dict 实现**（**本轮已决定，不再挂起**） | `persistence/thread_meta/memory.py` | 见下方"决策 6" |
+| 6 | 🔴 **`MemoryThreadMetaStore` 改为内部 dict 实现** | `persistence/thread_meta/memory.py` | 见下方"决策 6" |
 | 7 | 删除孤儿线程迁移 | `app/gateway/app.py:129-171`（`_iter_store_items` / `_migrate_orphaned_threads`） | 历史升级路径，fresh cutover 下无意义 |
 | 8 | 删除 `reset_store()` 调用 | `config/app_config.py:504,507` | 配置热重载时重置 Store 单例 |
 | 9 | 删除 re-export | `runtime/__init__.py:12` | |
 | 10 | `health.py` 去掉 Store 探针 | `app/gateway/health.py` | 保留 `_sqlite_utils` 的用法 |
 | 11 | 测试调整 | `test_pg_schema_integration.py:16-17`、`test_app_config_reload.py:25`、`test_checkpointer.py`（多处）、`blocking_io/test_gate_smoke.py:28,49` | |
 
-#### 🔴 决策 6：`MemoryThreadMetaStore` 的处置（**本轮直接决定，不再列为待确认项**）
+#### 决策 6：`MemoryThreadMetaStore` 的处置
 
 **背景事实（实测）**：
 
@@ -2019,14 +1761,14 @@ PyMySQL  → 同步路径，唯一用途：SqlAgentStore（graph subprocess 里�
 | --- | --- |
 | 生产调用点 | **只有 1 处**：`deps.py:496-498` 的 `make_thread_store(sf, app.state.store)`。DB 模式下 `sf is not None` ⇒ **选中 `ThreadMetaRepository(sf)`**，`MemoryThreadMetaStore` **根本不被构造** |
 | 实际消费者 | **全部是测试**：`test_threads_router.py`（最主要，约 20 处直接访问 `THREADS_NS`）、`test_gateway_services.py`（8 处）、`test_memory_thread_meta_isolation.py`、`test_conversation_access.py`、`test_auth.py`、`test_thread_run_keep`、`test_gateway_checkpoint_mode.py`、`test_thread_archive.py`、`test_stateless_runs_owner_isolation.py`、`test_thread_run_idempotency.py`；以及 `scripts/benchmark/checkpoint/bench_production.py:495,517` |
-| 它用到 `BaseStore` 的哪些方法 | **恰好 4 个**：`aget` / `aput` / `adelete` / `asearch`（`memory.py:38,68,84,89,94,135,157,183,192,204,213,220`） |
+| 它用到 `BaseStore` 的哪些方法 | **恰好 4 个**：`aget` / `aput` / `adelete` / `asearch` |
 | memory backend 还有价值吗 | ✅ **有**。`database.backend: memory` 是受支持的开发模式，且 `test_threads_router.py` 是 `/api/threads` 的**主要测试夹具** —— 删掉它等于删掉一个**仍在被大量使用**的能力 |
 
-**决策：(a) 保留能力，把 `BaseStore` 换成内部 dict 实现。**
+**决策：保留能力，把 `BaseStore` 换成内部 dict 实现。**
 
-> **不选 (b) 删除的原因**：memory backend 不是"没有实际价值" —— 它是**活的 dev/单测能力**。
-> 按本轮决策优先级，**"删除不需要的能力"的前提是"不需要"**；这里它**被需要**。
-> 而保留它的成本已经被压到极低：只需一个约 35 行的 dict 后端
+> **不选"删除"的原因**：memory backend 是**活的 dev/单测能力**。
+> 按决策优先级，**"删除不需要的能力"的前提是"不需要"**；这里它**被需要**。
+> 而保留它的成本已被压到极低：只需一个约 35 行的 dict 后端
 > （同样的 4 个方法 + 一个带 `.key` / `.value` 的轻量记录对象）。
 >
 > 🔴 **不保留整个 LangGraph `BaseStore` 抽象的原因**：全仓 `langgraph.store.base.BaseStore`
@@ -2040,16 +1782,15 @@ PyMySQL  → 同步路径，唯一用途：SqlAgentStore（graph subprocess 里�
 | 1 | `persistence/thread_meta/memory.py`：把 `from langgraph.store.base import BaseStore` 换成自带的 `_InMemoryKV`（约 35 行，暴露 `aget/aput/adelete/asearch`，记录对象带 `.key` / `.value`） |
 | 2 | `persistence/thread_meta/__init__.py`：`make_thread_store(session_factory)` —— **去掉 `store` 参数**；`sf is None` 时构造 `MemoryThreadMetaStore()`（内部自建 dict） |
 | 3 | `deps.py:498`：`make_thread_store(sf, app.state.store)` → **`make_thread_store(sf)`** |
-| 4 | 测试：`MemoryThreadMetaStore(InMemoryStore())` → `MemoryThreadMetaStore()`（**机械替换**；`test_threads_router.py` 里直接访问 `store.aget(THREADS_NS, …)` 的断言**保持不变**，因为新后端暴露同名方法） |
+| 4 | 测试：`MemoryThreadMetaStore(InMemoryStore())` → `MemoryThreadMetaStore()`（**机械替换**；直接访问 `store.aget(THREADS_NS, …)` 的断言**保持不变**，因为新后端暴露同名方法） |
 | 5 | `scripts/benchmark/checkpoint/bench_production.py:495,517` 同步调整 |
 
-⇒ **改动是机械的、可控的，且不再产生任何 LangGraph Store 依赖。**
-
+**删除后的三条保证**：
 
 1. **Gateway 启动不依赖 Store** —— `deps.py:435` 移除后，启动期只剩 checkpointer + engine + repositories。
 2. **Agent 主运行链不依赖 Store** —— 三处 `graph.store = store` / `agent.store = store` 是挂载。
    ⚠️ **实施时必须回归验证**：确认**没有任何 graph node / tool 通过 LangGraph 运行时注入读 `store`**
-   （本轮已 grep：`agents/` 与 `app/` 内**无** `BaseStore` 读写点）。
+   （已 grep：`agents/` 与 `app/` 内**无** `BaseStore` 读写点）。
 3. **Agent 定义读取不受影响** —— 走 `get_agent_store()`（`agents` 表 / 文件），与 Store 无关。
 
 #### pgvector / Vector Search
@@ -2089,10 +1830,7 @@ PyMySQL  → 同步路径，唯一用途：SqlAgentStore（graph subprocess 里�
 **`hashtext()` 的替代**：MySQL 无 `hashtext`，`CRC32()` 只有 32 位 ⇒
 必须在**应用层**用 `sha256` 派生 64-bit key。
 
-**bootstrap 的会话级 advisory lock**：**不迁移、不实现替代**（§11.7）。
-
-> 🔻 **本轮减少**：上一版有"重新设计 `mcp_tasks` 的 `FOR SHARE` 归属校验"一项
-> （PG 四档行锁强度模型在 MySQL 上不成立）—— **随 `mcp_tasks` 删除而消失**（§2.6）。
+**bootstrap 的会话级 advisory lock**：**不迁移、不实现替代**（§11.8）。
 
 ### 8.3 `RETURNING`（4 处）
 
@@ -2135,7 +1873,7 @@ active_task_id VARCHAR(64)
 UNIQUE KEY uk_scheduled_task_run_active (active_task_id)
 
 -- ③ idx_users_oauth_identity（user/model.py:88-95）
--- 🔴 本轮修正：**不需要生成列、不需要 CONCAT、不需要分隔符。**
+-- 🔴 **不需要生成列、不需要 CONCAT、不需要分隔符。**
 --    直接建全量唯一索引，语义与生产 PG 今天实际运行的索引完全一致（§4.4 已实测）
 UNIQUE KEY idx_users_oauth_identity (oauth_provider, oauth_id)
 ```
@@ -2150,17 +1888,14 @@ UNIQUE KEY uk_runs_thread_active (
 **二选一权衡**：生成列更可读（可加中文 COMMENT、可被 `SELECT` 引用）；
 函数索引无需新增列。**推荐生成列**（可读性更好，且若执行 Compliance Pass 可加 COMMENT）。
 
-> 🔴 **生成列只适用于 ① ② 两处**（每 thread 至多一个 active run；每 scheduled task 至多一个
-> active occurrence）。**③ OAuth 已从该清单中移除** —— 见 §4.4 的两条证据：
-> 生产 PG 上跑的本来就是全量唯一索引，且 MySQL 8.0.24 实测语义完全等价。
+> 🔴 **生成列只适用于 ① ② 两处**。**③ OAuth 已从该清单中移除** —— 见 §4.4 的两条证据。
 >
 > ⚠️ **① ② 的生成列写法**：生成列的值必须是"参与唯一性判断的键"，
 > 且 `ELSE NULL` 分支保证"非活跃行不参与约束"。**已实测**：
 > 同一 thread 上 3 个终态 run + 1 个活跃 run 共存（4 行），
-> 再插第二个活跃 run → `ERROR 1062 Duplicate entry 't1' for key 'runs_probe.uq_runs_active_per_thread'`。
+> 再插第二个活跃 run → `ERROR 1062 Duplicate entry 't1' for key '…uq_runs_active_per_thread'`。
 >
 > ⚠️ **`idx_users_oauth_identity` 的额外风险不在索引，在错误判别**：
-> `app/gateway/auth/repositories/sqlite.py` 依赖驱动错误里的约束名判定 OAuth 冲突；
 > MySQL 1062 也带 key 名，但**错误对象形状不同**、且**消息里不含列名**，
 > ⇒ 三个判别函数会**全部返回 `False`**，冲突退化为 500。**修法见 §4.9-D。**
 
@@ -2171,9 +1906,8 @@ UNIQUE KEY uk_runs_thread_active (
   （现有语句都是单表 `SELECT`，OK）。
 - ⚠️ 无索引时 `SKIP LOCKED` 仍会扫全表（只是跳过被锁行）→ 性能退化而非错误。
 
-> 🔻 **本轮大幅缩小**：`SKIP LOCKED` 从 **9 处降为 2 处** ——
-> 全部 7 处 `mcp_tasks` + `subagent_batches` 的用法随模块删除（§2.6/§2.7）。
-> **剩下的只有 `scheduled_tasks/sql.py:332,530`**（due-task claim）。
+**当前只有 2 处**（`scheduled_tasks/sql.py:332,530`，due-task claim）——
+其余用法已随 `mcp_tasks` / `subagent_batches` 删除（§2.3）。
 
 ### 8.6 `run_events.seq` 的分配语义
 
@@ -2209,7 +1943,7 @@ async def _max_seq_for_thread(session, thread_id) -> int | None:
 > 只在"多 Worker + 同一 thread 并发写事件"时表现为序号冲突或事务失败。
 > **"编译通过" ≠ "运行可用" ≠ "具备串行化语义"。**
 
-#### 🔴 V3 实测结果（**本轮已在真实 MySQL 8.0.24 上完成，结论是负面的**）
+#### 🔴 V3 实测结果（**结论是负面的**）
 
 **测试方法**：在真实 `mysql:8.0.24` 容器内，用**两个独立会话**、
 `SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED`，
@@ -2233,10 +1967,9 @@ async def _max_seq_for_thread(session, thread_id) -> int | None:
 #### ✅ 已实测可行的修法：**先锁一行真实存在的行，再读 max**
 
 > 🔴 **锚点表的真实名称是 `threads_meta`（不是 `threads`）。**
-> 依据当前 HEAD 的 ORM 实测（§16 证据清单）：
-> `persistence/thread_meta/model.py:13-16` ⇒ `__tablename__ = "threads_meta"`，
+> 依据 ORM 实测：`persistence/thread_meta/model.py:13-16` ⇒ `__tablename__ = "threads_meta"`，
 > **主键 `thread_id: String(64)`**。仓库里**不存在**名为 `threads` 的表
-> —— 早期草稿写的 `SELECT id FROM threads ...` 是**错误的，不得作为实施方案**。
+> —— `SELECT id FROM threads ...` 是**错误的，不得作为实施方案**。
 
 **做法**：在 `_max_seq_for_thread` 里，把"对聚合结果 `FOR UPDATE`"换成
 "**对一行真实存在的 `threads_meta` 行取行锁**"：
@@ -2269,7 +2002,7 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 
 ##### 🔴 锚点存在性：**不能假设 `threads_meta` 行一定先建过**
 
-早期草稿的理由是"能写事件的 thread 一定先建过 `threads` 行"。**该假设在当前 HEAD 上不成立**：
+"能写事件的 thread 一定先建过锚点行"这一假设**不成立**：
 
 | 事实 | 证据 |
 | --- | --- |
@@ -2284,7 +2017,7 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 > ⚠️ 步骤 ① 的幂等 upsert 本身会对该行取 X 锁，**理论上已足以串行化**；
 > 步骤 ② 的 `SELECT … FOR UPDATE` 是显式锚点 + 可读性保障。
 > ⛔ **实现时需确认它与应用侧 `threads_meta` 写入（`SqlThreadMetaStore.create/update_owner/set_project`）
-> 不存在死锁环** —— 这属于 Goal 3 的实施细节，**不是需要负责人决策的问题**。
+> 不存在死锁环** —— 这属于 Goal 3 的实施细节。
 > ⛔ 幂等 upsert **不得覆盖既有字段**（`ON DUPLICATE KEY UPDATE thread_id = thread_id` 是 no-op 写法）。
 
 **实测验证（同一容器、同样的并发脚本）**：
@@ -2302,19 +2035,15 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 | 方案 | 评价 |
 | --- | --- |
 | `GET_LOCK('deerflow:run_events:<thread_id>')` | ⚠️ **已实测可用**（返回 1），但它是**连接级**、必须显式释放、且要求"获取与释放锁在同一条连接上" ⇒ 与连接池天然冲突，**不作为业务锁方案** |
-| **新增 per-thread counter / sentinel 表** | ⚠️ 可行，但**需要新表 + 处理锚点创建竞态**。而 `threads_meta` 行**语义完全匹配**（一个 thread 一行）⇒ **优先复用它**（"使用已有能力" > "新增结构"）。⚠️ 但它**不保证存在** ⇒ 必须配合上面的幂等 upsert（这正是"新增 sentinel 表"想解决的问题，用一条 `INSERT … ON DUPLICATE KEY` 就够） |
+| **新增 per-thread counter / sentinel 表** | ⚠️ 可行，但**需要新表 + 处理锚点创建竞态**。而 `threads_meta` 行**语义完全匹配**（一个 thread 一行）⇒ **优先复用它**。⚠️ 但它**不保证存在** ⇒ 必须配合上面的幂等 upsert |
 | 唯一约束 + bounded retry | ⚠️ 可作为**兜底**（防御性），但需要新写重试代码，且高并发下会变成重试风暴。**建议只作保险，不作主方案** |
 
 **明确不采用**：把 `seq` 交给 Redis 分配（序号是**排序真相源**，volatile Redis 丢失会跳号/重号）。
 
-> 🔴 **本条已从"待实测风险"变为"方案已定的实施项"** ——
-> 它进入 **Goal 3**（应用 SQL 与并发迁移），并带一条**回归验收**：
+> 🔴 **本条是"方案已定的实施项"** —— 它进入 **Goal 3**，并带一条**回归验收**：
 > 制造"同一 thread 并发写事件"的竞态，确认**不再出现 1062 且序号连续**（Goal 4）。
 
 ### 8.7 `FOR UPDATE` 的索引核验（28 处）
-
-> 🔻 **本轮减少 23 处**（原 51 处）：
-> `mcp_tasks/sql.py` −9、`subagent_batches/sql.py` −14（§2.6/§2.7）。
 
 | 文件 | 处数 | 需要核验的索引 |
 | --- | --- | --- |
@@ -2329,7 +2058,7 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 > **统计口径说明**：本表的"处数"是**包含 `with_for_update` 的行数**，
 > 既含方法链 `.with_for_update(...)`，也含关键字参数
 > `session.get(Row, id, with_for_update=True)` 形式。
-> 后者在 `scheduled_task_runs/sql.py` 有 8 处、`subagent_batches/sql.py` 有 5 处，
+> 后者在 `scheduled_task_runs/sql.py` 有 8 处，
 > 因此只按方法链 grep 会漏计。
 
 > **风险**：MySQL 在无法使用索引时会锁定扫描到的**所有行**。
@@ -2344,11 +2073,6 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 **锁顺序纪律**（RR 下需重新验证）：
 `scheduled_task_runs/sql.py:754-757`（task → scheduled-run）、`scheduled_tasks/sql.py:680-684`。
 
-> 🔻 **本轮消失的风险**：上一版记录的"PG 专有假设"——
-> `mcp_tasks/sql.py:166-169` 注释依赖 **PostgreSQL 四档行锁强度模型**
-> （`FOR SHARE` 与 `FOR NO KEY UPDATE` 冲突、与 `FOR KEY SHARE` 不冲突）——
-> **随 `mcp_tasks` 删除而彻底消失**。
-
 ### 8.8 时间语义（一个容易漏掉的破坏点）
 
 | 问题 | 证据 | 后果 |
@@ -2357,7 +2081,7 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 | `DateTime(timezone=True)` 在 MySQL 上**静默丢弃时区** | MySQL 无时区感知的 `DATETIME` | 只要全部写入都是 `datetime.now(UTC)`（offset 0），wall clock 恰好等于 UTC，**"碰巧正确"**。一旦有任何非 UTC 写入即静默错误 |
 | 读回是 naive datetime | SQLite 已有此问题（`events/store/db.py` 有注释） | 代码里已有 `coerce_iso` 与 `_lease_is_alive` 的 `replace(tzinfo=UTC)` 兜底，但**不是所有路径都覆盖**，需要系统审计 |
 | `TIMESTAMP` 不可用 | 2038 上限 + 隐式时区换算 | 必须用 `DATETIME(6)`，不能用 `TIMESTAMP` |
-| 全库影响面 | **29 个** `DateTime(timezone=True)` 列（删三模块后） | 需要逐列改为 `mysql.DATETIME(fsp=6)` |
+| 全库影响面 | **29 个** `DateTime(timezone=True)` 列 | 需要逐列改为 `mysql.DATETIME(fsp=6)` |
 
 **建议**：所有时间列显式改为 `mysql.DATETIME(fsp=6)`，并在应用侧统一
 "UTC aware → naive UTC" 的写入边界转换。
@@ -2378,9 +2102,6 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 
 **场景 B：两个 Worker 抢同一队列行（Scheduler）**
 
-> 🔻 本轮范围缩小：原"（Scheduler / MCP Tasks / Subagent Batches）"三个域，
-> **只剩 Scheduler 一个**（§2.6/§2.7）。
-
 - PG：`SELECT … FOR UPDATE SKIP LOCKED` → 后到者跳过被锁行，取下一行。
 - MySQL：`SKIP LOCKED` 支持，语义一致。
   **但**：RR 隔离下未命中的行会加 gap lock，导致"跳过"行为在间隙上不完全等价；
@@ -2393,9 +2114,7 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 
 ### 9.1 索引集合（31 个）
 
-> 🔻 **本轮从 47 个降为 31 个**：`mcp_tasks` −9、`subagent_batches` −4、`subagent_batch_items` −3。
-
-**命名规范改造属于 Optional Compliance Pass**（§2.5）。规范内容：
+**命名规范改造属于 Optional Compliance Pass**（§2.7）。规范内容：
 
 > 所有 index / constraint 名 ≤ 100 字符；unique → `uk_<field_name>`；
 > 普通 → `idx_<field_name>`；composite 使用简短可读名。
@@ -2420,15 +2139,10 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 
 ### 9.2 必须新增的索引（**能力补偿，非优化**）
 
-> 🔻 **本轮从 4 个降为 2 个**：
-> 上一版的 `idx_runs_scheduled_task_run_id` 与 `idx_threads_meta_pinned_archived`
-> 都是为"JSON → TEXT + 拆 scalar 列"服务的 —— **该方案已取消（§6.5）**
-> ⇒ 这两个索引**不再需要**。
-
 | 目标索引 | 表 | 理由（**不建它会失去什么正确性/能力**） |
 | --- | --- | --- |
 | `idx_scheduled_task_runs_status_created` | `scheduled_task_runs` | occurrence 队列 claim 的 `WHERE status='queued' ORDER BY attempt_count, created_at, id`（现有只建了活跃去重索引）—— **不建则 claim 退化为全表扫描 + 锁全表** |
-| `uk_users_oauth_identity`（**全量唯一索引，非生成列**） | `users` | partial unique index 的 MySQL 等价实现（§4.4 已实测语义等价）—— **不建则失去"每个 OAuth 身份一个账号"的唯一性保证**。⚠️ **不需要生成列**（`UNIQUE (oauth_provider, oauth_id)` 直接可用，MySQL 允许重复 `NULL`） |
+| `uk_users_oauth_identity`（**全量唯一索引，非生成列**） | `users` | partial unique index 的 MySQL 等价实现（§4.4 已实测语义等价）—— **不建则失去"每个 OAuth 身份一个账号"的唯一性保证**。⚠️ **不需要生成列** |
 
 > ⚠️ 本清单**必须逐条回答"不建它，哪条 SQL 会失去正确性保证"**；
 > **答不上来的一律不做** —— 它属于"性能优化"，归入 §9.4 的不做清单。
@@ -2445,13 +2159,13 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 | 线程置顶 / 归档排序与过滤 | `persistence/thread_meta/sql.py:230,247,261` | `json_match` 走 `metadata_json` 的 JSON 路径（**无专用索引**）⇒ ⚠️ 见下 |
 | due-task claim（`next_run_at` + lease 过期） | `scheduled_tasks/sql.py:320-332` | `idx_scheduled_tasks_next_run_at` ✅ 已存在 |
 | occurrence 队列 claim（`status='queued'` + `created_at`） | `scheduled_task_runs/sql.py:270-285` | ⚠️ **需新增**（§9.2） |
-| OAuth identity 唯一性 | `app/gateway/auth/` | `uk_users_oauth_identity`（生成列） |
+| OAuth identity 唯一性 | `app/gateway/auth/` | `uk_users_oauth_identity`（全量唯一索引） |
 | 偏好逐 key 读写 | `persistence/user/preferences.py` | PK `(user_id, key)` |
 
 > ⚠️ **线程置顶/归档过滤是一个已知的索引缺口**：它走 `JSON_EXTRACT`，
-> **无法使用普通 B-Tree 索引**。可选缓解（**均属性能优化，本轮不做**）：
-> ① 在 `metadata_json` 上建**函数索引**（`(CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.deerflow_pinned')) AS UNSIGNED))`）；
-> ② 拆 scalar 列。**本轮先保持现状**，上线后用真实慢查询判断。
+> **无法使用普通 B-Tree 索引**。可选缓解（**均属性能优化，不在本次迁移范围**）：
+> ① 在 `metadata_json` 上建**函数索引**；
+> ② 拆 scalar 列。**先保持现状**，上线后用真实慢查询判断。
 
 ### 9.4 不删除任何索引；不做任何无关索引优化
 
@@ -2460,7 +2174,7 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 理由是 MySQL 的锁行为对索引缺失更敏感（§8.7，"无索引 = 锁全表"），
 删除索引的风险高于收益。若确需去重，应在 MySQL 上跑 `EXPLAIN` + 锁范围实测后再决定。
 
-**本轮明确不做的事**：
+**明确不做的事**：
 
 | 不做的事 | 为什么不做 | 什么时候做 |
 | --- | --- | --- |
@@ -2469,9 +2183,9 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 | **索引合并**（多个单列索引 → 复合索引） | 会改变 `with_for_update` 的**锁范围** —— 这是**并发语义**，不是性能问题 | 上线后单独评估，且**必须配并发回归测试** |
 | **根据推测 workload 新增优化索引** | "推测的 workload"在数据库替换场景里几乎总是错的 | 上线后按真实慢查询 |
 | 覆盖索引 / 索引下推调优 | 同上 | 同上 |
-| **为 JSON 过滤拆 scalar 列 / 建函数索引** | 无正确性依据，且会引入"为统一方案机械拆列" | 上线后按真实慢查询（§9.3） |
+| **为 JSON 过滤拆 scalar 列 / 建函数索引** | 无正确性依据 | 上线后按真实慢查询（§9.3） |
 
-**本轮只做两类索引动作**（其余一律不做）：
+**只做两类索引动作**（其余一律不做）：
 
 1. **等价迁移**：现有 **31 个**索引按现有命名重建（**索引集合不变**）；
 2. **能力补偿**：为 MySQL 缺失的能力补索引 —— **2 处** partial unique 的生成列替代（§8.4），
@@ -2481,7 +2195,7 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 
 ## 10. 序列化与对象存储
 
-### 10.1 应用侧序列化现状（迁移的低摩擦基础）
+### 10.1 应用侧序列化现状
 
 | 位置 | 方式 |
 | --- | --- |
@@ -2490,17 +2204,12 @@ return await session.scalar(stmt.with_for_update())   # sqlite 等
 | `persistence/agents/file.py` / `managed_subagents/file.py` | 文件型存储（JSON 文档） |
 | `agents/memory/backends/deermem/` | 文件（`memory.json` manifest）+ SQLite FTS5 |
 
-> 🔻 **本轮修正**：上一版据此推断"JSON → TEXT 的改造在应用侧是低摩擦的"。
-> 本轮不再做该改造（§6.5），因此这段只作为**现状描述**保留，
-> 它同时也是"`sa.JSON` 在 MySQL 原生 `JSON` 上继续可用"的佐证
-> （应用侧本来就把 JSON 当文档整体读写，不做服务端运算）。
+> 这段同时也是"`sa.JSON` 在 MySQL 原生 `JSON` 上继续可用"的佐证 ——
+> 应用侧本来就把 JSON 当文档整体读写，不做服务端运算。
 
 ### 10.2 Checkpoint payload **不接入** Object Storage
 
-🔻 **本轮修正**：上一版把"Checkpoint 大 blob"列为**最高优先**的对象存储迁移项。
-**本轮取消。**
-
-| 项 | 本轮结论 |
+| 项 | 结论 |
 | --- | --- |
 | Checkpoint blob 的存储 | **`LONGBLOB` 单库直存**（§7.6） |
 | `inline_blob_threshold` 配置项 | ❌ 不引入 |
@@ -2531,14 +2240,13 @@ MySQL `LONGBLOB` 上限 4 GB，远超现实 payload。
 
 ## 11. 迁移链、Schema 产物与 Runtime 校验
 
-### 11.0 🔴 生产执行模型总览（**本轮新增的硬约束**）
+### 11.0 生产执行模型总览
 
-**这是本轮最重要的结构变化。** 在此之前，Runtime 的启动路径**同时承担了"建 Schema"与"用 Schema"两件事**：
+**把"建 Schema"从 Runtime 中整体移出。**
+现状中 Runtime 的启动路径**同时承担了"建 Schema"与"用 Schema"两件事**：
 `deps.py:432` 的 `init_engine_from_config()` → `init_engine()` →
 `CreateSchema` / `_auto_create_postgres_db` / `bootstrap_schema()`（`create_all` + `stamp` + `upgrade`），
 以及 checkpointer 分支里的 `await saver.setup()`。
-
-**新模型：把"建 Schema"从 Runtime 中整体移出。**
 
 #### 权限模型
 
@@ -2572,8 +2280,7 @@ MySQL `LONGBLOB` 上限 4 GB，远超现实 payload。
 ```
 
 > 🔴 **Checkpoint 迁移产物与 Saver 版本绑定**：产物由 `langgraph-checkpoint-mysql==3.0.0`
-> 的 `MIGRATIONS` 派生 ⇒ **升级 Saver 版本必须重走一遍 ①–④**，
-> 顺序是"升级依赖 → review 新 `MIGRATIONS` → 生成新产物 → DBA 执行 → 再部署 Runtime"（§11.4.4）。
+> 的 `MIGRATIONS` 派生 ⇒ **升级 Saver 版本必须重走一遍 ①–④**（§11.4.4）。
 > ⛔ **禁止 Runtime 自动升级 Checkpoint Schema。**
 
 > 🔴 **为什么用"调用路径隔离"而不是 `auto_setup=true/false` 开关**：
@@ -2598,47 +2305,42 @@ MySQL 侧**不引用、不重放**。它们的退役时点是 **Goal 5**（随 P
 
 > 🔴 **checkpoint 的 4 张框架表不在 MySQL 链内** —— 这是**刻意的**：
 > 它们的 DDL 由**上游 Saver 的 `MIGRATIONS`** 定义，**不由本项目重新发明**（§11.4）。
-> 生产环境中它们由**运维 / DBA 执行独立的迁移产物**创建，
-> **不由 Runtime 创建、不由 Alembic 创建**。
+> 生产环境中它们由**运维 / DBA 执行独立的迁移产物**创建。
 > `migrations/_env_filters.py:30-37` 的 `LANGGRAPH_OWNED_TABLES`
-> **已含这 4 个名字**（`checkpoints` / `checkpoint_blobs` / `checkpoint_writes` /
-> `checkpoint_migrations`）⇒ Alembic 自动回避，**默认不需要改动**。
+> **已含这 4 个名字** ⇒ Alembic 自动回避，**默认不需要改动**。
 > ⚠️ 但 `backend/tests/test_persistence_migrations_env.py:60-63` 对该集合有**等值断言**
 > ⇒ **若 §6.4 决定改名，这个断言必须同步改**。
 
 ### 11.2 双链隔离的接线点（逐处核对）
 
-> 🔻 **本轮简化原则**：**不构建"通用 multi-chain migration framework"**。
+> 🔻 **原则**：**不构建"通用 multi-chain migration framework"**。
 > 只做"backend 明确选择对应 script location"这一件事。
 
 | 接线点 | 现状（PG 单链） | MySQL 侧需要的改动 |
 | --- | --- | --- |
 | `script_location` | `_MIGRATIONS_DIR` —— **单目录** | MySQL 需要**第二个脚本目录**（如 `persistence/migrations_mysql/`）。**backend 选择哪个目录**由 `backend` 参数决定，**不需要注册表 / 插件机制** |
 | `version_table` | **未设置** ⇒ 默认 `alembic_version` | ✅ **最简单方案：继续用默认 `alembic_version`**（两条链在不同 database 中，天然隔离）。仅当组织要求 `ag_` 前缀时才设 `ag_alembic_version` |
-| head / known-revision 缓存 | `_HEAD_REVISION` / `_KNOWN_REVISIONS` 是**模块级单例**；两个 getter 都只认**一个** `script_location` | 🔴 **本轮结论：从生产路径上直接删除，不做"按链做键"的缓存抽象** —— 见下方说明 |
+| head / known-revision 缓存 | `_HEAD_REVISION` / `_KNOWN_REVISIONS` 是**模块级单例**；两个 getter 都只认**一个** `script_location` | 🔴 **从生产路径上直接删除，不做"按链做键"的缓存抽象** —— 见下方说明 |
 | `_get_head_revision()` 的失败语义 | `get_current_head()` 返回 `None` 时抛 `RuntimeError` | 语义保持，但必须确保它读的是**本链**的 head |
 | `_get_alembic_config(engine, *, postgres_schema="")` | 注入 `script_location` + `sqlalchemy.url` + 可选 `deerflow_pg_schema` | MySQL 分支注入**本链** `script_location`；**不带** `deerflow_pg_schema` |
 | `migrations/env.py` | 读 `deerflow_pg_schema`、调 asyncpg 专用 connect args、`render_as_batch=True`（注释明写 "Required for SQLite ALTER TABLE support"）、SQLite `PRAGMA busy_timeout` 钩子 | **这些对 MySQL 全都不适用**。MySQL 链需要**自己的 `env.py`**（一个精简文件，约 40 行），**不复用 PG 的注入逻辑**，也**不抽公共基类** |
 | `_read_database_revision(conn)` | `SELECT version_num FROM alembic_version`，且要求**恰好一行** | 表名随 `version_table` 的决策；"恰好一行"的断言**保留**（它是防串链的有效检查） |
 
-> 🔴 **关于 `_HEAD_REVISION` / `_KNOWN_REVISIONS`（本轮修正）**：
-> 上一版的方案是"把这两个缓存**按 `script_location` 做键**"。本轮判定 **不需要** ——
-> 理由直接来自新执行模型本身：
+> 🔴 **关于 `_HEAD_REVISION` / `_KNOWN_REVISIONS`**：
+> **不需要**把它们"按 `script_location` 做键" —— 理由直接来自新执行模型本身：
 >
 > | 事实 | 推论 |
 > | --- | --- |
 > | 它们只在**执行 DDL 的路径**上被消费（`bootstrap_schema()` / `_get_revision_metadata()`） | 该路径**已整体移出 Runtime**（§11.0） |
 > | `_KNOWN_REVISIONS` 只被 **`legacy` 分支**使用 | MySQL 的 `legacy` 状态**直接拒绝启动**（§11.3）⇒ MySQL 侧不需要它 |
-> | 删除 `legacy` / forward-compatible 分支后，**唯一还需要 head 的是测试**（`_get_head_revision()`） | 生产路径不再需要任何缓存 |
+> | 删除 `legacy` / forward-compatible 分支后，**唯一还需要 head 的是测试** | 生产路径不再需要任何缓存 |
 >
 > ⇒ **决策：把这两个模块级缓存从生产路径上删掉**，
 > 而**不是**为"短暂的双链期"新增一层**按链做键的缓存抽象**。
-> 这直接对应本轮原则：**"如果缓存没有明确价值，优先取消缓存。"**
-> ⚠️ 若 `_get_head_revision()` 仍被测试使用，可保留为**无缓存的即时计算**
-> （每次直接问 `get_current_head()`）。
+> 这直接对应原则：**"如果缓存没有明确价值，优先取消缓存。"**
+> ⚠️ 若 `_get_head_revision()` 仍被测试使用，可保留为**无缓存的即时计算**。
 >
-> 📌 **PG 删除后（Goal 5）自然只剩一条 MySQL 链** ⇒ 双链期是**短暂的**；
-> 为它长期保留一套缓存机制，收益与寿命都不成立。
+> 📌 **PG 删除后（Goal 5）自然只剩一条 MySQL 链** ⇒ 双链期是**短暂的**。
 
 ### 11.3 Application Schema 的迁移产物（**由运维 / DBA 执行**）
 
@@ -2655,9 +2357,7 @@ MySQL 侧**不引用、不重放**。它们的退役时点是 **Goal 5**（随 P
 | `engine.py:214-236` "does not exist" 时自动建库 + 重建 engine + 重跑 | 隐式权限需求 | ⛔ **整段删除** |
 | `engine.py:132-168` SQLite 分支的 `os.makedirs` + WAL PRAGMA | dev 路径 | ⚠️ **保留**（dev / 单测仍需要），但**不属于生产路径** |
 
-#### 11.3.1 🔴 不移植自动建库：库不存在就启动失败
-
-**决策：不把 `_auto_create_postgres_db` 改写成 MySQL 的 `CREATE DATABASE IF NOT EXISTS`。**
+#### 11.3.1 不移植自动建库：库不存在就启动失败
 
 | 方案 | 判定 |
 | --- | --- |
@@ -2682,8 +2382,7 @@ MySQL 侧**不引用、不重放**。它们的退役时点是 **Goal 5**（随 P
 > 它是一份**较大但一次性**的 revision，且是后续所有 MySQL revision 的基线 ——
 > **写错就要改链根**，因此必须完整通过 §11.9 的验收。
 >
-> ✅ **它比上一版更小**：列数从 224 降到 139，索引从 47 降到 31，
-> 且**不含任何 COMMENT 与 `ag_` 前缀**（若不做 Compliance Pass）。
+> ✅ 它**不含任何 COMMENT 与 `ag_` 前缀**（若不做 Compliance Pass）。
 
 #### 11.3.3 `bootstrap_schema()` 的处置
 
@@ -2707,10 +2406,8 @@ MySQL 侧**不引用、不重放**。它们的退役时点是 **Goal 5**（随 P
 
 #### 11.4.1 🔴 DDL 内容必须来自上游的 `MIGRATIONS`，不得自行发明
 
-**这是本轮实测得出的硬结论，不是偏好。**
-
 上游 `langgraph-checkpoint-mysql==3.0.0` 的 `base.py:MIGRATIONS` 是 **22 条**（0-indexed 0–21），
-**不是**一份"干净建表语句"，而是一条**线性演进链**。本轮把 22 条逐条渲染后在
+**不是**一份"干净建表语句"，而是一条**线性演进链**。把 22 条逐条渲染后在
 **真实 MySQL 8.0.24** 上执行，得到的**最终** schema 与"按直觉手写的建表语句"差异很大：
 
 | 项 | 最终 schema（实测导出） | 手写会踩的坑 |
@@ -2771,15 +2468,15 @@ database/mysql/checkpoint/
 | 5 | **与 Alembic 完全解耦**：`checkpoint_migrations` 与 `alembic_version` 互不干扰 |
 
 > ✅ **建议的产物生成方式**：用一个一次性的导出脚本，直接从上游包的 `MIGRATIONS` 常量
-> 渲染出上面这组 `.sql` 文件（**本轮已用该方法成功渲染并在真实 8.0.24 上执行**，见 §16 证据）。
+> 渲染出上面这组 `.sql` 文件（**已用该方法成功渲染并在真实 8.0.24 上执行**，见 §16 证据）。
 > 这样**上游升级时重新生成即可**，不会出现"第二份手抄本漂移"。
 
-> 📌 **V2（`checkpoint_ns` 真实最大长度）本轮关闭**：上游最终 schema 把
+> 📌 **V2（`checkpoint_ns` 真实最大长度）已关闭**：上游最终 schema 把
 > `checkpoint_ns` 的**主键参与**换成了固定 16 字节的 `checkpoint_ns_hash`
-> ⇒ **索引尺寸与 `checkpoint_ns` 长度无关**，V2 原本担心的"索引超限"在结构上已不存在。
+> ⇒ **索引尺寸与 `checkpoint_ns` 长度无关**。
 > 剩下的唯一限制是 `varchar(2000)` 这个列宽（超长会 `1406`），
 > 而 DeerFlow 自身在顶层**始终传 `checkpoint_ns: ""`**（子图 ns 由 LangGraph 生成）。
-> ⇒ **V2 不再阻塞，也不需要实测。**
+> ⇒ **不需要实测。**
 
 #### 11.4.4 🔴 产物与 Saver 版本绑定；升级流程固定
 
@@ -2854,7 +2551,7 @@ Run the required database migration before starting this application version.
 | **Docker Compose** | ✅ `MYSQL_DATABASE` 建库 + 一次性迁移 job | compose 配置 |
 | **生产迁移** | ✅ 由运维 / DBA 执行 | 迁移产物（§11.3 / §11.4） |
 
-> 🔴 **明确不使用 `auto_setup=true/false` 这类开关**（理由见 §11.0 的引用块）。
+> 🔴 **明确不使用 `auto_setup=true/false` 这类开关**（理由见 §11.0）。
 > 安全性的来源是**调用路径隔离**：三类执行方走**三条不同的代码路径**，
 > 生产路径上根本没有 DDL 语句可执行。
 > ⇒ **配置写错也无法制造出一个不存在的代码路径。**
@@ -2922,9 +2619,9 @@ Run the required database migration before starting this application version.
 8. 🔴 **Checkpoint 迁移产物与 Alembic 不冲突**：
    `checkpoint*` 4 张表不在 MySQL 链的任何 revision 中；
    `alembic_version` 与 `checkpoint_migrations` **互不干扰**；
-   且 **Checkpoint 产物按 §11.4.2 的"线性 + 版本表守卫"执行**（不是靠重复执行幂等）。
+   且 **Checkpoint 产物按 §11.4.2 的"线性 + 版本表守卫"执行**。
 
-**B. 🔴 生产权限模型（本轮新增，Goal 4 的核心验收）**
+**B. 🔴 生产权限模型（Goal 4 的核心验收）**
 
 9. **用"无 DDL 权限"的账号启动 Runtime，进程正常起来并正常工作**；
 10. **未执行迁移时 → fail closed**（`readiness = false` + 明确报错文案，§11.5.2）；
@@ -2937,11 +2634,9 @@ Run the required database migration before starting this application version.
 
 ## 12. 实施顺序
 
-> **本节按 §15.11 的 6 个 Goal 组织，与 Goal 编号一一对应。**
 > 排序原则：**最高风险优先验证**。
 > 核心原则：**先做 Checkpoint 持久化（Goal 2）** —— 如果这一层不可接受，
 > 就没有必要继续大规模改 Application Data。
-> **不要把顺序反过来**，也不要把 Application Data 的批量改造排在最前面。
 
 ```
 Goal 0  Runtime 范围清理（删除）          ── ✅ DONE（a55e5734）
@@ -2951,14 +2646,14 @@ Goal 3  应用 SQL 与并发迁移
 Goal 4  全量 MySQL 集成验证（含权限模型）
 Goal 5  删除 PostgreSQL
         ─────────────────────────────────
-        Compliance Pass / Redis / 对象存储溢出  →  不在 Goal 内（§15.11）
+        Compliance Pass / Redis / 对象存储溢出  →  不在 Goal 内（§15.9）
 ```
 
 > 🔴 **贯穿全部 Goal 的一条硬约束**（§11.0）：**生产 Runtime 不执行任何 DDL。**
 > 每完成一个 Goal，都要重新确认这一点没有被新代码破坏
 > —— 具体做法见 Goal 4 的权限模型验收（用无 DDL 权限账号启动）。
 
-### Goal 0 ✅ **DONE**：Runtime 范围清理
+### Goal 0 ✅ DONE：Runtime 范围清理
 
 > 🔴 **状态：已完成。产出提交 `a55e5734`**
 > —— `refactor(runtime): remove channels, background MCP tasks, subagent batches, and LangGraph Store`
@@ -2966,18 +2661,16 @@ Goal 5  删除 PostgreSQL
 >
 > **⛔ 不要把下列任何一项再列为 G1 的"待实施前置项"** —— 它们已经落地。
 
-**完成记录**：
-
 | # | 能力 | 结果 | 复核方式 |
 | --- | --- | --- | --- |
 | 1 | Channel / GitHub Webhook | ✅ **已删除** | `app/channels/`、`gateway/github/` 消失；生产代码扫描零引用 |
 | 2 | `mcp_tasks`（含持久化表与后台任务工具） | ✅ **已删除** | 生产代码扫描零引用 |
 | 3 | `subagent_batches` / `subagent_batch_items` | ✅ **已删除** | 同上 |
 | 4 | LangGraph Store（`BaseStore` 抽象） | ✅ **已删除** | `runtime/store/{provider,async_provider}.py` 消失 |
-| 5 | memory thread metadata | ✅ **按 G0 最终实现保留** | `MemoryThreadMetaStore` 保留能力、改内部 dict，**不再依赖 LangGraph `BaseStore`**（§7.8 决策 6） |
+| 5 | memory thread metadata | ✅ **按最终实现保留** | `MemoryThreadMetaStore` 保留能力、改内部 dict，**不再依赖 LangGraph `BaseStore`**（§7.8 决策 6） |
 | 6 | 普通 MCP（Tool / Server / OAuth） | ✅ **保留** | 只删了 `mcp_tasks` |
 | 7 | 普通 SubAgent `task` | ✅ **保留** | 只删了 `subagent_batches` |
-| 8 | 最终 ORM 表集合 | ✅ **稳定在 12 张应用表 / 139 列** | `Base.metadata` 反射实测（§2.2-A / §16） |
+| 8 | 最终 ORM 表集合 | ✅ **稳定在 12 张应用表 / 139 列** | `Base.metadata` 反射实测（§2.2） |
 
 > ⚠️ **两处容易误判的残留**（都不代表能力还在）：
 > ① `persistence/{mcp_tasks,subagent_batches,channel_connections,webhook_delivery}/` 目录下
@@ -2985,120 +2678,17 @@ Goal 5  删除 PostgreSQL
 > ② `persistence/migrations/versions/0011_mcp_tasks.py` 与 `0016_subagent_batches.py`
 > **仍被 git 跟踪** —— 它们属于**不可变的 PG 历史链**，只作审计，**不由 Gateway 回放**。
 
-> **为什么它必须在最前面**（已成立的历史理由）：本 Goal 的产出是"**更小的表集合**"。
+> **为什么它必须在最前面**：本 Goal 的产出是"**更小的表集合**"。
 > MySQL 链的链根 **`0001_mysql_baseline`** 是从当时的 ORM 元数据生成的 ——
 > 若这些模块尚未删除，baseline 会把即将消失的表一起建出来。
 > ⇒ **删除必须先于 `0001_mysql_baseline` 的编写。**（现已满足）
 
-> 📌 **以下 0-A ~ 0-D 是已执行的实施记录**，保留用于追溯"删了什么、为什么这么删"。
-> **它们不再是待办清单。**
-
-**0-A. Channel / GitHub Webhook 删除**
-
-> ⚠️ 本子项的工作量**不属于 MySQL 迁移**，它是 `feature-inventory` Phase 3 的既定工作。
-> 列在此处的目的是**明确前后依赖**。
-
-1. **代码 / 配置删除**（依据 `feature-inventory` 文档第 12.3 节清单）：
-   `app/channels/` 整目录；`gateway/app.py` 的 2 处 lifespan import 与 `include_router(channels.router)`；
-   3 个路由（`routers/channels.py`、`routers/channel_connections.py`、`routers/github_webhooks.py`）；
-   `gateway/github/` 全套。
-2. ⚠️ **先解开双向 import，否则 Gateway 启动失败**：
-   `gateway/github/dispatcher.py:31` → `app.channels.message_bus`，
-   `app/channels/manager.py:42` → `app.gateway.github.run_policy`。
-3. 先剥离渠道与 Runtime 的交叉点：`manager.py` 的 `StreamBridge` 依赖、
-   `gateway/services.py` 的 `channel_user_id` 注入、uploads 的 owner-scoped 特例。
-4. 配置：`config/channel_connections_config.py`、`config.yaml:channel_connections`；
-   `pyproject.toml` 的 4 个渠道 SDK 核心依赖（移除前先确认 import 链已断）。
-5. Schema：`persistence/channel_connections/`、`persistence/webhook_delivery/` 两个包。
-6. 🟡 **`bootstrap.py` 的三个常量：一个字都不动**（§11.4）。
-7. ✅ **不需要 drop migration** —— `0001_mysql_baseline` 直接生成裁剪后的表，**从不创建**渠道表。
-8. **测试删除**（约 14 个）：`test_channels.py`、`test_channels_router.py`、
-   `test_channel_connections_{config,repository,router}.py`、`test_channel_file_attachments.py`、
-   `test_channel_intake_backpressure.py`、`test_channel_user_id_env.py`、
-   `test_runtime_channel_config_merge.py`、`test_inbound_dedupe.py`、
-   `test_multi_pod_inbound_dedupe.py`、`test_migration_0009_webhook_dedupe.py`、
-   `blocking_io/test_channels_ingest.py`、`blocking_io/test_channel_runtime_config_store.py`。
-9. 🔴 **绝对不要删这几个** —— 它们名字里有 "channel"，但指的是
-   **LangGraph 的 `DeltaChannel`（checkpoint 增量通道）**，与 IM 渠道无关：
-   `test_delta_channel_checkpointers.py`、`test_delta_channel_state.py`、
-   `test_bench_checkpoint_channels.py`、`test_summarize_checkpoint_channels.py`。
-   **误删的后果**：直接破坏 checkpoint 迁移的回归基线（Goal 2 依赖它们）。
-10. **部分修改**（约 9 个，只删渠道相关断言/夹具）：`test_persistence_bootstrap.py`、
-    `test_persistence_migrations_env.py`、`test_gateway_lifespan_shutdown.py`、
-    `test_projects_router.py`、`test_reload_boundary.py`、`test_slash_skills.py`、
-    `test_support_bundle.py`、`test_monocle_tracing.py`、`test_trace_entry_points.py`。
-
-**0-B. `mcp_tasks` 模块删除**（依据 §2.6）
-
-| # | 删除对象 |
-| --- | --- |
-| 1 | `persistence/mcp_tasks/`（`__init__` / `model` 81 行 / `sql` 737 行） |
-| 2 | `mcp/tasks/`（`__init__` / `driver` / `models` / `ordinary` / `runtime`，共 556 行） |
-| 3 | `app/mcp_tasks/`（`__init__` / `errors` / `service` 676 行） |
-| 4 | `app/gateway/routers/mcp_tasks.py`（126 行） |
-| 5 | `tools/builtins/background_tasks_tool.py`（84 行） |
-| 6 | `config/mcp_tasks_config.py` + `config.yaml:mcp_tasks` 段 |
-| 7 | 接线点：`deps.py:500,517,676,683`、`app.py:341-396` |
-| 8 | `mcp/tools.py` 中 `_make_background_submit_tool` 及其调用分支（`:658-763`） |
-| 9 | `persistence/models/__init__.py:26` 的 import |
-| 10 | 测试 10 个：`test_mcp_task_*.py`（8 个）、`test_run_worker_mcp_tasks.py`、`test_mcp_tasks_router.py` |
-| 11 | 🔴 **`app.py:405` 的 `RuntimeError` 守卫随模块删除** ⇒ 能力闸门 7 → **6**（§12 Goal 4） |
-
-**0-C. `subagent_batches` 模块删除**（依据 §2.7）
-
-| # | 删除对象 |
-| --- | --- |
-| 1 | `persistence/subagent_batches/`（`__init__` / `model` 73 行 / `sql` 586 行） |
-| 2 | `subagents/batch_runtime.py`（55 行）、`subagents/batch_service.py`（390 行） |
-| 3 | `app/subagent_batches/`、`app/gateway/routers/subagent_batches.py`（130 行） |
-| 4 | `tools/builtins/batch_task_tool.py`（280 行） |
-| 5 | `config/subagent_batches_config.py` + `config.yaml:subagent_batches` 段 |
-| 6 | 接线点：`deps.py:506,518`、`app.py:398-416`、`routers/__init__.py:7,19`、`routers/features.py:46,57,64` |
-| 7 | `agents/factory.py:358-373` 的 batch 工具挂载 |
-| 8 | `agents/lead_agent/prompt.py` 的 `batch_task` 说明段（`:461,515`） |
-| 9 | `tools/tools.py:16,146` 的 `batch_task` / `batch_status` / `cancel_batch` |
-| 10 | `persistence/models/__init__.py` 的 import |
-| 11 | 测试 10 个：`test_batch_*.py`、`test_subagent_batch_*.py`、`test_migration_0021_batch_acceptance.py`、`test_history_batch_queries.py` |
-| 12 | ⚠️ **同时删除**：`persistence/subagent_batches/model.py:44` 的 FK（§6.6） |
-
-**0-D. LangGraph Store 删除**（依据 §7.8 / §11.7）
-
-| # | 删除 / 修改对象 |
-| --- | --- |
-| 1 | `runtime/store/{provider,async_provider}.py` |
-| 2 | 🔴 **`runtime/store/_sqlite_utils.py` 必须保留** —— 被 `checkpointer/provider.py:33`、`async_provider.py:34`、`gateway/health.py:176` 复用 ⇒ 移到 `runtime/checkpointer/` 或 `runtime/sqlite_utils.py` |
-| 3 | `app/gateway/deps.py:435` 的**无条件** `make_store(config)` |
-| 4 | `app/gateway/deps.py:498` → 改为 `make_thread_store(sf)` |
-| 5 | `persistence/thread_meta/memory.py` 的 `MemoryThreadMetaStore` → **改为简单内部 dict 实现**（§7.8 决策 6）—— **保留能力，不删** |
-| 6 | 5 处 `store=` 挂载点（**只挂载、不读写**，直接摘除） |
-| 7 | `app.py:129-171` 的孤儿线程迁移（唯一真实 `asearch(("threads",))` 生产读取，**非致命**） |
-| 8 | 测试：依赖 `BaseStore` 的用例改为用内部 dict 版本 |
-
-> ⚠️ **`MemoryThreadMetaStore` 的结论已定**（§7.8 决策 6）：**保留能力、改内部 dict**，
-> **不再作为待确认问题**。理由：它是 `database.backend=memory` 时的唯一 `BaseStore` 消费者，
-> 而 memory 模式在开发 / 单测中仍在使用；**为一个小能力保留整个 LangGraph `BaseStore` 抽象不划算**。
-
-**退出条件**（对应 §15.11 的 Goal 0）：
-
-| # | 条件 |
-| --- | --- |
-| 1 | `app/channels/` 与 `gateway/github/` 已删除 |
-| 2 | `mcp_tasks` 与 `subagent_batches` 已删除 |
-| 3 | **Gateway 可正常启动** |
-| 4 | **普通 MCP Tool / MCP Server / OAuth 仍可用**（只删 `mcp_tasks`，不删普通 MCP） |
-| 5 | **普通 SubAgent `task` 仍可用**（只删 `subagent_batches`，不删普通 SubAgent） |
-| 6 | **最终 ORM 表集合稳定** —— 反射得到 **12 张应用表 / 139 列** |
-| 7 | **重新扫描 PG 专属依赖**，确认删除未引入新的 PG 耦合 |
-| 8 | `bootstrap.py` 三个常量**保持原样**且两个反向 pin 测试**仍通过** |
-| 9 | 4 个 `DeltaChannel` 测试**仍在且通过** |
-
-**退出条件 —— ✅ 全部已满足（见上"完成记录"）。**
-⇒ **Goal 0 已关闭，Goal 1 / Goal 2 可以开始。**
+> 📌 **删除的完整实施记录**（逐文件清单、接线点、测试清单、`DeltaChannel` 同名易误删清单等）
+> 见过程留档 `mysql-migration-plan.md` §12 Goal 0。**它们已执行完毕，不是待办。**
 
 ### Goal 1：MySQL 兼容性与风险 Gate（**只做验证与设计，不改 ORM**）
 
-> 🔴 **本 Goal 不包含任何大规模 ORM 改造**（§15.11）。产出是"**Gate 结论 + 迁移产物设计**"。
-> 🔴 **Goal 0 已完成**（`a55e5734`）⇒ 下列 **G1-A / G1-B / G1-C** 就是 G1 的全部内容。
+> 🔴 **本 Goal 不包含任何大规模 ORM 改造**。产出是"**Gate 结论 + 迁移产物设计**"。
 > ⛔ **不要让 G1 提前进入 G2 的全面实现** —— 本 Goal 的产出是**结论与设计**，不是运行代码。
 >
 > **前置 Gate 状态**：V3 ✅ / V6 ✅ / V2 ✅ 已关闭；**V1 🟡 待做**；**V5 🔴 待做（最高优先）**。
@@ -3121,8 +2711,7 @@ Goal 5  删除 PostgreSQL
 1. 冻结基线：记录 **PG 链** `alembic head = 0023_user_preferences`，确认 `0001`–`0023` **不可变**。
 2. 按 **§11.2** 落地 **MySQL 独立链的接线方式** ——
    ① 第二个 `script_location`；
-   ② 🔴 **从生产路径上直接删除 `_HEAD_REVISION` / `_KNOWN_REVISIONS` 这两个模块级缓存**
-   （**不是**"按 `script_location` 做键"—— §11.2 已论证该缓存无价值）；
+   ② 🔴 **从生产路径上直接删除 `_HEAD_REVISION` / `_KNOWN_REVISIONS` 这两个模块级缓存**；
    ③ `bootstrap_schema(..., backend="mysql")` 分支（`empty` / `versioned` / `legacy → refuse` 三态，
    **无** forward-compatible 分支）。
    ⛔ **不要构建通用 multi-chain framework**：不做链注册表、不做 per-chain 类层次、
@@ -3138,8 +2727,7 @@ Goal 5  删除 PostgreSQL
 
 1. **依赖与驱动确认**（§7.7）：
    - `asyncmy` 作为**异步 Application / Checkpointer 主路径**；
-   - `PyMySQL` 作为**同步路径**，唯一用途是 `SqlAgentStore`（graph subprocess 的 agent 定义读取）
-     —— 🔴 **必须保留**，不要因为"不启用同步 Saver"而删掉它；
+   - `PyMySQL` 作为**同步路径**，唯一用途是 `SqlAgentStore` —— 🔴 **必须保留**；
    - ⛔ **不启用同步 MySQL CheckpointSaver**。
    - **验收**：`grep -rn "app_sync_sqlalchemy_url"` 的每个调用点都有明确结论。
 2. **在真实 MySQL 8.0.24 上**按 §7.3.1 的清单逐项做实：
@@ -3163,10 +2751,8 @@ Goal 5  删除 PostgreSQL
 7. **必须完成于 Goal 2 的代码之前。**
 
 > 📌 **已关闭 Gate 的登记**（不构成 G1 工作项，仅供引用）：
-> **V2** —— `checkpoint_ns` 主键参与已换成固定 16 字节 `checkpoint_ns_hash`，索引尺寸与 ns 长度无关，
-> 仅剩 `varchar(2000)` 列宽限制（DeerFlow 顶层始终传 `""`）⇒ **无需实测、无需断言兜底**（§11.4.3）。
-> **V6** —— MySQL `JSON_TYPE()` 返回**大写**（`INTEGER`/`STRING`/`BOOLEAN`/`NULL`/`DOUBLE`/`OBJECT`/`ARRAY`），
-> 字面量**必须大写**，否则谓词恒 false（**静默错误**）（§6.5）。
+> **V2** —— `checkpoint_ns` 主键参与已换成固定 16 字节 `checkpoint_ns_hash`（§11.4.3）。
+> **V6** —— MySQL `JSON_TYPE()` 返回**大写**，字面量**必须大写**（§6.5）。
 > **V3** —— `run_events.seq` 串行化方案已定（锁 `threads_meta` 行，§8.6）。
 > **V7** —— **仅在 vendor 路径生效**，默认路径下工作量归零（§13）。
 
@@ -3184,11 +2770,9 @@ Goal 5  删除 PostgreSQL
 
 **要交付的设计内容**：
 
-1. **Application 迁移产物**（§11.3）：
-   MySQL 独立链的 `script_location` / `version_table` / 精简 `env.py`；
+1. **Application 迁移产物**（§11.3）：MySQL 独立链的 `script_location` / `version_table` / 精简 `env.py`；
    **不移植自动建库** —— 库不存在就启动失败（§11.3.1）。
-2. **Checkpoint 迁移产物**（§11.4）：
-   `database/mysql/checkpoint/` 的**线性 + 版本表守卫** SQL 产物
+2. **Checkpoint 迁移产物**（§11.4）：`database/mysql/checkpoint/` 的**线性 + 版本表守卫** SQL 产物
    （由上游 `MIGRATIONS` 的 22 条**程序化渲染**，**不手写**）；
    🔴 **产物必须与 `langgraph-checkpoint-mysql==3.0.0` 版本绑定**（§11.4.4）。
 3. **Runtime 只读校验设计**（§11.5）：6 项校验 + fail closed + 明确报错文案。
@@ -3199,21 +2783,17 @@ Goal 5  删除 PostgreSQL
 **G1 的横切约束**（适用于以上三项）：
 
 - 🔴 **直接实现 MySQL 最终路径，不新增并发 abstraction。**
-  上一版曾计划抽象 `acquire_txn_lock(key)` / `allocate_sequence(table, col, where)` /
-  `conditional_upsert(...)` 并为每种后端提供实现。**该计划已取消**，理由：
-  调用点很少（2 处 advisory lock + 4 处 `RETURNING` + 1 处 `json_match`）；
+  `acquire_txn_lock(key)` / `allocate_sequence(table, col, where)` / `conditional_upsert(...)`
+  这类抽象层**不建**，理由：调用点很少（2 处 advisory lock + 4 处 `RETURNING` + 1 处 `json_match`）；
   PostgreSQL 最终会被删除，该 abstraction 只在短暂的 PG/MySQL 共存期有价值；
   抽象层会**掩盖方言差异**，反而增加"以为测过、实际没测"的风险。
-  ⇒ 直接按 §8.2/§8.3 在调用点实现 MySQL 分支（`if dialect == "mysql": …`），
-  开发/测试期可暂时保留 PG branch，但**不把它抽成永久 framework**。
+  ⇒ 直接在调用点实现 MySQL 分支（`if dialect == "mysql": …`）。
 - **CI 静态检查**：用 MySQL 方言编译全部 ORM 语句，断言不出现 `RETURNING`（§4.9-A 的静默失效面）。
 
 ### Goal 2：MySQL 持久化底座（**最高风险，最先做**）
 
 > 🔴 **本 Goal 的核心约束**：**生产 Runtime 不执行任何 DDL。**
-> 因此"接入 CheckpointSaver"这件事被拆成**三件不同的事、三个不同执行方**（§11.0）：
-> ① 运维执行 Checkpoint Schema 迁移产物；② 运维执行 Application Schema 迁移；
-> ③ Runtime 只做只读校验后启动。
+> 因此"接入 CheckpointSaver"这件事被拆成**三件不同的事、三个不同执行方**（§11.0）。
 
 **2-A. 依赖与驱动**
 
@@ -3226,25 +2806,24 @@ Goal 5  删除 PostgreSQL
    ]
    ```
    - ⛔ **不加 `orjson`**（上游声明但包内零命中）。
-   - ⛔ **不 vendor 源码**（除非 §7.3.2 第 4️⃣ 档被触发）。
+   - ⛔ **不 vendor 源码**（除非 §7.3 第 4️⃣ 档被触发）。
    - ⚠️ **版本必须 `==` 精确固定** —— §11.5 的校验项 6 从包内 `MIGRATIONS`
      条目数推导"要求的迁移版本"，**上游变更条目数会直接改变校验基线**。
-     ⛔ **不要用 `>=x,<x+1`**（那仍允许条目数在同一 minor 内变化）。
+     ⛔ **不要用 `>=x,<x+1`**。
    - ⛔ **不启用同步 MySQL CheckpointSaver**。
 2. 确认 `asyncmy` 与 `PyMySQL` 均为纯驱动依赖，不引入其他传递依赖。
 
-**2-B. Checkpoint Schema 迁移产物（**运维 / DBA 执行**，§11.4）**
+**2-B. Checkpoint Schema 迁移产物（运维 / DBA 执行，§11.4）**
 
 3. 🔴 生成 `database/mysql/checkpoint/`：
    - **程序化渲染**上游 `MIGRATIONS` 的 **22 条**（0-indexed 0–21）为线性 `.sql` 文件；
-     ⛔ **不手写"等价" DDL**（§11.4.1 已列出 7 处手写必踩的坑）。
-   - 产物形态：**线性 + 有序 + 只跑一次**；**幂等性由 `checkpoint_migrations` 版本表提供**，
-     不是"脚本可重复执行"（§11.4.2 实测：重跑立刻 `1061`）。
+     ⛔ **不手写"等价" DDL**（§11.4.1 已列出 8 处手写必踩的坑）。
+   - 产物形态：**线性 + 有序 + 只跑一次**；**幂等性由 `checkpoint_migrations` 版本表提供**。
    - 随附 `README.md`（来源 / 版本 / 顺序 / 版本表语义）与 `verify.sql`（只读校验）。
    - 记录 `SAVER_VERSION`（`3.0.0`）+ `MIGRATIONS_COUNT`（**22**）。
 4. 在真实 MySQL 8.0.24 上**完整走一遍**：空库 → 22 条 → 4 张表 → 版本表 `MAX(v) = 21`。
 
-**2-C. Application Schema 迁移产物（**运维 / DBA 执行**，§11.3）**
+**2-C. Application Schema 迁移产物（运维 / DBA 执行，§11.3）**
 
 5. 🔴 创建 **`0001_mysql_baseline.py`（MySQL 链根，且本 Goal 唯一的新 revision）**：
    重建全部 **12 张表**（**139 列**、`DATETIME(6)`、3 个生成列唯一索引、
@@ -3258,39 +2837,20 @@ Goal 5  删除 PostgreSQL
    - 🟡 若做 Compliance Pass：本 revision 同时写入 `ag_` 前缀与中文 COMMENT。
 6. 修改 ORM 模型（`DateTime(timezone=True)` → `DATETIME(6)` + UTC 写入边界、
    `server_default` **按 §6.7 的审计结论**（**只保留 4 个确有 DB 层语义的字段，不机械新增**）、
-   `threads_meta` / `runs` 的 JSON 列**不动**、`ForeignKey` **不动**）。
+   JSON 列**不动**、`ForeignKey` **不动**）。
 7. 🔴 **给 `JsonMatch` 补 MySQL 方言分支**（§6.5，约 15 行）。
    ⛔ **不删除 `persistence/json_compat.py`**，也**不做 JSON → TEXT 改造**。
-8. 按 §9.2 补 **2 个**能力补偿索引（occurrence claim 复合索引 + OAuth 生成列唯一索引）。
+8. 按 §9.2 补 **2 个**能力补偿索引（occurrence claim 复合索引 + OAuth 全量唯一索引）。
    🟡 若做 Compliance Pass：按 §9.1 完成 31 个索引的等价改名。
 9. ⛔ **不做**：应用层级联删除、孤儿巡检、JSON 拆 scalar 列（§6.5/§6.6）。
 
-**2-D. Runtime 接入（**只读，不建表**）**
+**2-D. Runtime 接入（只读，不建表）**
 
-10. 🔴 在 `async_provider.py` 新增 `mysql` 分支（约 20 行）：
-    ```python
-    if config.type == "mysql":
-        if not config.connection_string:
-            raise ValueError(MYSQL_CONN_REQUIRED)
-        from langgraph.checkpoint.mysql.asyncmy import AsyncMySaver
-        from langgraph.checkpoint.mysql.utils import create_pool   # 视上游 API 而定
-
-        pool = await create_pool(config.connection_string, autocommit=True,
-                                 maxsize=config.pool_size or 10)
-        try:
-            saver = AsyncMySaver(conn=pool)      # 鸭子类型：池被 _ainternal.get_connection 识别
-            # 🔴 不调用 await saver.setup() —— 生产 Runtime 不执行 DDL
-            yield saver
-        finally:
-            pool.close()
-            await pool.wait_closed()
-        return
-    ```
-    - 🔴 **删掉 `await saver.setup()`**（这是 §11.0 的核心：生产路径不含 DDL）。
+10. 🔴 在 `async_provider.py` 新增 `mysql` 分支（约 20 行，形态见 §7.4 改动点 1）：
+    - 🔴 **删掉 `await saver.setup()`**（生产路径不含 DDL）。
     - `database_config.py:143` / `checkpointer_config.py:9` 追加 `"mysql"`。
-    - **为什么 `conn=pool` 可行**：`_ainternal.get_connection`（`_ainternal.py:73-83`）
-      先试 `hasattr(conn,"cursor")`，再试 `hasattr(conn,"acquire")`；
-      `asyncmy.Pool` 有 `acquire()` ⇒ 走池分支。**不需要单连接、不需要改上游源码。**
+    - **为什么 `conn=pool` 可行**：`_ainternal.get_connection` 先试 `hasattr(conn,"cursor")`，
+      再试 `hasattr(conn,"acquire")`；`asyncmy.Pool` 有 `acquire()` ⇒ 走池分支。
 11. 🔴 **新增 Runtime 的只读 Schema / 版本校验**（§11.5）：
     - 6 项校验：Application revision（恰好一行）+ 4 张 checkpoint 表存在 +
       `MAX(v) == len(MIGRATIONS) - 1`；
@@ -3300,11 +2860,10 @@ Goal 5  删除 PostgreSQL
       —— 现有 `init_engine()` 的 `CreateSchema` / `bootstrap_schema` / `_auto_create_postgres_db`
       三段 DDL **全部移出 Runtime**（§11.0）。
 12. 🔴 **删除 Runtime 的自动建库逻辑**（§11.0 硬约束）：
-    - ⛔ **不要把 `_auto_create_postgres_db` 改写成 MySQL 的 `CREATE DATABASE IF NOT EXISTS`**
-      —— 建库归 Docker Compose 的 `MYSQL_DATABASE` 或运维 / DBA；
-    - 目标库不存在时，Runtime **必须在启动期失败**（而不是悄悄建库）。
+    - ⛔ **不要把 `_auto_create_postgres_db` 改写成 MySQL 的 `CREATE DATABASE IF NOT EXISTS`**；
+    - 目标库不存在时，Runtime **必须在启动期失败**。
 13. ✅ **不引入** blob 混合策略、阈值配置、对象存储溢出、孤儿 GC（§7.6）。
-    确认 `LONGBLOB` 单库直存可用（上游 schema 本来就是 `LONGBLOB`，§11.4.1）。
+    确认 `LONGBLOB` 单库直存可用。
 14. 确认 `checkpoint_channel_mode = full` ⇒ **不挂载 `CachedHistorySaver`**
     （`async_provider.py:242-253` 的条件不成立）。
 
@@ -3314,8 +2873,7 @@ Goal 5  删除 PostgreSQL
     `tests/test_delta_channel_checkpointers.py`、`tests/test_run_worker_delta_resume.py`、
     `tests/test_run_worker_rollback.py`、`tests/test_run_duration_checkpoint.py`、
     `tests/test_thread_regenerate_prepare.py`、`tests/test_threads_router.py`。
-    ⚠️ **保持 `checkpoint_channel_mode = full`** —— 这些测试覆盖的是
-    checkpoint 的 resume / rollback / delta-channel 语义，**与 Redis cache 无关**。
+    ⚠️ **保持 `checkpoint_channel_mode = full`**。
 16. ⚠️ **大 payload 实测**：构造长会话（大量 messages），测量单 blob 长度、
     `max_allowed_packet` 余量、写入/读取吞吐。**这是 §7.6 决策的实证依据。**
 17. 🔴 **本 Goal 的退出条件（§11.9 的 A 组 + B 组）**：
@@ -3323,13 +2881,10 @@ Goal 5  删除 PostgreSQL
       不依赖任何 PG migration / PG-specific SQL → 幂等 → 与 PG 链互不影响；
     - B 组（生产模型）：**用"无 DDL 权限"账号启动 Runtime 成功**；
       **未执行迁移 → fail closed**；**已执行迁移 → `ready`**；**Runtime 全程无任何自动建表 / 改表**。
-18. **决策点（已冻结，只剩"验证结果"这一维）**：
+18. **决策点（只剩"验证结果"这一维）**：
     - 若 V5 通过 → 继续，档位升为 `Moderate`；
-    - 若 V5 失败 → **按 §7.3.2 的固定阶梯逐档处置**：
-      ① 接入方式 → ② adapter / wrapper → ③ 子类化 → ④ vendor **同一个 3.0.0** + patch
-      → ⑤ 只有结构性、无法修复的 correctness 问题才升级为 architecture blocker。
-      ⛔ **不重新开启 CheckpointSaver 选型讨论**；只有走到第 ⑤ 档才回落档位
-      （`Feasible with significant changes`，§1.4）。
+    - 若 V5 失败 → **按 §7.3 的固定阶梯逐档处置**。
+      ⛔ **不重新开启 CheckpointSaver 选型讨论**；只有走到第 ⑤ 档才回落档位（§1.4）。
 
 ### Goal 3：应用 SQL 与并发迁移
 
@@ -3338,8 +2893,7 @@ Goal 5  删除 PostgreSQL
    **不提供串行化**（两个会话读到同一 MAX，后者 `1062`）；
    单语句 `INSERT … SELECT IFNULL(MAX(seq),0)+1` **同样失败**。
    ⇒ **采用已实测有效的修法**：先对 **`threads_meta` 行**取 `SELECT … FOR UPDATE` 行锁
-   （锚点行不存在时先做幂等 upsert，见 §8.6），
-   再读 `max(seq)`（§8.6）。
+   （锚点行不存在时先做幂等 upsert），再读 `max(seq)`（§8.6）。
    ⛔ **不要**采用"保留原语句 + 依赖 `uq_events_thread_seq`"的方案
    —— 当前**没有 `IntegrityError` 重试**，一次竞态 = 整个 batch 事务失败（**事件丢失**）。
 2. 替换 **2 处**事务级 advisory lock（§8.2）：
@@ -3353,13 +2907,12 @@ Goal 5  删除 PostgreSQL
    （实测：编译期不报错，服务端 `1064`），**编译通过 ≠ 能执行**（§4.9-A）。
 5. 显式设置 `READ COMMITTED`；审计全部 **28 处** `with_for_update` 的索引可用性（§8.7）。
    ⚠️ 计数口径：**按"包含 `with_for_update` 的行数"**（含方法链与
-   `session.get(Row, id, with_for_update=True)` 两种写法），否则会少算 23 处。
+   `session.get(Row, id, with_for_update=True)` 两种写法）。
 6. 重写 `app/gateway/auth/repositories/sqlite.py` 的错误码判定（§4.9-D）：
    - MySQL 1062 消息实测为 `Duplicate entry 'github-oid-9' for key 'users.idx_users_oauth_identity'`；
-   - 现有三段回退（`exc.orig.__cause__.constraint_name` / 消息含 `oauth_provider` /
-     消息含 `users.email`）在 MySQL 下**全部返回 `False`** ⇒ 必须改写。
+   - 现有三段回退在 MySQL 下**全部返回 `False`** ⇒ 必须改写。
 7. **重新验证多实例并发正确性**：为 **Scheduler / Run ownership 两个职责域**
-   （原为四个，MCP Tasks 与 Subagent Batches 已删除）分别写 MySQL 并发测试，
+   分别写 MySQL 并发测试，
    并**首次定义 MySQL 上的跨实例对账语义**
    （`scheduled_task_runs/sql.py:758` 原文 "Multi-instance reconciliation is Postgres-only."）。
 8. 🔴 **本 Goal 退出条件**：
@@ -3370,14 +2923,12 @@ Goal 5  删除 PostgreSQL
 
 ### Goal 4：基础设施与全量 MySQL 集成验证（**含生产权限模型**）
 
-1. 依赖已在 Goal 2 落地（`mysql` extra：`asyncmy` + `PyMySQL` + 固定版本的
-   `langgraph-checkpoint-mysql`）；本 Goal 只做**基础设施接线与集成验证**。
+1. 依赖已在 Goal 2 落地（`mysql` extra）；本 Goal 只做**基础设施接线与集成验证**。
 2. 🔴 **`persistence/engine.py` 的 DDL 段必须整体拆掉**（§11.0）：
    - 新增 MySQL engine kwargs（`pool_pre_ping`、`pool_recycle`、`max_execution_time`）；
-   - ⛔ **`_auto_create_postgres_db` 直接删除** ——
-     **不要**改写成 MySQL 的 `CREATE DATABASE IF NOT EXISTS`（§11.0 硬约束）；
+   - ⛔ **`_auto_create_postgres_db` 直接删除** —— **不要**改写成 MySQL 的 `CREATE DATABASE IF NOT EXISTS`；
    - ⛔ 移除 `_ensure_postgres_schema()` 的 `CreateSchema`；
-   - ⛔ 移除 `bootstrap_schema(...)` 的调用（`create_all` / `stamp` / `upgrade` 都不在 Runtime 里）；
+   - ⛔ 移除 `bootstrap_schema(...)` 的调用；
    - ✅ 改为**只读校验**（§11.5）；目标库不存在时**启动期直接失败**。
 3. `app/gateway/health.py`：新增 `mysql` 探针（`_probe_checkpointer_backend` 的
    `Literal` 也要扩展），并把 §11.5 的校验结果接到 readiness。⛔ **不需要 Store 探针**（§7.8）。
@@ -3394,9 +2945,6 @@ Goal 5  删除 PostgreSQL
    | `persistence/managed_subagents/__init__.py:32` | `not in ("sqlite","postgres")` | 同上 | `ValueError` |
    | `app/gateway/health.py:229` | `not in ("sqlite","postgres")` | checkpointer 探针 | ⚠️ **返回 `DATABASE_UNREACHABLE`**（不是抛异常） |
 
-   > 🔻 原 **7 处**，其中 `app/gateway/app.py:405`（`subagent_batches.enabled` 的
-   > `RuntimeError`）**已随模块删除**（§2.7 / §12 Goal 0）。
-   > ⚠️ **行号已按当前 HEAD `a55e5734` 更新** —— 早期草稿的 `:84/:97/:132` 已失效。
    > 🔴 **只加驱动不改守卫 ⇒ 进程起不来。**
 
    ⚠️ **同时扩展两个驱动/方言 `Literal`**（`database_config.py:143`、`checkpointer_config.py:9`）——
@@ -3413,8 +2961,8 @@ Goal 5  删除 PostgreSQL
    | 类别 | 处置 |
    | --- | --- |
    | backend-neutral 行为测试 | ✅ **继续保留**（它们本来就与后端无关） |
-   | PostgreSQL 专属测试（**8 个**，其中 `test_mcp_task_postgres.py` 已随模块删除 ⇒ **7 个**） | 🔻 **由对应的 MySQL 测试就地替换**，不保留 PG 版本 |
-   | 命中 `postgres` 的 **113 个**文件 | 🔻 **不做 `pytest × PG × MySQL` 参数化** —— PG 最终会删除。只把**断言 PG 专有行为**的部分改为 MySQL 断言 |
+   | PostgreSQL 专属测试（**7 个**） | 🔻 **由对应的 MySQL 测试就地替换**，不保留 PG 版本 |
+   | 命中 `postgres` 的 **91 个**文件 | 🔻 **不做 `pytest × PG × MySQL` 参数化** —— PG 最终会删除。只把**断言 PG 专有行为**的部分改为 MySQL 断言 |
    | MySQL correctness 测试 | ✅ **重点覆盖真实风险**：`RETURNING` 改写、advisory lock 替换、partial unique 生成列、`run_events.seq` 并发、`JsonMatch` 大小写、时间精度 |
    | ORM / framework 自身行为 | ⛔ **不重复验证**（Risk-Adjusted Verification） |
 
@@ -3434,13 +2982,13 @@ Goal 5  删除 PostgreSQL
    | 10 | 🔴 **已执行迁移** | readiness = true |
    | 11 | 🔴 **Runtime 无自动建表 / 改表** | 用 `information_schema` 或审计日志确认全程零 DDL |
 
-   > **第 8–11 项是本 Goal 与上一版最大的区别** —— 它们直接验收 §11.0 的硬约束。
+   > **第 8–11 项直接验收 §11.0 的硬约束。**
    > **用权限本身作为验收手段**：如果 Runtime 仍残留任何 DDL，它会**因为权限不足而失败**，
    > 这是一个**无法被配置掩盖**的判据。
 8. **分阶段切流**：利用 `database:` 与 `checkpointer:` 可分别配置的能力，
    **先切一个职责域、再切另一个，不要一次性切换**。
    ⚠️ 每个职责域切走后**单向不回退**（§2.1：不设计数据层回滚）。
-9. ⚠️ **切流期必须保持 `checkpoint_channel_mode = full`**（§2.3）。
+9. ⚠️ **切流期必须保持 `checkpoint_channel_mode = full`**（§2.5）。
 
 ### Goal 5：稳定期结束后彻底删除 PostgreSQL
 
@@ -3454,10 +3002,10 @@ Goal 5  删除 PostgreSQL
    与两个反向 pin 测试；**并移除 PG 链的 migrations 目录**（含 `0001`–`0023`）。
    —— 注意：`_run_create_all_sync()` **保留**（SQLite / 开发路径仍在用）。
    —— 注意：`_HEAD_REVISION` / `_KNOWN_REVISIONS` **已在 Goal 1 从生产路径删除**
-   （§11.2）⇒ 本 Goal 只需确认没有残留引用，**不存在"按链做键"的缓存要退役**。
-3. 🔴 **删除 `runtime/store/*`**（Store 不迁移，§7.8）：
-   若 Goal 0 已完成 0-D，则本步只需确认无残留引用。
-   ⚠️ **必须保留 `_sqlite_utils.py`**（Goal 0 已决定其落点）。
+   ⇒ 本 Goal 只需确认没有残留引用。
+3. 🔴 **确认 `runtime/store/*` 无残留引用**（Store 不迁移，§7.8）：
+   若 Goal 0 已完成，则本步只需确认。
+   ⚠️ **必须保留 `_sqlite_utils.py`**（其落点已在 Goal 0 决定）。
 4. 删除 Helm PostgreSQL 配置、compose 的 PG 服务、`postgres` extra 与依赖。
 5. 删除 / 改写 PG 专属测试（含 `_PG_LOCK_KEY` 相关用例）。
 6. 文档：更新 `backend/AGENTS.md`、`config.example.yaml`、`README*`，
@@ -3466,18 +3014,18 @@ Goal 5  删除 PostgreSQL
 
 ---
 
-> 🔻 **原"阶段 7"（Redis 侧的可靠性 / 性能优化）已整体移出本方案**（§2.3 / §15.11）。
+> 🔻 **Redis 侧的可靠性 / 性能优化整体移出本方案**（§2.5 / §15.9）。
 > Redis 的 checkpoint cache / delta 缓存 / 鉴权读缓存 / StreamBridge replay /
 > sandbox ownership 持久化，**全部作为独立变更单独设计与交付**，
-> 本迁移方案**不为它们做任何预置设计**（不预置 namespace、TTL、失效钩子、键空间分层）。
+> 本迁移方案**不为它们做任何预置设计**。
 > 唯一保留的一条约束：**Redis 只承载"可从 durable store 重建"的状态**，
 > 属 lease / correctness 的状态**不得放入"重启即空"的 volatile Redis**。
 
 ---
 
-## 13. 实施前 Gate（**状态更新：V3 / V6 / V2 已关闭；V1 🟡 待做；V5 🔴 待做（最高优先）**）
+## 13. 实施前 Gate
 
-> 🔴 **CheckpointSaver 选型已冻结**（§0）⇒ **V5 不再是 selection Gate**。
+> 🔴 **CheckpointSaver 选型已冻结**（§0）⇒ **V5 不是 selection Gate**。
 > V5 的职责是**验证已确定的 `langgraph-checkpoint-mysql[asyncmy]==3.0.0`
 > 在当前 DeerFlow Runtime 中是否满足所需的运行语义和正确性**（§7.3.1）。
 > ⚠️ **它仍然可能失败** —— 失败时按 §7.3.2 的固定阶梯处理，**不重新选型**。
@@ -3487,12 +3035,12 @@ Goal 5  删除 PostgreSQL
 | **V1** | **G1-A** | **MySQL 独立链的接线方式** —— ① 第二个 `script_location`；② **不新增缓存抽象**，直接删掉 `_HEAD_REVISION` / `_KNOWN_REVISIONS` 的生产用法（§11.2）；③ 运维执行的 `alembic upgrade head` + Runtime 只读校验（§11.3 / §11.5）。**验收：§11.9 的 A 组 8 条 + B 组 5 条** | 🟡 **待做** | 🔴 **Schema 实施之前（Goal 2）** | 链配置写错会导致 **head 判定串链**、`upgrade` 跑错链 |
 | **V5** | **G1-B** | 🔴 **对已冻结依赖 `langgraph-checkpoint-mysql==3.0.0` 做兼容性 / 正确性验收**（§7.3.1）—— **在真实 MySQL 8.0.24 上**跑通 `aget_tuple` / `alist` / `aput` / `aput_writes` / `adelete_thread`，用现有回归测试验证 pending writes / resume / interrupt / retry / rollback / **branch / regenerate** / 长会话 / 并发写 / `checkpoint_channel_mode=full` / **asyncmy 池接入** / **event-loop lifecycle**；并核对大 checkpoint payload、**`max_allowed_packet`**、`INSERT IGNORE` 风险、base64 线路膨胀。**验收结论必须落在 §7.3.2 阶梯的某一档。** ⛔ **不要在 V5 之前把第三方源码复制进正式 Runtime 代码** | 🔴 **待做（最高优先）** | 🔴 **Goal 2 的代码之前** | 误判"可用"→ 上线后才发现 checkpoint 语义缺口；误判"不可用"→ 白白走 vendor |
 | **V1+V5+模型** | **G1-C** | **生产迁移执行模型**（§11.0）：Application 迁移产物 + Checkpoint 迁移产物 + **Runtime zero DDL** + schema/version 校验 + **fail closed**；Checkpoint 产物与 Saver 版本绑定（§11.4.4） | 🟡 **待做（设计）** | 🔴 **Goal 2 的代码之前** | 权限模型被新代码破坏 ⇒ 生产启动即失败或隐式建表 |
-| **V3** | `run_events.seq` 在 MySQL 8.0.24 + READ COMMITTED 下的并发分配语义 | ✅ **已关闭（结论为负面，修法已定）**：`SELECT MAX(seq) … FOR UPDATE` **不提供串行化**（两个会话读到同一 MAX，后者 `1062`）；单语句 `INSERT … SELECT` 同样失败；**修法已实测有效** —— 先对 `threads_meta` 行取行锁（锚点缺失时先幂等建行，§8.6） | ✅ 已完成 | 已识别 ⇒ 直接进入 Goal 3 实施 |
-| **V6** | `JsonMatch` 的 MySQL 分支 —— MySQL `JSON_TYPE()` 返回**大写** | ✅ **已实测确认**：`INTEGER` / `STRING` / `BOOLEAN` / `NULL` / `DOUBLE` / `OBJECT` / `ARRAY`。字面量必须大写，否则谓词**恒 false（静默错误）** | Goal 3 的 `json_compat.py` 改动之后 | 线程置顶 / 归档过滤静默失效 |
-| **V2** | `checkpoint_ns` 的真实最大长度 | ✅ **已关闭，不再阻塞**：上游最终 schema 把主键参与换成固定 16 字节的 `checkpoint_ns_hash` ⇒ **索引键长与 ns 长度无关**；仅剩 `varchar(2000)` 列宽限制，而 DeerFlow 顶层**始终传 `""`**（§11.4.3） | ✅ 已完成 | 无（已从设计上消除） |
-| **V7** | **vendor 合规与可维护性** | 🔻 **默认路径下不适用** —— 默认是**精确版本直接依赖**，**无 vendor、无 LICENSE 副本、无 `UPSTREAM.md`**。**仅当 §7.3.2 第 4️⃣ 档（vendor 同一个 3.0.0 + 最小 patch）被触发时**本 Gate 才生效：① `LICENSE` 全文保留（MIT / `Copyright (c) 2024 Theodore Ni`）；② `UPSTREAM.md` 记录版本 / 发布日 / commit SHA / 逐文件改动状态 / 升级步骤；③ `mysql` extra 相应调整（删掉 `langgraph-checkpoint-mysql` 那一行，`asyncmy` / `PyMySQL` 不变） | 仅在 vendor 路径生效 | 许可合规风险；后续无法重放本地改动 |
+| **V3** | — | `run_events.seq` 在 MySQL 8.0.24 + READ COMMITTED 下的并发分配语义 | ✅ **已关闭（结论为负面，修法已定）**：`SELECT MAX(seq) … FOR UPDATE` **不提供串行化**；单语句 `INSERT … SELECT` 同样失败；**修法已实测有效** —— 先对 `threads_meta` 行取行锁（锚点缺失时先幂等建行，§8.6） | ✅ 已完成 | 已识别 ⇒ 直接进入 Goal 3 实施 |
+| **V6** | — | `JsonMatch` 的 MySQL 分支 —— MySQL `JSON_TYPE()` 返回**大写** | ✅ **已实测确认**：`INTEGER` / `STRING` / `BOOLEAN` / `NULL` / `DOUBLE` / `OBJECT` / `ARRAY`。字面量必须大写，否则谓词**恒 false（静默错误）** | Goal 3 的 `json_compat.py` 改动之后 | 线程置顶 / 归档过滤静默失效 |
+| **V2** | — | `checkpoint_ns` 的真实最大长度 | ✅ **已关闭，不再阻塞**：上游最终 schema 把主键参与换成固定 16 字节的 `checkpoint_ns_hash` ⇒ **索引键长与 ns 长度无关**；仅剩 `varchar(2000)` 列宽限制，而 DeerFlow 顶层**始终传 `""`**（§11.4.3） | ✅ 已完成 | 无（已从设计上消除） |
+| **V7** | — | **vendor 合规与可维护性** | 🔻 **默认路径下不适用** —— 默认是**精确版本直接依赖**，**无 vendor、无 LICENSE 副本、无 `UPSTREAM.md`**。**仅当 §7.3 第 4️⃣ 档（vendor 同一个 3.0.0 + 最小 patch）被触发时**本 Gate 才生效：① `LICENSE` 全文保留（MIT / `Copyright (c) 2024 Theodore Ni`）；② `UPSTREAM.md` 记录版本 / 发布日 / commit SHA / 逐文件改动状态 / 升级步骤；③ `mysql` extra 相应调整 | 仅在 vendor 路径生效 | 许可合规风险；后续无法重放本地改动 |
 
-**🔴 已关闭 Gate 的净效果**：
+**已关闭 Gate 的净效果**：
 
 | Gate | 关闭后消除了什么 |
 | --- | --- |
@@ -3501,7 +3049,7 @@ Goal 5  删除 PostgreSQL
 | **V2** | 从"阻塞项"变成"**结构上已不存在的问题**"，无需实测、无需断言兜底 |
 | **V7** | 从"必做"变成"**条件适用**" —— 默认路径下工作量归零 |
 
-> ⚠️ **V4（Redis StreamBridge 的 SSE 恢复路径）不属于本次变更范围**（§2.3 已把 Redis 整体移出）。
+> ⚠️ **V4（Redis StreamBridge 的 SSE 恢复路径）不属于本次变更范围**（§2.5 已把 Redis 整体移出）。
 > 已知事实：gap 检测**只覆盖保留窗口被裁掉**（`redis.py:291` 要求 `earliest_entries` 非空），
 > **不覆盖 Redis 重启丢流**；SSE 路径**没有** RunEventStore 自动补偿，
 > 恢复依赖客户端 `reload_durable_state`。
@@ -3513,7 +3061,7 @@ Goal 5  删除 PostgreSQL
 
 ### 14.1 三大风险
 
-#### 风险 1：Checkpoint 持久化的运行语义不达标（**最高**，但本轮已显著降险）
+#### 风险 1：Checkpoint 持久化的运行语义不达标（**最高**）
 
 - **事实**：官方无 MySQL saver（实测只有 base/memory/postgres/serde/sqlite）；
   **`langgraph-checkpoint-mysql` 3.0.0 已被冻结为本次迁移的实现基线**（§0），
@@ -3527,31 +3075,28 @@ Goal 5  删除 PostgreSQL
     **选型冻结不等于语义已被证实。**
 - **缓解**：
   1. **V5 是最高优先 Gate**，必须在 Goal 2 的代码之前完成（§12 Goal 1 / G1-B）；
-     **V7 仅在走 vendor 路径时适用**（§7.4 判据）；
-  2. **保留回退路径**（§7.3.2 / §7.5）：先排查**接入方式** → adapter / wrapper →
+     **V7 仅在走 vendor 路径时适用**；
+  2. **保留回退路径**（§7.3 / §7.5）：先排查**接入方式** → adapter / wrapper →
      子类化 `DeerFlowMySQLSaver(AsyncMySaver)`；确需改上游内部实现时才
      **vendor 同一个 3.0.0 + 最小 patch**（改动登记进 `UPSTREAM.md`）
-     —— 不再需要"从零设计表结构与全部 SQL"，也**不需要预先 fork**；
+     —— 不需要"从零设计表结构与全部 SQL"，也**不需要预先 fork**；
   3. **大 payload 实测**（Goal 2 的 2-E 节）为 §7.6 的决策提供实证，
      并覆盖 **`max_allowed_packet`** 上限；
   4. ⚠️ **本风险不能靠 Redis 缓存缓解**：`delta + Redis checkpoint cache`
-     **不与数据库迁移同时切换**（§2.3），因此迁移期**必须按"无缓存"评估性能**。
+     **不与数据库迁移同时切换**（§2.5），因此迁移期**必须按"无缓存"评估性能**。
 
 #### 风险 2：并发语义变化（**高**）
 
 - **事实**：**2 处事务级 advisory lock** + 1 组会话级 advisory lock、
-  **4 处 `RETURNING`**、**3 处 partial index（其中 2 处需生成列，OAuth 处不需要）**、
-  **28 处 `FOR UPDATE`**、
-  默认隔离级别从 RC 变 RR。
-- 🔻 **本轮减少**：**23 处 `FOR UPDATE`**、**7 处 `SKIP LOCKED`**、
-  **1 处 PG 四档行锁强度假设**（`mcp_tasks` 的 `FOR SHARE` 论证）随模块删除而消失。
+  **4 处 `RETURNING`**、**3 处 partial index（其中 2 处需生成列）**、
+  **28 处 `FOR UPDATE`**、默认隔离级别从 RC 变 RR。
 - **为什么危险**：这些是"能跑但可能静默错误"的一类问题。最典型的场景：
   - `scheduled_task_runs` 的 `occurrence_seq` 分配改用 `LAST_INSERT_ID(expr)` 后
     与 `run_events` 的 `AUTO_INCREMENT` 语义互相污染（**序号串号**）；
-  - RR 下的 gap lock 让 claim 语句的"跳过"行为与 PG 不同，导致偶发死锁（`1213`）而非正确的跳过；
+  - RR 下的 gap lock 让 claim 语句的"跳过"行为与 PG 不同，导致偶发死锁（`1213`）；
   - **`UPDATE … RETURNING` 在 SQLAlchemy 下编译期不报错**，
     意味着现有测试（包括断言编译 SQL 的测试）**不会**捕获这个错误；
-  - **`run_events.seq` 在 MySQL + RC 下可能失去串行化**（§8.6）。
+  - **`run_events.seq` 在 MySQL + RC 下失去串行化**（§8.6）。
 - **缓解**：为每个并发原语写 **MySQL 专属的并发回归测试**；
   显式 `SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED`；
   用 `scripts/benchmark/concurrency/worker.py` 做双 Worker 压测；
@@ -3578,7 +3123,7 @@ Goal 5  删除 PostgreSQL
 
 | # | 风险 | 严重度 | 可能性 | 缓解 |
 | --- | --- | --- | --- | --- |
-| 1 | **已冻结的第三方** Saver（`langgraph-checkpoint-mysql==3.0.0`，精确版本依赖）的运行语义/性能不达标（**V5 未做**） | 高（原为极高） | 中 | **V5 验收**；失败时按 §7.3.2 的**固定阶梯**：接入方式 → adapter/wrapper → **子类化** → 确需改上游内部实现才 **vendor 同一个 3.0.0 + patch**（登记进 `UPSTREAM.md`）。⛔ **不重新选型** |
+| 1 | **已冻结的第三方 Saver**（`langgraph-checkpoint-mysql==3.0.0`）的运行语义/性能不达标（**V5 未做**） | 高 | 中 | **V5 验收**；失败时按 §7.3 的**固定阶梯**：接入方式 → adapter/wrapper → **子类化** → 确需改上游内部实现才 **vendor 同一个 3.0.0 + patch**。⛔ **不重新选型** |
 | 2 | `UPDATE … RETURNING` 编译期不报错 → 运行期才失败 | 高 | **高** | CI 静态检查（MySQL 方言编译 + 断言无 `RETURNING`）+ 逐处手工改写 |
 | 3 | **`run_events.seq` 在 MySQL + RC 下失去串行化**（`else` 分支实为 SQLite 语义，且**无重试**） | 高 | 中 | **V3 实测**（§8.6）：先对 **`threads_meta` 行**取 `SELECT … FOR UPDATE`（锚点缺失时先幂等建行），再读 `max(seq)`；唯一约束 + bounded retry 仅作兜底 |
 | 4 | advisory lock 替换后调度器重复触发/漏触发 | 高 | 中 | 锁表 sentinel + 并发回归测试 |
@@ -3589,21 +3134,21 @@ Goal 5  删除 PostgreSQL
 | 9 | 🔴 **只改驱动、不改 `("sqlite","postgres")` 守卫** ⇒ 进程**直接 `SystemExit` / `ValueError`** | **中高** | **高** | 按 §12 Goal 4 的 **6 处**清单全部扩展 `mysql`；启动 smoke test 必须覆盖 3 条 `SystemExit` 路径 |
 | 10 | 🔴 **删除 Store 时漏改耦合点** —— 3 处非显然耦合：`_sqlite_utils` 被 checkpointer/health 复用、`MemoryThreadMetaStore` 依赖 `BaseStore`、`deps.py:435` 的**无条件构造** + 5 处 `store=` 管线 + `app.py` 孤儿迁移 | 中 | **中高** | 按 **§7.8 的 11 项清单**逐项改；改完跑 Gateway 启动 smoke test + checkpoint 回归 |
 | 11 | 🔴 **误把"同步 Saver 不启用"扩展成"同步驱动也不要"** ⇒ `agent_storage.backend: db` 整链失效 | **中高** | 中 | 按 **§7.7** 区分二者：**保留同步驱动，只不启用同步 Saver**；并覆盖"图子进程构建 agent"这条路径的测试 |
-| 12 | 🔻 **Compliance Pass 与已冻结 Saver 的冲突** —— 默认路径（精确版本依赖）下 checkpoint 4 张表的**表名 / 索引名 / COMMENT 均不可改**；要改只能走 §7.3.2 第 4️⃣ 档（vendor 同一个 3.0.0），且表名改动面是 **57 处 SQL 字符串 + `LANGGRAPH_OWNED_TABLES` + 1 个单测等值断言**，并成为**永久的本地 diff**。⛔ 注意：**纯风格理由不构成 vendor 判据**（§7.3.3） | 中 | 中 | **默认不改名**，把它列为明确的**规范例外**（§15.12 Q2）。⚠️ **不要为它单独触发 vendor** |
-| 13 | **删除 `mcp_tasks` / `subagent_batches` 后发现有隐藏消费者** | 中 | 中 | 按 §2.6/§2.7 的证据链复核；删除后跑 Gateway 启动 + feature flag 检查（`routers/features.py`） |
+| 12 | 🔻 **Compliance Pass 与已冻结 Saver 的冲突** —— 默认路径下 checkpoint 4 张表的**表名 / 索引名 / COMMENT 均不可改**；要改只能走 §7.3 第 4️⃣ 档，且表名改动面是 **57 处 SQL 字符串 + `LANGGRAPH_OWNED_TABLES` + 1 个单测等值断言**，并成为**永久的本地 diff**。⛔ **纯风格理由不构成 vendor 判据**（§7.3.3） | 中 | 中 | **默认不改名**，把它列为明确的**规范例外**（§15.6）。⚠️ **不要为它单独触发 vendor** |
+| 13 | **删除 `mcp_tasks` / `subagent_batches` 后发现有隐藏消费者** | 中 | 低（G0 已完成并复核） | 已按证据链复核；删除后跑 Gateway 启动 + feature flag 检查（`routers/features.py`） |
 | 14 | `max_allowed_packet` 不足以容纳单个 checkpoint blob | 中 | 低 | 部署 checklist 显式确认；应用侧加软上限告警；大 payload 实测（Goal 2） |
-| 15 | 上游代码的 `INSERT IGNORE` 吞掉可忽略错误 | 中 | 低 | V5 中核对目标列（`LONGBLOB` / `JSON` / `VARCHAR(150)`）的取值长度确实不越界；**若确需改为显式错误处理，则走 §7.3.2 第 4️⃣ 档（vendor 同一个 3.0.0 + patch）**（改动登记进 `UPSTREAM.md`） |
-| 16 | 上游代码的 `json_arrayagg` base64 线路膨胀影响吞吐 | 中 | 中 | Goal 2 的 2-E 节的大 payload 实测 + 记录 `max_allowed_packet` 上限；**若确需改 `SELECT_SQL`，则走 §7.3.2 第 4️⃣ 档**（登记进 `UPSTREAM.md`） |
+| 15 | 上游代码的 `INSERT IGNORE` 吞掉可忽略错误 | 中 | 低 | V5 中核对目标列（`LONGBLOB` / `JSON` / `VARCHAR(150)`）的取值长度确实不越界；**若确需改为显式错误处理，则走 §7.3 第 4️⃣ 档** |
+| 16 | 上游代码的 `json_arrayagg` base64 线路膨胀影响吞吐 | 中 | 中 | Goal 2 的 2-E 节的大 payload 实测 + 记录 `max_allowed_packet` 上限；**若确需改 `SELECT_SQL`，则走 §7.3 第 4️⃣ 档** |
 | 17 | partial index 生成列 workaround 的锁/写放大开销 | 中 | 中 | 压测写入路径 |
 | 18 | 表重命名遗漏（**仅当执行 Compliance Pass**） | 中 | 中 | 启动期断言 + 一次性 grep 清单 + 单测 pin |
 | 19 | Redis 重启后 SSE 静默丢失事件（gap 检测不覆盖"丢流"；SSE 路径无自动补偿） | 中 | 中 | **不在本次变更范围**（§13 的 V4 说明）；归入**独立的 Redis 变更** |
 | 20 | 移除 PG 依赖后 Helm/文档/CI 不一致 | 低 | 高 | 文档与 chart 同步更新 |
-| 21 | 🔻 **第三方依赖的上游漂移**（默认路径下表现为"版本固定但不再自动获得上游修复"；**仅当降级为 vendor 时**才表现为"本地改动需手工重放"） | 中 | 中 | 默认路径：`==` 精确固定版本 + 记录版本变更的复查信号（§7.4）；vendor 路径：`UPSTREAM.md` 记录 3.0.0 / commit SHA / 逐文件改动状态 + **Gate V7** |
+| 21 | 🔻 **第三方依赖的上游漂移**（默认路径下表现为"版本固定但不再自动获得上游修复"；**仅当降级为 vendor 时**才表现为"本地改动需手工重放"） | 中 | 中 | 默认路径：`==` 精确固定版本 + 记录版本变更的复查信号（§7.4）；vendor 路径：`UPSTREAM.md` + **Gate V7** |
 | 22 | 🔻 **vendor 许可合规遗漏**（未随源码保留 MIT 声明）—— **仅在降级为 vendor 时适用** | 低 | 低 | **Gate V7**：`LICENSE` 全文进 vendor 目录，`Copyright (c) 2024 Theodore Ni` 不得删改 |
 
 ---
 
-## 15. 最小迁移范围（本轮结论汇总）
+## 15. 范围汇总
 
 ### 15.1 最小必须迁移的 Runtime 能力
 
@@ -3626,14 +3171,14 @@ Goal 5  删除 PostgreSQL
 | 15 | **`mysql` health 探针** | 就绪判定 |
 | 16 | **`run_events.seq` 的串行化方案** | 事件序号正确性（V3 已实测确定具体方案） |
 
-### 15.2 可以直接删除的能力
+### 15.2 可以直接删除的能力（**已由 Goal 0 完成**）
 
 | # | 能力 | 依据 |
 | --- | --- | --- |
 | 1 | **Channel / GitHub Webhook**（5 张表 + 14 模块 + 14 测试） | `feature-inventory` Phase 3 既定工作；迁移前置 |
-| 2 | **`mcp_tasks`**（1 表 45 列 + 9 索引 + 4 条租约通道 + 10 测试） | §2.6：无当前生产消费者 |
-| 3 | **`subagent_batches` / `subagent_batch_items`**（2 表 40 列 + 7 索引 + 10 测试） | §2.7：无当前生产消费者 |
-| 4 | **LangGraph Store**（`runtime/store/*` + 5 处 `store=` 管线 + 孤儿迁移） | §7.8：DB 模式下"构造了但从不读写" |
+| 2 | **`mcp_tasks`**（1 表 45 列 + 9 索引 + 4 条租约通道 + 10 测试） | 无当前生产消费者（§2.3） |
+| 3 | **`subagent_batches` / `subagent_batch_items`**（2 表 40 列 + 7 索引 + 10 测试） | 无当前生产消费者（§2.3） |
+| 4 | **LangGraph Store**（`runtime/store/*` + 5 处 `store=` 管线 + 孤儿迁移） | DB 模式下"构造了但从不读写"（§7.8） |
 | 5 | **`MemoryThreadMetaStore` 对 LangGraph `BaseStore` 的依赖**（⚠️ **只删依赖，不删能力** —— 改为约 35 行内部 dict 实现） | §7.8 决策 6 |
 | 6 | **Checkpoint blob 的对象存储溢出设计** | §7.6 |
 | 7 | **JSON → TEXT 的批量改写与 5 个 scalar 拆列** | §6.5 |
@@ -3641,7 +3186,7 @@ Goal 5  删除 PostgreSQL
 | 9 | **`pgvector` / Vector 讨论** | Store 删除后彻底消失 |
 | 10 | **`FOR SHARE` 归属校验的重新设计** | 随 `mcp_tasks` 删除 |
 | 11 | **通用 multi-chain migration framework** | §11.2 |
-| 12 | **`acquire_txn_lock` / `allocate_sequence` / `conditional_upsert` 抽象层** | §12 Goal 1 第 8 项 |
+| 12 | **`acquire_txn_lock` / `allocate_sequence` / `conditional_upsert` 抽象层** | §12 G1 横切约束 |
 | 13 | **双数据库测试参数化矩阵** | §12 Goal 4 |
 | 14 | **K8s / Helm 的 MySQL 部署形态** | §3.4 |
 
@@ -3649,8 +3194,8 @@ Goal 5  删除 PostgreSQL
 
 | # | 能力 | 延后到哪里 |
 | --- | --- | --- |
-| 1 | **Optional Compliance Pass**（`ag_` 前缀 / 索引命名 / 中文 COMMENT / 约束补名） | Core 稳定后，作为**独立变更**（**不是正式 Goal**，§15.11） |
-| 2 | **Redis checkpoint cache**（含 `checkpoint_cache_db_hash()` 的 `mysql` 分支） | **移出本迁移方案**，独立变更 |
+| 1 | **Optional Compliance Pass**（`ag_` 前缀 / 索引命名 / 中文 COMMENT / 约束补名） | Core 稳定后，作为**独立变更**（**不是正式 Goal**，§15.9） |
+| 2 | **Redis checkpoint cache** | **移出本迁移方案**，独立变更 |
 | 3 | **Redis 鉴权读缓存** | **移出本迁移方案**，独立变更 |
 | 4 | **StreamBridge 的 durable replay fallback** | **移出本迁移方案**，独立变更 |
 | 5 | **Sandbox ownership 的 Redis 持久化决策** | **移出本迁移方案**，独立变更 |
@@ -3659,7 +3204,7 @@ Goal 5  删除 PostgreSQL
 | 8 | **Checkpoint blob 的对象存储溢出** | 当实测出现 `max_allowed_packet` 逼近或存储成本问题时 |
 | 9 | **K8s / Helm 的 MySQL 部署** | 出现真实 K8s 生产需求时 |
 
-### 15.4 可以复用第三方实现的能力（**方式是固定版本依赖；vendor 仅作降级路径**）
+### 15.4 可以复用第三方实现的能力
 
 | # | 能力 | 复用对象 |
 | --- | --- | --- |
@@ -3681,10 +3226,10 @@ Goal 5  删除 PostgreSQL
 > `PyMySQLSaver` / `AIOMySQLSaver` / `ShallowAsyncMySaver` / 整个 `langgraph/store/mysql/`
 > **都不进入执行路径**，也**不需要我们维护**。
 >
-> ⚠️ **仅当 §7.3.2 第 4️⃣ 档（vendor 同一个 3.0.0 + 最小 patch）被触发时**，才需要裁剪：
+> ⚠️ **仅当 §7.3 第 4️⃣ 档被触发时**，才需要裁剪：
 > 只取 `base` / `aio_base` / `asyncmy` / `utils` / `_ainternal` **5 个文件（约 1197 行 = 整包 3830 行的 31%）**，
 > 并丢弃 `pymysql.py`（同步 Saver）、`aio.py`（aiomysql）、`shallow.py`（899 行，已 deprecated）、
-> 上游 `__init__.py`（442 行）、`_internal.py`（异步链零引用）、`langgraph/store/mysql/`（Store 整体删除）。
+> 上游 `__init__.py`（442 行）、`_internal.py`（异步链零引用）、`langgraph/store/mysql/`。
 
 ### 15.5 真正属于 MySQL 技术兼容性的工作
 
@@ -3706,9 +3251,9 @@ Goal 5  删除 PostgreSQL
 | 12 | 🔴 **`date_trunc()` / `EXTRACT(epoch)` 改写**（同样静默编译，§4.9-A） | 按实际命中数 |
 | 13 | 🔴 **生产迁移执行模型**（两份迁移产物 + Runtime 只读校验，§11） | 新增工作面 |
 
-### 15.6 仅属于企业 Schema compliance 的工作（**不进入 Core 的正式 Goal**）
+### 15.6 仅属于企业 Schema compliance 的工作（**不进入正式 Goal**）
 
-见 §4.8 第 12–18 项与 §2.5 的第二层。**主文档只写边界，详细规范移入附录或独立文档**（§2.5 关键约束 4）。摘要：
+见 §4.8 第 12–18 项与 §2.7 的第二层。**主文档只写边界，详细规范移入附录或独立文档**（§2.7 关键约束 4）。摘要：
 
 | # | 工作 | 数量 | 与 Core 的冲突点 |
 | --- | --- | --- | --- |
@@ -3716,43 +3261,21 @@ Goal 5  删除 PostgreSQL
 | 2 | 索引命名 `uk_` / `idx_` | 31 个 + checkpoint 表的 4 个 | 🟡 同上 |
 | 3 | 中文 TABLE / COLUMN COMMENT | 全量 | ⚠️ checkpoint 4 张表**加不了 COMMENT**（同上），列为例外 |
 | 4 | 未命名唯一约束补名 | 1 处 | 无 |
-| 5 | 禁止 `JSON` 列 | 11 列 + checkpoint 3 列 | 🔴 **本轮不采纳**（MySQL 原生可用） |
-| 6 | 禁止 `BLOB` / `LONGBLOB` | 2 列 | 🔴 **本轮不采纳**（`LONGBLOB` 是正确容器） |
-| 7 | 禁止 FK | 1 处 | 🔴 **本轮不采纳**（InnoDB 原生可用） |
+| 5 | 禁止 `JSON` 列 | 11 列 + checkpoint 3 列 | 🔴 **不采纳**（MySQL 原生可用） |
+| 6 | 禁止 `BLOB` / `LONGBLOB` | 2 列 | 🔴 **不采纳**（`LONGBLOB` 是正确容器） |
+| 7 | 禁止 FK | 1 处 | 🔴 **不采纳**（InnoDB 原生可用） |
 
 > 🔴 **关键判断（已冻结）**：第 1–3 项的 checkpoint 部分**不再触发 vendor** ——
 > 表名 / 索引名 / COMMENT 都属于纯风格，已被明确排除在 vendor 判据之外（§7.3.3 / §7.4）。
 > **它也不构成 Core Migration 的前置条件** ——
-> 按 §2.5，Core 用"能否正确运行"验收，Compliance 用"是否满足规范"验收。
-> ⇒ **先按默认路径（精确版本直接依赖）上线，把表名 / COMMENT 的合规问题
-> 留给 Compliance Pass 独立决策**（§15.12 Q2）。
+> 按 §2.7，Core 用"能否正确运行"验收，Compliance 用"是否满足规范"验收。
+> ⇒ **先按默认路径上线，把表名 / COMMENT 的合规问题留给 Compliance Pass 独立决策**（§15.10 Q2）。
 
-### 15.7 删除 `mcp_tasks` / `subagent_batches` 前后的量化变化
-
-| 维度 | 删除前 | 删除后 | 变化 |
-| --- | --- | --- | --- |
-| 应用表 | 15 | **12** | −3（−20%） |
-| 应用表列数 | 224 | **139** | **−85（−38%）** |
-| `sa.JSON` 列 | 20 | **11** | −9 |
-| `DateTime(timezone=True)` 列 | 48 | **29** | −19 |
-| 索引 | 47 | **31** | −16（−34%） |
-| 库层 FK | 2 | **1** | −1 |
-| **`with_for_update`** | 51 | **28** | **−23（−45%）** |
-| **`SKIP LOCKED`** | 9 | **2** | **−7（−78%）** |
-| partial unique | 3 | **3** | 0（但**需要生成列 workaround 的只有 2 处** —— OAuth 那处已实测语义等价，§4.4） |
-| `RETURNING` | 4 | **4** | 0 |
-| `ON CONFLICT` | 1 | **1** | 0 |
-| 事务级 advisory lock | 2 | **2** | 0 |
-| 能力闸门 | 7 | **6** | −1 |
-| PG 专属测试文件 | 8 | **7** | −1 |
-| 随删代码 | — | **3795 行 / 21 文件** | — |
-| 随删测试 | — | **20 个文件** | — |
-
-### 15.8 CheckpointSaver 的接入方案（🔴 **选型已冻结：精确版本直接依赖**）
+### 15.7 CheckpointSaver 的接入方案
 
 ```
 选型：🔴 已冻结 —— langgraph-checkpoint-mysql[asyncmy]==3.0.0（MIT，纯 Python，>=8.0.19）
-      ⛔ 不再是"候选"，不再讨论"是否使用第三方 Saver"
+      ⛔ 不是"候选"，不讨论"是否使用第三方 Saver"
 
 引入：精确版本直接依赖
       · 声明：harness/pyproject.toml 的 [project.optional-dependencies] 新增 mysql extra
@@ -3794,20 +3317,20 @@ Goal 5  删除 PostgreSQL
       §11.9 的 A 组（迁移产物）+ B 组（无 DDL 权限账号可正常启动）
 ```
 
-#### 15.8b fallback 路径：vendor **同一个 3.0.0** + 最小 patch（**仅 §7.3.2 第 4️⃣ 档触发时**）
+#### 15.7b fallback 路径：vendor **同一个 3.0.0** + 最小 patch（**仅 §7.3 第 4️⃣ 档触发时**）
 
 > ⚠️ **这不是"降级为另一个方案"，而是对已冻结基线做本地 patch。**
 > ⛔ 不换包、不重新选型。
 
 ```
-触发：§7.3.2 的第 1️⃣–3️⃣ 档（接入方式 / adapter-wrapper / subclass）已被逐一排除，
+触发：§7.3 的第 1️⃣–3️⃣ 档（接入方式 / adapter-wrapper / subclass）已被逐一排除，
       且确实必须修改 package 内部 SQL / 私有实现
 
 引入：vendor 上游 langgraph-checkpoint-mysql **3.0.0** 源码
       · 落点 runtime/checkpointer/mysql/（deerflow 包内 ⇒ 自动进 wheel）
       · 复制 5 个文件：base.py / aio_base.py / asyncmy.py / utils.py / _ainternal.py
       · 改 6 处 import（✅ 已实测：6 处全部命中，改写后**零残留上游 import**）
-      · 裁剪 asyncmy.py 的 ShallowAsyncMySaver（115 → 约 70 行）
+      · 裁剪 asyncmy.py 的 ShallowAsyncMySaver
       · 自写 __init__.py / pool.py；随附 LICENSE（MIT）+ UPSTREAM.md
       ⛔ 不复制：pymysql.py / aio.py / shallow.py / _internal.py / 上游 __init__.py
                 / langgraph/store/mysql/**
@@ -3815,10 +3338,9 @@ Goal 5  删除 PostgreSQL
               asyncmy / PyMySQL **不变**（无论如何都要装）
       · 🔴 版本仍是 3.0.0 ⇒ MIGRATIONS 基线不变（22 条）
       · 表 / 代码 / 配置 / 验证：**与默认路径完全一致**
-        （迁移产物照旧由运维执行，Runtime 照旧不调 setup()）
 ```
 
-### 15.9 缺口出现时的 fallback 方案（**固定阶梯，不得跳档**）
+#### 15.7c 缺口出现时的处置阶梯（**固定阶梯，不得跳档**）
 
 > 🔴 与 §7.3.2 是同一套阶梯。**实现基线永远是 `langgraph-checkpoint-mysql==3.0.0`。**
 
@@ -3851,26 +3373,25 @@ Goal 5  删除 PostgreSQL
     # ⇒ 档位回落（§1.4），重新评估迁移路径
 ```
 
-**关键点**：fallback **不再需要**"从零设计表结构 + 重写全部 SQL + 自研 `setup()` 迁移链"。
-⇒ 即使 V5 失败，风险与工作量也显著低于上一版的假设。
+**关键点**：fallback **不需要**"从零设计表结构 + 重写全部 SQL + 自研 `setup()` 迁移链"。
 **若走到第 5️⃣ 档，档位必须回到 `Feasible with significant changes`。**
 
-### 15.10 更新后的复杂度结论
+### 15.8 复杂度结论
 
 | 项 | 结论 |
 | --- | --- |
 | **CheckpointSaver 选型** | 🔴 **已冻结**：`langgraph-checkpoint-mysql[asyncmy]==3.0.0`；**默认精确版本直接依赖**（§0） |
 | **目标档位** | **`Moderate`**（条件：**V5 兼容性 / 正确性验收通过**） |
 | **V5 未做前的已证实档位** | `Feasible with significant changes` |
-| **V5 失败时的档位** | 先走 §7.3.2 / §15.9 的**前四档**（接入方式 → adapter/wrapper → subclass → vendor+patch），**档位不变**；只有走到第 5️⃣ 档（architecture blocker）才回落到 `Feasible with significant changes` |
+| **V5 失败时的档位** | 先走 §7.3 / §15.7c 的**前四档**，**档位不变**；只有走到第 5️⃣ 档才回落到 `Feasible with significant changes` |
 | **性质** | MySQL fresh-cutover / PostgreSQL backend replacement |
-| **一句话** | 最难的那件事（自研 CheckpointSaver）从"必须做"变成"**精确版本复用成熟实现**"（选型已冻结）；**依赖面只增 1 个包**（+ 驱动本身）；G0 已完成，范围收缩了 38% 的列与 45% 的 `FOR UPDATE`；🔴 **新增一条结构性硬约束** —— **生产 Runtime 零 DDL**，Schema 由运维执行、Runtime 只验证；剩下的是一批**机械但需要仔细**的方言适配与并发验证 |
+| **一句话** | 最难的那件事（自研 CheckpointSaver）已由"**精确版本复用成熟实现**"替代（选型已冻结）；**依赖面只增 1 个包**（+ 驱动本身）；G0 已完成，范围收缩了 38% 的列与 45% 的 `FOR UPDATE`；🔴 **新增一条结构性硬约束** —— **生产 Runtime 零 DDL**，Schema 由运维执行、Runtime 只验证；剩下的是一批**机械但需要仔细**的方言适配与并发验证 |
 
-### 15.11 更新后的 Goal 拆分（**收敛为 6 个**）
+### 15.9 Goal 拆分（**6 个**）
 
 | Goal | 内容 | 退出条件 | 前置 Gate | 可独立交付 |
 | --- | --- | --- | --- | --- |
-| **Goal 0 —— Runtime 范围清理** ✅ **DONE**（`a55e5734`） | 删除 Channel / GitHub Webhook、`mcp_tasks`、`subagent_batches`、LangGraph Store（含 `MemoryThreadMetaStore` 改内部 dict，§7.8 决策 6） | ✅ 已满足：① Gateway 正常启动；② 普通 MCP 可用；③ 普通 SubAgent `task` 可用；④ 最终 ORM 表集稳定（**12 表 / 139 列**）；⑤ 重新扫描 PG 专属依赖 | — | ✅ **已完成** |
+| **Goal 0 —— Runtime 范围清理** ✅ **DONE**（`a55e5734`） | 删除 Channel / GitHub Webhook、`mcp_tasks`、`subagent_batches`、LangGraph Store（含 `MemoryThreadMetaStore` 改内部 dict） | ✅ 已满足：① Gateway 正常启动；② 普通 MCP 可用；③ 普通 SubAgent `task` 可用；④ 最终 ORM 表集稳定（**12 表 / 139 列**）；⑤ 重新扫描 PG 专属依赖 | — | ✅ **已完成** |
 | **Goal 1 —— MySQL 兼容性与风险 Gate** | **G1-A（V1）** MySQL 独立链；**G1-B（V5）** 对**已冻结**的 `langgraph-checkpoint-mysql==3.0.0` 做兼容性 / 正确性验证；**G1-C** 生产迁移执行模型（两份产物 + zero DDL + 只读校验 + fail closed）。✅ V3 / V6 / V2 已关闭 | 三项各自有明确结论（V1/V5 通过或失败 + 处置；G1-C 设计定稿） | — | ✅ |
 | **Goal 2 —— MySQL 持久化底座** | `asyncmy`；必需的 `PyMySQL`；Application MySQL 连接；**Async CheckpointSaver**（已冻结的 3.0.0）；**Runtime Schema / 版本校验**；`0001_mysql_baseline`；**Checkpoint 迁移产物**；Dev/Test 迁移支持 | 🔴 **生产 Runtime 不执行任何 DDL**；§11.9 的 A 组 + B 组验收通过 | **V1 / V5** | ✅ |
 | **Goal 3 —— 应用 SQL 与并发迁移** | `RETURNING`；advisory lock；partial unique（**2 处**）；`JsonMatch`；`DATETIME(6)` / UTC；`FOR UPDATE` / `SKIP LOCKED`；MySQL `1062` / `1213`（**含 §4.9-D 的判别改写**）；`run_events.seq`；Scheduler 并发 | §4.9-A 的四类静默失效构造全部清除；并发回归通过 | V3（✅）/ V6（✅） | ✅ |
@@ -3881,16 +3402,16 @@ Goal 5  删除 PostgreSQL
 
 | 项 | 去处 |
 | --- | --- |
-| **Optional Compliance Pass**（`ag_` 前缀 / 索引命名 / COMMENT） | **不是正式 Goal** —— 主文档只写边界（§2.5 / §15.6），详细规范移入附录或独立文档。**不阻塞迁移** |
-| **Redis 的一切**（checkpoint cache / delta 缓存 / sandbox ownership 持久化） | **移出本迁移方案**，作为独立跟进设计（§2.3） |
-| **对象存储溢出 checkpoint blob** | 不在本轮；按真实 payload 独立评估（§7.6） |
-| **Kubernetes / Helm 的 MySQL 部署形态** | 不在本轮（§3.4） |
+| **Optional Compliance Pass**（`ag_` 前缀 / 索引命名 / COMMENT） | **不是正式 Goal** —— 主文档只写边界（§2.7 / §15.6），详细规范移入附录或独立文档。**不阻塞迁移** |
+| **Redis 的一切**（checkpoint cache / delta 缓存 / sandbox ownership 持久化） | **移出本迁移方案**，作为独立跟进设计（§2.5） |
+| **对象存储溢出 checkpoint blob** | 不在本次迁移范围；按真实 payload 独立评估（§7.6） |
+| **Kubernetes / Helm 的 MySQL 部署形态** | 不在本次迁移范围（§3.4） |
 
 > **Goal 0 已完成** ⇒ **Goal 1 是当前唯一的起点**（G1-A / G1-B / G1-C 三项可并行推进）。
 > **Goal 2 中的 CheckpointSaver 接入必须最先做**（最高风险优先验证），但**必须先过 V1 / V5**。
 > **Goal 5 之后不再保留 PG 兼容分支** —— 不要留"以防万一"的双分支。
 
-### 15.12 剩余真正需要项目负责人确认的问题
+### 15.10 剩余真正需要项目负责人确认的问题
 
 > 🔴 **判定标准（严格执行）**：凡是**能通过代码调查、MySQL 8.0.24 实测、V1 / V5 测试
 > 或兼容性测试**回答的，**一律不列在这里** —— 那些已在正文给出结论。
@@ -3903,7 +3424,7 @@ Goal 5  删除 PostgreSQL
 | **Q3** | **Compliance Pass 的交付时点**（与 Core 同批 / Core 稳定后独立）？ | 决定失败归因是否可分离 | ✅ 建议 Core 稳定后独立交付 |
 | **Q4** | **是否接受"本期不新增 Kubernetes / Helm 的 MySQL 部署形态"？** | 决定部署工作范围 | ✅ 建议接受（当前真实目标只有 compose + external DSN） |
 
-> ✅ **本轮从"待确认"中移除的项**（已由调查 / 实测 / 已冻结决策给出结论，**不再需要负责人拍板**）：
+> ✅ **已由调查 / 实测 / 已冻结决策给出结论、不再需要负责人拍板的项**：
 >
 > | 原问题 | 现结论 | 依据 |
 > | --- | --- | --- |
@@ -3912,17 +3433,17 @@ Goal 5  删除 PostgreSQL
 > | **是否接受第三方 Saver？** | 🔴 **接受**（MIT / 纯 Python / MySQL ≥ 8.0.19） | §0 / §7.2 |
 > | **V5 通过后再决定用不用？** | 🔴 **不再适用** —— V5 是 compatibility / correctness Gate，不是 selection Gate | §7.3.1 |
 > | **是否接受 checkpoint 4 张表不进 MySQL 链、由运维执行上游派生迁移产物？** | **接受** —— 这是"生产 Runtime 零 DDL"的必然结果 | §11.0 / §11.4 |
-> | `mcp_tasks` / `subagent_batches` 是否有生产使用计划？ | **已无意义** —— 两模块已随 G0 删除（`a55e5734`），ORM 中不再存在 | §12 Goal 0 |
+> | `mcp_tasks` / `subagent_batches` 是否有生产使用计划？ | **已无意义** —— 两模块已随 G0 删除 | §12 Goal 0 |
 > | 是否接受 `LONGBLOB` 单库直存（不做对象存储溢出）？ | **接受** —— 上游 schema 本来就是 `LONGBLOB`（已实测导出） | §7.6 / §11.4.1 |
 > | 是否接受保留 `sa.JSON` → 原生 `JSON`？ | **接受** —— MySQL 原生可用，无正确性问题 | §6.5 |
 > | 是否接受保留 FK？ | **接受** —— InnoDB 原生可用 | §6.6 |
-> | 是否接受"不做双数据库测试参数化矩阵"？ | **接受** —— PG 最终删除 | §2.3 |
-> | `MemoryThreadMetaStore` 怎么处理？ | **保留能力，改内部 dict**（不再挂起） | §7.8 决策 6 |
+> | 是否接受"不做双数据库测试参数化矩阵"？ | **接受** —— PG 最终删除 | §12 Goal 4 |
+> | `MemoryThreadMetaStore` 怎么处理？ | **保留能力，改内部 dict** | §7.8 决策 6 |
 > | `idx_users_oauth_identity` 是否需要生成列？ | **不需要** —— 已实测语义等价 | §4.4 |
 > | `run_events.seq` 能否串行化？ | **不能；修法已实测有效**（锁 `threads_meta` 行 + 幂等建锚点） | §8.6 |
 > | `checkpoint_ns` 真实最大长度？ | **不再是问题** —— 主键用固定 16 字节 hash | §11.4.3 |
 > | checkpoint 表的锁锚点表名？ | **`threads_meta`（PK `thread_id`）**，且需自保证锚点存在 | §8.6 |
->
+
 > ⛔ **以下问题不得再出现在 Open Questions / Owner Decisions / Architecture Decisions Pending /
 > G1 待确认事项中**（已冻结或已由代码事实解决）：
 > ```
@@ -3939,14 +3460,14 @@ Goal 5  删除 PostgreSQL
 
 | 类别 | 路径 / 方法 |
 | --- | --- |
-| 🔴 **G0 完成状态与当前 HEAD（本轮新增）** | `git log -1 --format='%H %ci %s'` → **`a55e573434f69f2c333cc057f92ac8f73cba1b92`** / `2026-09-18 09:03:18 +0800` / `refactor(runtime): remove channels, background MCP tasks, subagent batches, and LangGraph Store`；`git status --porcelain` **空**（工作区干净）；分支 `feat_portal`。审计记录：`docs/architecture/mysql-goal0-audit.md` |
-| 🔴 **当前 Application Schema 反射（本轮新增）** | `backend/.venv/bin/python` 逐个 import `deerflow.persistence.*.model` → 读 `Base.metadata.tables`。结果：**12 表 / 139 列**；`DateTime(timezone=True)` **29**；`sa.JSON` **11**；FK **1**（`user_preferences.user_id → users.id`）；索引 **31**。逐表：`runs` 31 / `scheduled_tasks` 23 / `scheduled_task_runs` 16 / `threads_meta` 10 / `run_events` 10 / `users` 9 / `personal_access_tokens` 9 / `feedback` 8 / `projects` 8 / `agents` 7 / `managed_subagents` 5 / `user_preferences` 3 |
-| 🔴 **并发原语复扫（本轮新增）** | `with_for_update` 按**含该关键字的行数**统计（生产代码，排除 `tests/` 与 `migrations/versions/`）：`scheduled_task_runs/sql.py` 8 + `scheduled_tasks/sql.py` 11 + `thread_meta/sql.py` 6 + `runtime/events/store/db.py` 1 + `run/sql.py` 1 + `projects/sql.py` 1 = **28** ✅；`RETURNING` = `run/sql.py` 3 + `scheduled_task_runs/sql.py` 1 = **4** ✅；`SKIP LOCKED` = `scheduled_tasks/sql.py` **2** ✅；事务级 advisory lock = `scheduled_task_runs/sql.py` 1 + `runtime/events/store/db.py` 1 = **2** ✅ |
-| 🔴 **PG 耦合面复扫（本轮新增）** | 含 `postgres`（大小写不敏感）的 `.py` 文件：`packages/harness/deerflow` **39** + `app/` **5** + `tests/` **47** = **91**（生产代码 **44**）。⚠️ 旧口径 113 已不成立 |
-| 🔴 **数据库能力闸门复扫（本轮新增）** | 6 处会拒绝 MySQL 启动的守卫：`app/gateway/deps.py:79`（`backend != "postgres"` → `SystemExit`）· `deps.py:92`（同）· `deps.py:128`（`not in ("sqlite","postgres")` → `SystemExit`）· `persistence/agents/__init__.py:47`（`ValueError`）· `persistence/managed_subagents/__init__.py:32`（`ValueError`）· `app/gateway/health.py:229`（返回 `DATABASE_UNREACHABLE`）。⚠️ 注意前两处是 **`!= "postgres"`** 形式，不是元组形式。另有 **2 处 `Literal` 类型定义**需扩展：`config/database_config.py:143`、`config/checkpointer_config.py:9` |
-| 🔴 **锁锚点表名（本轮新增）** | `persistence/thread_meta/model.py:13-16`：`__tablename__ = "threads_meta"`，**PK `thread_id: String(64)`**。⚠️ 仓库中**不存在**名为 `threads` 的表 ⇒ 早期草稿的 `SELECT id FROM threads ...` 是错的（§8.6） |
-| 🔴 **锚点存在性缺口（本轮新增）** | `app/gateway/services.py:190-226` `_ensure_thread_metadata()` 在 run admission 创建 `threads_meta` 行；但 `services.py:1628-1633` 的失败日志带 `(non-fatal)`，`services.py:1662-1665` 注释明确 *"Continue through run_agent even after metadata abort, timeout, or strict verification failure"*；且全仓**无调用点**传 `require_existing_thread=True`（`services.py:1429` 默认 `False`）⇒ **锚点行不保证存在**，锁方案必须自保证 |
-| 🔴 **G0 残留（本轮新增，易误判）** | `persistence/{mcp_tasks,subagent_batches,channel_connections,webhook_delivery}/` 目录下**只剩未跟踪的 `__pycache__`**（源码已删，`persistence/models/__init__.py` 不再 import）；`persistence/migrations/versions/0011_mcp_tasks.py` 与 `0016_subagent_batches.py` **仍被 git 跟踪**，属不可变的 PG 历史链，只作审计、**不由 Gateway 回放** |
+| 🔴 **G0 完成状态与当前 HEAD** | `git log -1 --format='%H %ci %s'` → **`a55e573434f69f2c333cc057f92ac8f73cba1b92`** / `2026-09-18 09:03:18 +0800` / `refactor(runtime): remove channels, background MCP tasks, subagent batches, and LangGraph Store`；`git status --porcelain` **空**；分支 `feat_portal`。审计记录：`docs/architecture/mysql-goal0-audit.md` |
+| 🔴 **当前 Application Schema 反射** | `backend/.venv/bin/python` 逐个 import `deerflow.persistence.*.model` → 读 `Base.metadata.tables`。结果：**12 表 / 139 列**；`DateTime(timezone=True)` **29**；`sa.JSON` **11**；FK **1**（`user_preferences.user_id → users.id`）；索引 **31**。逐表：`runs` 31 / `scheduled_tasks` 23 / `scheduled_task_runs` 16 / `threads_meta` 10 / `run_events` 10 / `users` 9 / `personal_access_tokens` 9 / `feedback` 8 / `projects` 8 / `agents` 7 / `managed_subagents` 5 / `user_preferences` 3 |
+| 🔴 **并发原语复扫** | `with_for_update` 按**含该关键字的行数**统计（生产代码，排除 `tests/` 与 `migrations/versions/`）：`scheduled_task_runs/sql.py` 8 + `scheduled_tasks/sql.py` 11 + `thread_meta/sql.py` 6 + `runtime/events/store/db.py` 1 + `run/sql.py` 1 + `projects/sql.py` 1 = **28** ✅；`RETURNING` = `run/sql.py` 3 + `scheduled_task_runs/sql.py` 1 = **4** ✅；`SKIP LOCKED` = `scheduled_tasks/sql.py` **2** ✅；事务级 advisory lock = `scheduled_task_runs/sql.py` 1 + `runtime/events/store/db.py` 1 = **2** ✅ |
+| 🔴 **PG 耦合面复扫** | 含 `postgres`（大小写不敏感）的 `.py` 文件：`packages/harness/deerflow` **39** + `app/` **5** + `tests/` **47** = **91**（生产代码 **44**） |
+| 🔴 **数据库能力闸门复扫** | 6 处会拒绝 MySQL 启动的守卫：`app/gateway/deps.py:79`（`backend != "postgres"` → `SystemExit`）· `deps.py:92`（同）· `deps.py:128`（`not in ("sqlite","postgres")` → `SystemExit`）· `persistence/agents/__init__.py:47`（`ValueError`）· `persistence/managed_subagents/__init__.py:32`（`ValueError`）· `app/gateway/health.py:229`（返回 `DATABASE_UNREACHABLE`）。⚠️ 前两处是 **`!= "postgres"`** 形式，不是元组形式。另有 **2 处 `Literal`** 需扩展：`config/database_config.py:143`、`config/checkpointer_config.py:9` |
+| 🔴 **锁锚点表名** | `persistence/thread_meta/model.py:13-16`：`__tablename__ = "threads_meta"`，**PK `thread_id: String(64)`**。⚠️ 仓库中**不存在**名为 `threads` 的表 ⇒ `SELECT id FROM threads ...` 是错的（§8.6） |
+| 🔴 **锚点存在性缺口** | `app/gateway/services.py:190-226` `_ensure_thread_metadata()` 在 run admission 创建 `threads_meta` 行；但 `services.py:1628-1633` 的失败日志带 `(non-fatal)`，`services.py:1662-1665` 注释明确 *"Continue through run_agent even after metadata abort, timeout, or strict verification failure"*；且全仓**无调用点**传 `require_existing_thread=True`（`services.py:1429` 默认 `False`）⇒ **锚点行不保证存在**，锁方案必须自保证 |
+| 🔴 **G0 残留（易误判）** | `persistence/{mcp_tasks,subagent_batches,channel_connections,webhook_delivery}/` 目录下**只剩未跟踪的 `__pycache__`**（源码已删，`persistence/models/__init__.py` 不再 import）；`persistence/migrations/versions/0011_mcp_tasks.py` 与 `0016_subagent_batches.py` **仍被 git 跟踪**，属不可变的 PG 历史链，只作审计、**不由 Gateway 回放** |
 | 依赖实测 | `backend/.venv/bin/python -c "importlib.metadata.version(...)"`（`langgraph` 1.2.9 / `langgraph-checkpoint` **4.1.1** / `langgraph-checkpoint-postgres` **3.1.1 已安装** / `langgraph-checkpoint-sqlite` 3.1.1 / `sqlalchemy` 2.0.49 / `asyncpg` 0.31.0 / `psycopg` 3.3.3 / `alembic` 1.18.4） |
 | **第三方包元数据** | `curl https://pypi.org/pypi/langgraph-checkpoint-mysql/json` → 3.0.0（2026-01-23），`requires_dist` = `langgraph-checkpoint>=2.1.2` / `orjson>=3.10.1` / `typing-extensions>=4.12.2`；extras `pymysql` / `aiomysql` / **`asyncmy`**；`License-Expression: MIT`，`Author-email: Theodore Ni`，`Requires-Python: >=3.10`，`Repository: https://www.github.com/tjni/langgraph-checkpoint-mysql` |
 | **第三方包源码** | `curl` 下载 `langgraph_checkpoint_mysql-3.0.0-py3-none-any.whl`（38,009 字节）→ 解包；`langgraph/checkpoint/mysql/` 共 10 个 py 文件 / 2895 行，加 `langgraph/store/mysql/` 7 个文件后共 **16 个 py 文件 / 3830 行** |
@@ -3960,9 +3481,9 @@ Goal 5  删除 PostgreSQL
 | **打包与 extra 落点** | `harness/pyproject.toml:82-83` `[tool.hatch.build.targets.wheel] packages = ["deerflow"]` ⇒ 放 `deerflow/` 下的 vendor 代码**自动进 wheel**；`:56-63` 的 `[project.optional-dependencies] postgres` extra 是新增 `mysql` extra 的并列位置 |
 | **驱动安装现状** | `backend/.venv/bin/python -c "importlib.metadata.version(...)"` → `typing-extensions` **4.15.0 已装** ✅；`asyncmy` **未装**（`PackageNotFoundError`）⇒ 它是本次要新增的驱动 |
 | **Saver 构造的 loop 约束** | `aio_base.py:34-43`：`self.loop = asyncio.get_running_loop()`；`:403-544` 的 5 个**同步方法不是 stub**，而是 `asyncio.run_coroutine_threadsafe(..., self.loop)` 转发 ⇒ 必须在运行中的循环内构造 |
-| 🔴 **上游只给单连接，不给池（本轮新增）** | `asyncmy.py:39-62` 的 `from_conn_string` 内部是 `async with connect(**cls.parse_conn_string(conn_string), autocommit=True) as conn` —— **单连接**；`asyncmy.py:21-37` 的 `parse_conn_string` 是**公开静态方法**，可直接复用做 DSN 解析 ⇒ 项目需自建 `pool.py`（`asyncmy.create_pool`），**两条路径都需要** |
-| **第三方包运行语义** | `aio_base.py:49-73`（`setup`）、`:75-139`（`alist`）、`:141-204`（`aget_tuple`）、`:206-277`（`aput`）、`:279-310`（`aput_writes`）、`:312-331`（`adelete_thread`）、`:333-356`（`_cursor` 事务）、`:358-401`（`_load_checkpoint_tuple`）；`base.py:25-149`（`MIGRATIONS` **22 条** —— 由 `ast` 解析常量长度实测，**上一版记的 18 条是错的**）、`:151-216`（`SELECT_SQL` / `SELECT_PENDING_SENDS_SQL`）、`:218-243`（`UPSERT_*`）、`:350-359`（`get_next_version`）、`:361-403`（`_search_where`）；`_ainternal.py:73-83`（**池的鸭子类型识别**）；`utils.py:10-14`（`decode_base64_blob`）、`:83-86`（`mysql_mariadb_branch` → `/*!50700 mysql*//*M! mariadb*/`，**MySQL 只执行第一段**） |
-| 🔴 **真实 MySQL 8.0.24 容器实测（本轮新增）** | `docker run mysql:8.0.24`（`ServerVersion 8.0.24`）。**全部结论来自真实服务端执行，不再是推断** |
+| 🔴 **上游只给单连接，不给池** | `asyncmy.py:39-62` 的 `from_conn_string` 内部是 `async with connect(**cls.parse_conn_string(conn_string), autocommit=True) as conn` —— **单连接**；`asyncmy.py:21-37` 的 `parse_conn_string` 是**公开静态方法**，可直接复用做 DSN 解析 ⇒ 项目需自建 `pool.py`（`asyncmy.create_pool`），**两条路径都需要** |
+| **第三方包运行语义** | `aio_base.py:49-73`（`setup`）、`:75-139`（`alist`）、`:141-204`（`aget_tuple`）、`:206-277`（`aput`）、`:279-310`（`aput_writes`）、`:312-331`（`adelete_thread`）、`:333-356`（`_cursor` 事务）、`:358-401`（`_load_checkpoint_tuple`）；`base.py:25-149`（`MIGRATIONS` **22 条** —— 由 `ast` 解析常量长度实测）、`:151-216`（`SELECT_SQL` / `SELECT_PENDING_SENDS_SQL`）、`:218-243`（`UPSERT_*`）、`:350-359`（`get_next_version`）、`:361-403`（`_search_where`）；`_ainternal.py:73-83`（**池的鸭子类型识别**）；`utils.py:10-14`（`decode_base64_blob`）、`:83-86`（`mysql_mariadb_branch` → `/*!50700 mysql*//*M! mariadb*/`，**MySQL 只执行第一段**） |
+| 🔴 **真实 MySQL 8.0.24 容器实测** | `docker run mysql:8.0.24`（`ServerVersion 8.0.24`）。**全部结论来自真实服务端执行，不是推断** |
 | **Checkpoint 迁移链实测执行** | 用 `ast` 从 wheel 的 `base.py` 取 `MIGRATIONS`（**22 条**）→ 渲染为 SQL → **在真实 8.0.24 上逐条执行，全部成功** → `mysqldump --no-data` 导出最终 schema：4 张表；PK 分别为 `(thread_id, checkpoint_ns_hash, checkpoint_id)` / `(thread_id, checkpoint_ns_hash, channel, version)` / `(thread_id, checkpoint_ns_hash, checkpoint_id, task_id, idx)`；`checkpoint_ns_hash binary(16) NOT NULL` **是普通列**；`checkpoint_ns varchar(2000)`；`blob longblob`；4 个无前缀索引名；`metadata json NOT NULL DEFAULT (_latin1'{}')` |
 | 🔴 **迁移脚本不可重复执行（实测）** | 同一组 22 条语句**再跑一遍** → `ERROR 1061 Duplicate key name 'checkpoints_thread_id_idx'`（第 51 行）⇒ **产物必须是"线性 + `checkpoint_migrations` 版本表守卫"，不是幂等脚本** |
 | **OAuth 唯一索引语义（实测）** | `UNIQUE (oauth_provider, oauth_id)`：4 行 `(NULL,NULL)` 共存 ✅、3 行 `('github',NULL)` 共存 ✅、2 行 `(NULL,'oid-1')` 共存 ✅、重复 `('github','oid-9')` → **`ERROR 1062`** ✅ ⇒ **语义完全等价，不需要生成列** |
@@ -3975,28 +3496,23 @@ Goal 5  删除 PostgreSQL
 | **`engine.py` 的 DDL 面（逐处）** | `:58-82` `_auto_create_postgres_db`（连维护库 `CREATE DATABASE`）、`:199-212` `CreateSchema`、`:213` `bootstrap_schema(...)`、`:214-236` "does not exist" 时自动建库 + 重建 engine + 重跑；唯一生产调用点 `app/gateway/deps.py:432` |
 | **`bootstrap_schema` 是执行器不是校验器** | `bootstrap.py:603-701`：`empty` → `create_all` + `stamp`（`:628-632`）；`legacy` → `_run_baseline_create_all_sync` + `stamp` + `upgrade`（`:634-653`）；`versioned` → `upgrade head`（`:655-693`）；否则 refuse（`:695`）。⇒ **生产路径不能复用它做校验** |
 | **`MemoryThreadMetaStore` 的调用面** | 生产仅 `deps.py:496-498`（DB 模式下 `sf is not None` ⇒ 选中 `ThreadMetaRepository`）；实际消费者**全是测试** + `scripts/benchmark/checkpoint/bench_production.py:495,517`；只用到 `BaseStore` 的 **4 个方法**（`aget`/`aput`/`adelete`/`asearch`） |
-| **`server_default` 审计** | 存活表中仅 **4 个**字段带 `server_default`（`scheduled_task_runs.attempt_count`、`runs.operation_kind`、`runs.token_usage_by_model`、`scheduled_tasks.last_occurrence_seq`），全部 PG 已有；其余全在已删模块 / 已删表 |
+| **`server_default` 审计** | 存活表中仅 **4 个**字段带 `server_default`（`scheduled_task_runs.attempt_count`、`runs.operation_kind`、`runs.token_usage_by_model`、`scheduled_tasks.last_occurrence_seq`），全部 PG 已有 |
 | **绕过 ORM 的写入审计** | 全仓 raw `INSERT INTO` 仅在 `community/aio_sandbox/network_proxy.py`（自有 SQLite）与 `agents/task_continuity/archive.py` / `deermem/core/retrieval.py`（FTS5）—— **零处写应用 ORM 表** |
-| **vendor 路径可行性验证（本轮新增）** | 按 §7.4 附 B 的 6 处 import 改写**程序化构建探针包** → `applied 6 import rewrites`、`residual upstream imports: NONE`、`MIGRATIONS entries = 22`、渲染出的 22 条 SQL 在真实 8.0.24 上全部执行成功 ⇒ **vendor 路径可行，但默认不采用** |
+| **vendor 路径可行性验证** | 按 §7.4 附 B 的 6 处 import 改写**程序化构建探针包** → `applied 6 import rewrites`、`residual upstream imports: NONE`、`MIGRATIONS entries = 22`、渲染出的 22 条 SQL 在真实 8.0.24 上全部执行成功 ⇒ **vendor 路径可行，但默认不采用** |
 | **基类接口** | `.venv/.../langgraph/checkpoint/base/__init__.py`：`delete_for_runs:331`、`copy_thread:350`、`prune:374`、`aget_tuple:429`、`alist:443`、`aput:468`、`aput_writes:491`、`adelete_thread:511`、`adelete_for_runs:522`、`get_next_version:692`、`get_serializable_checkpoint_metadata:778`、`WRITES_IDX_MAP:795`；**全部用 `raise NotImplementedError` 而非 `@abstractmethod`** |
 | **checkpointer 生产调用点** | `services.py:1116,1136,1142,1347`、`threads.py:682,800,919`、`checkpoint_state.py:155,161`、`checkpoint_mode.py:140,146`、`worker.py:1657`、`client.py:681,735`；`copy_thread`/`prune`/`delete_for_runs` **零生产调用**（仅 `cached_saver.py:268-322` 透传） |
-| LangGraph 后端能力 | `ls .venv/lib/python3.12/site-packages/langgraph/checkpoint/` → `base memory postgres serde sqlite`；`ls .../langgraph/store/`；`grep -rli mysql .venv/.../langgraph/`（零命中） |
+| LangGraph 后端能力 | `ls .venv/lib/python3.12/site-packages/langgraph/checkpoint/` → `base memory postgres serde sqlite`；`grep -rli mysql .venv/.../langgraph/`（零命中） |
 | PG saver DDL/SQL | `.venv/.../langgraph/checkpoint/postgres/base.py:47-123,195-202` |
-| **Schema 转储（全量）** | `/tmp/schema_dump.py`（SQLAlchemy 反射 `Base.metadata` + `CreateTable().compile(dialect=mysql/postgresql)`）→ 20 表 / 274 列 / 25 JSON / 61 dt / 58 idx / 4 FK |
-| **Schema 转储（删三模块）** | `/tmp/slim_probe.py` → 17 表 / 189 列；逐表列数与索引清单；`mcp_tasks` 45 列 9 索引、`subagent_batch_items` 23 列 3 索引、`subagent_batches` 17 列 4 索引 |
 | **方言编译探针** | `/tmp/dialect_probe.py`：`UPDATE…RETURNING`、`with_for_update(skip_locked/read)`、`SELECT max(…) FOR UPDATE`、`JsonMatch`、`DATETIME` fsp、键长估算 |
 | **`mcp_tasks` 无消费者证据** | `config.yaml:247-256`（`enabled: false`）；`config/mcp_tasks_config.py`（默认 `False`）；`mcp/tools.py:658`（`_make_background_submit_tool`）、`:745-763`（**只遍历 `server_config.task_toolsets`**）；**全仓 `task_toolsets` 的实际声明只在 `backend/tests/`**，`config.yaml` / `config.example.yaml` 零命中；`mcp/tasks/runtime.py:112-113`（配置了 toolset 但未启用即抛错） |
 | **`subagent_batches` 无消费者证据** | `config.yaml:112-123`（`enabled: false`）；`config/subagent_batches_config.py:9`（默认 `False`）；`app.py:401-416`（只有 `enabled` 为真才 `start()` + `set_subagent_batch_submitter()` + `available = True`）；`routers/subagent_batches.py:86`（`available` 为假即拒绝）；`routers/features.py:57,64`（feature flag）；`factory.py:358-373`（batch 工具挂载条件） |
-| **`FOR UPDATE` 口径** | 按"包含 `with_for_update` 的行数"统计（含方法链与关键字参数两种写法）：`subagent_batches/sql.py` 14、`scheduled_tasks/sql.py` 11、`mcp_tasks/sql.py` 9、`scheduled_task_runs/sql.py` 8、`thread_meta/sql.py` 6、`runtime/events/store/db.py` 1、`run/sql.py` 1、`projects/sql.py` 1 → **51**；删三模块后 **28** |
-| **`SKIP LOCKED` 口径** | `grep -rn "skip_locked=True"` → 全仓 9；其中 7 在 `mcp_tasks` + `subagent_batches`；删后 **2**（`scheduled_tasks/sql.py:332,530`） |
 | 配置模型 | `config/database_config.py:142-209`、`config/checkpointer_config.py:9-32`、`config/object_storage_config.py`、`config/app_config.py:323-329,473-519` |
 | PostgreSQL 适配层 | `persistence/postgres_schema.py`、`persistence/engine.py:30-50,58-92,117-131,169-233`、`persistence/bootstrap.py`（700 行） |
-| ORM 模型 | `persistence/base.py` + 12 个 `*/model.py`（**12 张应用表 / 139 列**，逐表列数见 §2.2-C） |
+| ORM 模型 | `persistence/base.py` + 12 个 `*/model.py`（**12 张应用表 / 139 列**，逐表列数见 §2.2） |
 | Migration（PG 链，**immutable、不被 MySQL 引用**） | `persistence/migrations/versions/0001_baseline.py` … `0023_user_preferences.py`（24 个文件）、`migrations/env.py:92-101`、`migrations/_helpers.py:31-128`、`migrations/_env_filters.py:28-35`、`migrations/AGENTS.md:118-142`（**含 `:128` 的"独立 alembic chain + 独立 `version_table`"先例**） |
 | **Bootstrap** | `persistence/bootstrap.py`：三分支状态机、`_MIGRATIONS_DIR`（**单 `script_location`**）、`_HEAD_REVISION:109` / `_KNOWN_REVISIONS:110` **模块级缓存**、`_get_head_revision():331-340`、`_get_known_revisions():345-351`、`_CANONICAL_0019_SCHEMA_FLOOR:134-171`、`_BASELINE_TABLE_NAMES:198-210`、`_BASELINE_INDEX_NAMES:215-249`、`_PG_LOCK_KEY:183`、`_read_database_revision()`（要求**恰好一行**）、`bootstrap_schema(engine, *, backend, postgres_schema="")` |
 | Checkpointer | `runtime/checkpointer/{provider,async_provider,cached_saver}.py`、`checkpoint_patches.py`、`runtime/checkpoint_mode.py:1-70`（`full` / `delta` 的定义） |
 | **Store（删除对象）** | `runtime/store/{provider,async_provider,_sqlite_utils}.py`；唯一真实消费者 `persistence/thread_meta/memory.py:25-27`；构造点 `app/gateway/deps.py:435`（**无条件**）与 `:498`；5 处 `store=` 挂载点 |
-| **能力闸门** | **6 处**会拒绝 MySQL 启动的守卫：`deps.py:79` / `deps.py:92`（`backend != "postgres"` → `SystemExit`）、`deps.py:128`（`not in ("sqlite","postgres")` → `SystemExit`）、`persistence/agents/__init__.py:47` 与 `persistence/managed_subagents/__init__.py:32`（`ValueError`）、`app/gateway/health.py:229`（`DATABASE_UNREACHABLE`）；另 **2 处 `Literal`**：`config/database_config.py:143` / `config/checkpointer_config.py:9`（§12 Goal 4） |
 | **同步 / 异步消费者** | `persistence/agents/sql.py:45-52`（**同步** `create_engine`）；`client.py:145,471-475,618-624,918-922`（`DeerFlowClient`，**零生产引用**）；`runtime/checkpointer/provider.py:103,115-143`（同步 Saver 分支） |
 | 并发原语 | `runtime/events/store/db.py:110-190`、`persistence/run/sql.py:540-640`、`persistence/scheduled_task_runs/sql.py:195-220,300-330,750-770`、`persistence/scheduled_tasks/sql.py`、`persistence/user/preferences.py:4-25` |
 | **JSON 方言 hack** | `persistence/json_compat.py`（231 行）：`_SQLITE:147-156`、`_PG:158-167`、`_build_clause:182-201`、`_compile_sqlite:204-212`、`_compile_pg:215-222`、**`_compile_default:225-227`（`raise NotImplementedError`）**、`json_match:230-231`；调用点 `thread_meta/sql.py:14,230,247,261` |
@@ -4005,7 +3521,7 @@ Goal 5  删除 PostgreSQL
 | 多实例闸门 | `app/gateway/deps.py:49-113,388-391` |
 | 部署 | `deploy/helm/deer-flow/values.yaml:119-160,185-216`、`docker/*.yaml`、`config.example.yaml:1794-1820,1877-1886` |
 | 既有相关分析 | `docs/architecture/redis-checkpoint-store-feasibility.md`、`docs/architecture/phase5-*.md` |
-| 测试 | **91 个**命中 `postgres` 的 `.py` 文件（`packages/harness/deerflow` 39 + `app/` 5 + `tests/` 47）；**8 个 PG 专属文件**；**20 个**已随 `mcp_tasks` / `subagent_batches` 删除的测试文件 |
+| 测试 | **91 个**命中 `postgres` 的 `.py` 文件（`packages/harness/deerflow` 39 + `app/` 5 + `tests/` 47）；**7 个 PG 专属文件** |
 
 ### 合规声明
 
@@ -4018,21 +3534,12 @@ Goal 5  删除 PostgreSQL
   仅**下载 wheel 到 `/tmp` 并解包读源码**（`.whl` 与解包目录均在 `/tmp`，不进仓库）；
 - ❌ **未把任何上游源码复制进仓库** —— §7.4 附 A 指定的落点
   `backend/packages/harness/deerflow/runtime/checkpointer/mysql/` **尚未创建**；
-  且按 §7.4 的默认路径（精确版本直接依赖），**它也不应该被创建**，
-  除非 §7.3.2 第 4️⃣ 档被触发；
+  且按默认路径（精确版本直接依赖），**它也不应该被创建**，
+  除非 §7.3 第 4️⃣ 档被触发；
 - ❌ 未新增任何依赖（`harness/pyproject.toml` 的 `mysql` extra 只是方案）；
-- ❌ 未执行任何生产迁移或数据变更；
-- ❌ **未改动仓库内任何生产代码、Schema 或 migration 文件** —— 本轮是**纯文档设计整改**。
+- ❌ 未执行任何生产迁移或数据变更。
 
-**📌 文档状态更新轮（G0 完成后）的额外声明**：
-
-- ✅ 本轮**只修改设计文档**（`docs/architecture/mysql-migration-plan.md`）与必要的记录；
-- ❌ **未开始 G1 的生产代码实现** —— V1 / V5 均**未执行**，`mysql` extra **未落地**；
-- 🔴 **G0 的删除工作不是本轮做的** —— 它由提交 `a55e5734` 完成，本轮只是**把文档基线对齐到它**；
-- ⚠️ 本轮**未重新做大规模统计**，只在当前 HEAD 上复核了与结论直接相关的数字
-  （ORM 反射的 12 表 / 139 列、并发原语计数、PG 耦合面、能力闸门、锁锚点表名与存在性）。
-
-**✅ 本轮唯一"动了环境"的部分（已清理，不影响仓库）**：
+**✅ 唯一"动了环境"的部分（已清理，不影响仓库）**：
 
 - 为完成 V3 / V6 / OAuth / 迁移链的**实证**，起了一个**一次性 Docker 容器**
   `mysql:8.0.24`（端口 13306，库名 `dfverify` / `ckpt_probe`），
@@ -4044,3 +3551,6 @@ Goal 5  删除 PostgreSQL
 第三方包 wheel 的源码阅读、ORM 元数据反射、方言编译探针，
 以及**真实 MySQL 8.0.24 上的执行探针**
 （脚本、wheel、渲染出的 SQL 均置于 `/tmp`，不进仓库）。
+
+
+

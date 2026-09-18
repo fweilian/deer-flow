@@ -1,5 +1,17 @@
 # PostgreSQL → MySQL 8.0.24 迁移可行性分析（可执行迁移设计 · 第五轮修订）
 
+> 🔴 **【已取代 · SUPERSEDED · 仅作过程留档，不要再据此实施】**
+>
+> 本文是多轮迭代的**过程稿**，基线停在 **`dba975ef`**（G0 之前），
+> 其中的 CheckpointSaver 选型（"候选 / 待定 / 可能 vendor"）、量化口径（20 表 / 274 列 / 15 表 / 224 列）
+> 与锁锚点表名（`threads`）**均已过时**。
+>
+> **权威口径一律以 [`mysql-migration-design.md`](./mysql-migration-design.md) 为准**
+> （基线 `a55e5734`，G0 完成；CheckpointSaver 已冻结为 `langgraph-checkpoint-mysql[asyncmy]==3.0.0`；
+> 12 表 / 139 列；锁锚点为 `threads_meta.thread_id`）。
+> 多轮修订的对照记录见 [`mysql-migration-plan.md`](./mysql-migration-plan.md)；
+> 执行计划见 [`mysql-goals.md`](./mysql-goals.md)，G0 审计见 [`mysql-goal0-audit.md`](./mysql-goal0-audit.md)。
+
 > **文档类型**：只读代码调查 + 依赖分析 + Schema 分析 + 迁移设计
 > **调查基线**：`deer-flow` 仓库 HEAD = **`dba975ef`**（`feat_portal` 分支，含 Phase 5 Goals 1–3 与生产闸门）
 > **首次调查基线**：`30f45d63`（Phase 5 Goals 1–2）；第二～四轮修订均在同一 HEAD 上完成

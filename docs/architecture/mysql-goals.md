@@ -1,6 +1,35 @@
 # PostgreSQL → MySQL 8.0.24 Migration Goals
 
-基于最新版 `mysql-migration-plan.md` 执行 PostgreSQL → MySQL 8.0.24 fresh-cutover。
+基于 [`mysql-migration-design.md`](./mysql-migration-design.md)（**权威设计口径**）执行 PostgreSQL → MySQL 8.0.24 fresh-cutover。
+
+> **当前状态**：调查基线 = 仓库 HEAD **`a55e5734`**（`feat_portal`）。
+> **Goal 0 已完成**；**Goal 1 是当前起点**（G1-A / G1-B / G1-C）。
+> Application Schema 现状：**12 张应用表 / 139 列**。
+> 多轮修订的对照记录见 [`mysql-migration-plan.md`](./mysql-migration-plan.md)（**过程留档，非实施依据**）。
+
+## 🔴 冻结结论（本迁移的既定前提，不再讨论）
+
+> 本次 MySQL Migration 的 CheckpointSaver **已确定使用**
+> `langgraph-checkpoint-mysql[asyncmy]==3.0.0`。
+>
+> **默认采用精确版本依赖，不 vendor。**
+>
+> **V5 用于验证该固定实现与 DeerFlow 当前 Runtime 的兼容性和正确性，
+> 不再承担 CheckpointSaver 选型职责。**
+>
+> 若 V5 发现必须修改上游内部实现的真实缺口，
+> 才将**同一个 3.0.0 版本** vendor 后做最小 patch。
+>
+> **Production Runtime 永远不调用 `setup()`，
+> Checkpoint DDL 由运维 / DBA 独立执行。**
+
+⛔ **以下问题不得再出现在任何 Open Questions / Owner Decisions / G1 待确认事项中**：
+
+* 是否使用 `langgraph-checkpoint-mysql`？
+* 直接依赖还是 vendor？
+* 是否接受第三方 Saver？
+* 候选 Saver 有哪些？
+* V5 通过后是否采用？
 
 ## 全局约束
 
@@ -43,7 +72,14 @@ Goal 1 未通过前，不允许进入 Goal 2。
 
 ---
 
-# Goal 0 — Runtime Scope Cleanup
+# Goal 0 — Runtime Scope Cleanup ✅ **DONE**
+
+> 🔴 **状态：已完成** —— 产出提交 **`a55e5734`**
+> （`refactor(runtime): remove channels, background MCP tasks, subagent batches, and LangGraph Store`）。
+> 审计记录：`docs/architecture/mysql-goal0-audit.md`。
+>
+> **⛔ 不要把本节任何一项再列为 Goal 1 的待实施前置项。**
+> 下面的 0-A ~ 0-F 是**已执行的实施记录**，保留用于追溯。
 
 ## 目标
 
@@ -208,15 +244,15 @@ Goal 1 未通过前，不允许进入 Goal 2。
 
 ## 退出条件
 
-只有满足以下条件才能进入 Goal 1：
+✅ **全部已满足**（Goal 0 已关闭）：
 
-1. 所有删除范围已完成；
-2. Gateway 主链正常；
-3. MCP 普通调用正常；
-4. 普通 SubAgent 正常；
-5. ORM 最终范围稳定；
-6. 重新扫描 PostgreSQL dependencies 并保存最新结果；
-7. Feature Inventory 与实际代码一致。
+1. ✅ 所有删除范围已完成；
+2. ✅ Gateway 主链正常；
+3. ✅ MCP 普通调用正常；
+4. ✅ 普通 SubAgent 正常；
+5. ✅ ORM 最终范围稳定（**12 张应用表 / 139 列**，已反射实测）；
+6. ✅ 重新扫描 PostgreSQL dependencies 并保存最新结果（91 个文件命中，生产 44 个）；
+7. ✅ Feature Inventory 与实际代码一致。
 
 ---
 
@@ -228,12 +264,30 @@ Goal 1 未通过前，不允许进入 Goal 2。
 
 先解决所有可能推翻方案的高风险问题。
 
+> 🔴 **Goal 1 当前只有三项工作：G1-A / G1-B / G1-C。**
+> **CheckpointSaver 选型不在其中** —— 它已经冻结（见下）。
+
+**🔴 冻结结论（Goal 1 的前提，不再讨论）**：
+
+本次 MySQL Migration 的 CheckpointSaver **已确定使用**
+`langgraph-checkpoint-mysql[asyncmy]==3.0.0`。
+
+**默认采用精确版本依赖，不 vendor。**
+
+**V5 用于验证该固定实现与 DeerFlow 当前 Runtime 的兼容性和正确性，
+不再承担 CheckpointSaver 选型职责。**
+
+若 V5 发现必须修改上游内部实现的真实缺口，才将**同一个 3.0.0 版本** vendor 后做最小 patch。
+
+**Production Runtime 永远不调用 `setup()`，Checkpoint DDL 由运维 / DBA 独立执行。**
+
 本 Goal 的核心产出是：
 
-* Gate V1 关闭；
-* Gate V5 关闭；
-* 最终确认 CheckpointSaver 引入方式；
-* 最终确认生产 migration 模型。
+* **G1-A**：Gate V1 关闭（MySQL 独立 Alembic chain）；
+* **G1-B**：Gate V5 关闭（对**已冻结依赖**做兼容性 / 正确性验证）；
+* **G1-C**：最终确认生产 migration 模型。
+
+⛔ **不再包含**："最终确认 CheckpointSaver 引入方式" —— 已冻结。
 
 ## 1-A. Gate V1 — MySQL 独立 Alembic Chain
 
@@ -280,11 +334,16 @@ Runtime：
 
 V1 未通过不得进入 Goal 2。
 
-## 1-B. Gate V5 — `langgraph-checkpoint-mysql==3.0.0`
+## 1-B. Gate V5 — 对已冻结依赖 `langgraph-checkpoint-mysql==3.0.0` 的兼容性 / 正确性验证
+
+> 🔴 **V5 是 compatibility / correctness Gate，不是 selection Gate。**
+> 实现基线已经冻结为 `langgraph-checkpoint-mysql[asyncmy]==3.0.0`（见 Goal 1 开头的冻结结论）。
+> V5 只回答一个问题：**这个固定实现在当前 DeerFlow Runtime 中是否满足所需的运行语义和正确性。**
+> ⚠️ **仍然保留真实验证失败的可能性** —— 不要把 V5 描述成"肯定通过"。
 
 在真实 MySQL 8.0.24 上测试原始第三方包。
 
-先使用固定版本原包：
+使用固定版本原包：
 
 `langgraph-checkpoint-mysql[asyncmy]==3.0.0`
 
@@ -302,11 +361,12 @@ V1 未通过不得进入 Goal 2。
 * interrupt
 * retry
 * rollback
-* thread branch
+* branch / regenerate
 * long conversation
 * concurrent checkpoint writes
 * `checkpoint_channel_mode=full`
 * asyncmy connection pool
+* event-loop lifecycle
 
 额外核对：
 
@@ -341,23 +401,21 @@ V1 未通过不得进入 Goal 2。
 * 不在 module import 阶段构造；
 * 不跨不兼容的 event loop 使用。
 
-## 1-C. 决定 Saver 引入方式
+## 1-C. V5 失败时的处置阶梯（**选型已冻结，不重新选型**）
 
-V5 通过：
+> ⛔ **本节不再决定"用不用这个包"。** 实现基线永远是 `langgraph-checkpoint-mysql==3.0.0`。
+> 本节只规定**缺口出现时按什么顺序处理**，**不得跳档**。
 
-使用：
-
-`langgraph-checkpoint-mysql[asyncmy]==3.0.0`
-
-直接固定版本依赖。
-
-V5 出现缺口：
-
-优先级：
-
-1. adapter / subclass；
-2. 必须修改 package internal SQL 时才 vendor；
-3. 最后才考虑自研。
+1. **确认是否是项目接入方式的问题** —— 池没传对 / 不在 running loop 内构造 /
+   `checkpoint_channel_mode` 不是 `full` / 配置分支或 `Literal` 漏改 / Schema 校验未前置。
+   ⇒ 修接入代码，**不动上游**。多数问题停在这一档。
+2. **adapter / wrapper** —— 不改上游源码，在项目侧包一层。
+3. **subclass 覆写** —— `class DeerFlowMySQLSaver(AsyncMySaver)`；
+   `MIGRATIONS` / `UPSERT_*_SQL` 是类属性可直接覆盖，`SELECT_SQL` 覆写 `_select_sql()`。
+4. **vendor 同一个 3.0.0 + 最小 patch** —— 仅当确实必须修改 package 内部 SQL / 私有实现时。
+   改动登记进 `UPSTREAM.md`。
+5. **architecture blocker** —— 仅当出现结构性、无法修复的 correctness 问题时，
+   才升级并回落档位。
 
 不得因为：
 
@@ -370,7 +428,8 @@ V5 出现缺口：
 
 而 vendor。
 
-如果组织明确禁止直接引入该第三方 Runtime dependency，则记录正式依赖准入结论，并走 vendor fallback。
+如果组织明确禁止直接引入该第三方 Runtime dependency，则记录正式依赖准入结论，
+并走 vendor fallback —— ⚠️ **仍然只能 vendor 同一个 3.0.0**，不是换包。
 
 ## 1-D. 确认 Production Migration Model
 
@@ -415,15 +474,23 @@ V3 已完成：
 
 实施阶段采用真实存在的 thread metadata 行作为锁锚点。
 
-注意：
+🔴 **真实表名与主键（已按当前 HEAD `a55e5734` 确认）**：
 
-文档里的 `threads` 表名必须修正。
+* 表：`threads_meta`（`persistence/thread_meta/model.py:13-16`）
+* 主键：`thread_id`（`String(64)`）
+* 仓库中**不存在**名为 `threads` 的表 —— 早期草稿的
+  `SELECT id FROM threads WHERE id = ? FOR UPDATE` **是错的，不得作为实施方案**。
 
-当前 Application Schema 中实际表是：
+⚠️ **锚点存在性（Goal 3 必须处理）**：`threads_meta` 行由
+`app/gateway/services.py:190-226` 的 `_ensure_thread_metadata()` 在 run admission 阶段创建，
+**但失败是非致命的** —— 默认路径 `require_existing_thread=False`，
+异常只记 warning 并**继续走 `run_agent`**（`services.py:1628-1633` / `:1662-1665`），
+且全仓无调用点传 `True`。
 
-`threads_meta`
-
-Goal 3 实施前必须确认并使用真实 ORM 表名 / PK。
+⇒ **不能假设锚点行一定存在。** 修法必须在事件写入路径上**自保证锚点存在**：
+先做幂等 upsert（`INSERT ... ON DUPLICATE KEY UPDATE thread_id = thread_id`，no-op，不覆盖既有字段），
+再 `SELECT thread_id FROM threads_meta WHERE thread_id = ? FOR UPDATE`，最后读 `max(seq)`。
+⚠️ 实现时需确认与 `SqlThreadMetaStore` 的写入不构成死锁环。
 
 V6 已完成：
 
@@ -438,8 +505,8 @@ checkpoint namespace 主键使用 hash，不再是阻塞风险。
 输出一份 Gate Result：
 
 * V1 PASS / FAIL；
-* V5 PASS / FAIL；
-* Saver 最终方案；
+* V5 PASS / FAIL（**对已冻结的 3.0.0 的兼容性 / 正确性结论**）；
+* V5 失败时落在处置阶梯的哪一档（1️⃣–5️⃣）；
 * migration execution model；
 * remaining blockers。
 
@@ -448,10 +515,10 @@ checkpoint namespace 主键使用 hash，不再是阻塞风险。
 必须同时满足：
 
 * V1 PASS；
-* V5 PASS，或者已得到明确可接受 fallback；
+* V5 有明确结论（PASS，或 FAIL 且已按阶梯给出可接受处置）；
 * 生产 Runtime 零 DDL 方案已固定；
-* Saver 版本已固定；
-* Checkpoint migration artifact 的生成方式已固定。
+* Checkpoint migration artifact 的生成方式已固定，且**与 3.0.0 版本绑定**；
+* ⛔ 不再要求"Saver 版本已固定" —— **它已经是前提，不是产出**（见 Goal 1 开头的冻结结论）。
 
 否则停止，不进入 Goal 2。
 
