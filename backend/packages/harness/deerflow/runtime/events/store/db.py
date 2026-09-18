@@ -137,7 +137,9 @@ class DbRunEventStore(RunEventStore):
         PostgreSQL rejects ``SELECT max(...) FOR UPDATE`` because aggregate
         results are not lockable rows. As a release-safe workaround, take a
         transaction-level advisory lock keyed by thread_id before reading the
-        aggregate. Other dialects keep the existing row-locking statement.
+        aggregate. MySQL locks the thread's durable metadata row instead:
+        aggregates (and an empty event stream) do not provide a lockable row.
+        Other dialects keep the existing row-locking statement.
         """
         stmt = select(func.max(RunEventRow.seq)).where(RunEventRow.thread_id == thread_id)
         bind = session.get_bind()
@@ -146,6 +148,20 @@ class DbRunEventStore(RunEventStore):
         if dialect_name == "postgresql":
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtext(CAST(:thread_id AS text))::bigint)"),
+                {"thread_id": thread_id},
+            )
+            return await session.scalar(stmt)
+
+        if dialect_name == "mysql":
+            # Metadata admission is deliberately non-fatal, so event writers
+            # cannot assume this row was created earlier.  The duplicate branch
+            # is a true no-op: it must never overwrite user-visible metadata.
+            await session.execute(
+                text("INSERT INTO threads_meta (thread_id, status, metadata_json, created_at, updated_at) VALUES (:thread_id, 'idle', JSON_OBJECT(), UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE thread_id = thread_id"),
+                {"thread_id": thread_id},
+            )
+            await session.execute(
+                text("SELECT thread_id FROM threads_meta WHERE thread_id = :thread_id FOR UPDATE"),
                 {"thread_id": thread_id},
             )
             return await session.scalar(stmt)

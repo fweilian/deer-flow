@@ -43,7 +43,10 @@ class RunRow(Base):
     lead_agent_tokens: Mapped[int] = mapped_column(default=0)
     subagent_tokens: Mapped[int] = mapped_column(default=0)
     middleware_tokens: Mapped[int] = mapped_column(default=0)
-    token_usage_by_model: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+    # MySQL 8.0.13+ requires JSON defaults to be expression defaults.  The
+    # parenthesized literal is also accepted by SQLite and PostgreSQL, so this
+    # keeps the one existing server-default contract portable.
+    token_usage_by_model: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("('{}')"))
 
     # Follow-up association
     follow_up_to_run_id: Mapped[str | None] = mapped_column(String(64))

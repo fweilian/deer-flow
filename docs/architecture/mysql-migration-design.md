@@ -1020,7 +1020,7 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
 | --- | --- | --- | --- |
 | `scheduled_task_runs` | `attempt_count` | `default=0, server_default="0"` | ✅ **保留** |
 | `runs` | `operation_kind` | `default="run", server_default=text("'run'")` | ✅ **保留** |
-| `runs` | `token_usage_by_model` | `default=dict, server_default=text("'{}'")` | ✅ **保留** |
+| `runs` | `token_usage_by_model` | `default=dict, server_default=text("('{}')")` | ✅ **保留**（MySQL JSON 默认值必须是表达式形式） |
 | `scheduled_tasks` | `last_occurrence_seq` | `default=0, server_default="0"` | ✅ **保留** |
 
 **其余全部不需要新增**：
@@ -3551,6 +3551,5 @@ Goal 5  删除 PostgreSQL
 第三方包 wheel 的源码阅读、ORM 元数据反射、方言编译探针，
 以及**真实 MySQL 8.0.24 上的执行探针**
 （脚本、wheel、渲染出的 SQL 均置于 `/tmp`，不进仓库）。
-
 
 

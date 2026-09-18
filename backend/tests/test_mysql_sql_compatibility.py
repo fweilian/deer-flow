@@ -26,6 +26,8 @@ from deerflow.persistence.base import Base
 from deerflow.persistence.datetime_compat import UTCDateTime
 from deerflow.persistence.json_compat import json_match
 from deerflow.persistence.mysql_errors import is_mysql_deadlock, mysql_duplicate_key_name
+from deerflow.persistence.run.model import RunRow
+from deerflow.persistence.scheduled_task_runs.sql import _MYSQL_CLAIM_QUEUED_RUN, ScheduledTaskRunRepository
 
 
 def test_mysql_datetime_columns_keep_microseconds_and_utc_boundary() -> None:
@@ -40,6 +42,18 @@ def test_mysql_datetime_columns_keep_microseconds_and_utc_boundary() -> None:
     bound = type_.process_bind_param(source, mysql.dialect())
     assert bound == datetime(2026, 9, 18, 4, 30, 1, 123456)
     assert type_.process_result_value(bound, mysql.dialect()) == bound.replace(tzinfo=UTC)
+
+
+def test_mysql_json_server_default_is_an_expression() -> None:
+    ddl = str(CreateTable(RunRow.__table__).compile(dialect=mysql.dialect()))
+    assert "token_usage_by_model JSON NOT NULL DEFAULT ('{}')" in ddl
+
+
+def test_mysql_queue_claim_uses_a_self_join_not_a_target_table_subquery() -> None:
+    statement = str(_MYSQL_CLAIM_QUEUED_RUN.compile(dialect=mysql.dialect()))
+    assert "UPDATE scheduled_task_runs AS candidate" in statement
+    assert "LEFT JOIN scheduled_task_runs AS older" in statement
+    assert "NOT EXISTS" not in statement
 
 
 @pytest.mark.parametrize(
@@ -187,6 +201,105 @@ def test_mysql_server_enforces_generated_active_and_oauth_unique_semantics() -> 
             for table in (runs, occurrences, users):
                 connection.execute(text(f"DROP TABLE IF EXISTS {table}"))
         engine.dispose()
+
+
+@pytest.mark.integration
+def test_mysql_server_accepts_json_expression_default() -> None:
+    uri = os.environ.get("TEST_MYSQL_URI")
+    if not uri:
+        pytest.skip("TEST_MYSQL_URI is not set")
+    from deerflow.config.database_config import DatabaseConfig
+
+    engine = create_engine(DatabaseConfig(backend="mysql", mysql_url=uri).app_sync_sqlalchemy_url)
+    suffix = uuid4().hex
+    defaults = f"g3_defaults_{suffix}"
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(f"CREATE TABLE {defaults} (id INT PRIMARY KEY, token_usage_by_model JSON NOT NULL DEFAULT ('{{}}'))"))
+            connection.execute(text(f"INSERT INTO {defaults} (id) VALUES (1)"))
+            assert connection.execute(text(f"SELECT JSON_TYPE(token_usage_by_model) FROM {defaults} WHERE id = 1")).scalar_one() == "OBJECT"
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text(f"DROP TABLE IF EXISTS {defaults}"))
+        engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_mysql_repository_claim_uses_the_1093_safe_statement() -> None:
+    uri = os.environ.get("TEST_MYSQL_URI")
+    if not uri:
+        pytest.skip("TEST_MYSQL_URI is not set")
+    from sqlalchemy.engine import make_url
+
+    from deerflow.config.database_config import DatabaseConfig
+
+    config = DatabaseConfig(backend="mysql", mysql_url=uri)
+    database = f"g3_claim_{uuid4().hex}"
+    admin_engine = create_async_engine(config.app_sqlalchemy_url, pool_size=1, max_overflow=0)
+    engine = None
+    try:
+        async with admin_engine.begin() as connection:
+            assert str((await connection.execute(text("SELECT VERSION()"))).scalar_one()).startswith("8.0.24")
+            await connection.execute(text(f"CREATE DATABASE `{database}`"))
+
+        engine = create_async_engine(make_url(config.app_sqlalchemy_url).set(database=database), pool_size=1, max_overflow=0)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with engine.begin() as connection:
+            # Use a disposable database rather than a temporary table: MySQL
+            # cannot reopen a temporary table through a self-join, while the
+            # production table is permanent.
+            await connection.execute(
+                text(
+                    """
+                    CREATE TABLE scheduled_task_runs (
+                        id VARCHAR(64) PRIMARY KEY,
+                        task_id VARCHAR(64) NOT NULL,
+                        occurrence_seq BIGINT NULL,
+                        launch_accounted BOOL NULL,
+                        thread_id VARCHAR(64) NOT NULL,
+                        run_id VARCHAR(64) NULL,
+                        scheduled_for DATETIME(6) NOT NULL,
+                        `trigger` VARCHAR(16) NOT NULL,
+                        status VARCHAR(16) NOT NULL,
+                        error TEXT NULL,
+                        lease_owner VARCHAR(128) NULL,
+                        lease_expires_at DATETIME(6) NULL,
+                        attempt_count INT NOT NULL DEFAULT 0,
+                        started_at DATETIME(6) NULL,
+                        finished_at DATETIME(6) NULL,
+                        created_at DATETIME(6) NOT NULL
+                    )
+                    """
+                )
+            )
+            await connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(64) PRIMARY KEY)"))
+            await connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0001_mysql_baseline')"))
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO scheduled_task_runs
+                        (id, task_id, thread_id, scheduled_for, `trigger`, status, created_at)
+                    VALUES
+                        ('older', 'task-older', 'shared-thread', '2026-09-18 11:59:59', 'scheduled', 'queued', '2026-09-18 11:59:59'),
+                        ('newer', 'task-newer', 'shared-thread', '2026-09-18 12:00:00', 'scheduled', 'queued', '2026-09-18 12:00:00')
+                    """
+                )
+            )
+
+        repository = ScheduledTaskRunRepository(sessions)
+        now = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
+        assert await repository.claim_queued_run("newer", lease_owner="worker", now=now, lease_seconds=60, global_max_concurrent_runs=2) is None
+        claimed = await repository.claim_queued_run("older", lease_owner="worker", now=now, lease_seconds=60, global_max_concurrent_runs=2)
+        assert claimed is not None
+        assert claimed["status"] == "launching"
+        assert claimed["attempt_count"] == 1
+    finally:
+        if engine is not None:
+            await engine.dispose()
+        async with admin_engine.begin() as connection:
+            await connection.execute(text(f"DROP DATABASE IF EXISTS `{database}`"))
+        await admin_engine.dispose()
 
 
 @pytest.mark.anyio

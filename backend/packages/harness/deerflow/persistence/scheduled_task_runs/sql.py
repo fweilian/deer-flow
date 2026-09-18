@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, exists, func, or_, select, text, update
+from sqlalchemy import and_, bindparam, exists, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
+from deerflow.persistence.datetime_compat import UTCDateTime
 from deerflow.persistence.run import RunRepository
 from deerflow.persistence.run.model import RunRow
 from deerflow.persistence.scheduled_task_runs.model import ScheduledTaskRunRow
@@ -23,6 +24,49 @@ from deerflow.utils.time import coerce_iso
 
 EXECUTING_RUN_STATUSES: tuple[str, ...] = ("launching", "running")
 _SCHEDULER_BUDGET_LOCK_KEY = 4694001
+
+# MySQL rejects an UPDATE whose WHERE clause reads the target table through a
+# correlated subquery (error 1093).  Its supported multi-table UPDATE form
+# keeps the FIFO predicate in the same atomic statement without changing the
+# scheduler's concurrency design.
+_MYSQL_CLAIM_QUEUED_RUN = text(
+    """
+    UPDATE scheduled_task_runs AS candidate
+    LEFT JOIN scheduled_task_runs AS older
+      ON older.thread_id = candidate.thread_id
+     AND older.status IN ('queued', 'launching', 'running')
+     AND (
+          older.created_at < candidate.created_at
+          OR (older.created_at = candidate.created_at AND older.id < candidate.id)
+     )
+    SET candidate.status = 'launching',
+        candidate.lease_owner = :lease_owner,
+        candidate.lease_expires_at = :lease_expires_at,
+        candidate.attempt_count = candidate.attempt_count + 1
+    WHERE candidate.id = :run_record_id
+      AND candidate.status = 'queued'
+      AND older.id IS NULL
+    """
+).bindparams(bindparam("lease_expires_at", type_=UTCDateTime()))
+
+
+async def _lock_scheduler_budget(session: AsyncSession) -> None:
+    """Acquire the transaction-scoped serialization point for scheduler capacity.
+
+    MySQL locks the sole application migration revision row.  Runtime startup
+    already verifies this row exists and is singular before accepting work, so
+    it is a durable common anchor without a connection-scoped named lock, a
+    scheduler-visible fake task, or a new distributed-lock abstraction.
+    """
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": _SCHEDULER_BUDGET_LOCK_KEY},
+        )
+    elif dialect == "mysql":
+        result = await session.execute(text("SELECT version_num FROM alembic_version FOR UPDATE"))
+        result.scalar_one()
 
 
 def _lease_is_alive(lease_expires_at: datetime | None, *, now: datetime, grace_seconds: int) -> bool:
@@ -307,43 +351,50 @@ class ScheduledTaskRunRepository:
     ) -> dict[str, Any] | None:
         """Atomically move one waiting row into the lease-fenced launch phase."""
         async with self._sf() as session:
-            if session.get_bind().dialect.name == "postgresql":
-                await session.execute(
-                    text("SELECT pg_advisory_xact_lock(:lock_key)"),
-                    {"lock_key": _SCHEDULER_BUDGET_LOCK_KEY},
-                )
+            await _lock_scheduler_budget(session)
             executing = await session.scalar(select(func.count()).select_from(ScheduledTaskRunRow).where(ScheduledTaskRunRow.status.in_(EXECUTING_RUN_STATUSES)))
             if int(executing or 0) >= global_max_concurrent_runs:
                 await session.rollback()
                 return None
-            older = aliased(ScheduledTaskRunRow)
-            older_same_thread = exists(
-                select(older.id).where(
-                    older.thread_id == ScheduledTaskRunRow.thread_id,
-                    older.status.in_(ACTIVE_RUN_STATUSES),
-                    or_(
-                        older.created_at < ScheduledTaskRunRow.created_at,
-                        and_(
-                            older.created_at == ScheduledTaskRunRow.created_at,
-                            older.id < ScheduledTaskRunRow.id,
+            lease_expires_at = now + timedelta(seconds=lease_seconds)
+            if session.get_bind().dialect.name == "mysql":
+                result = await session.execute(
+                    _MYSQL_CLAIM_QUEUED_RUN,
+                    {
+                        "run_record_id": run_record_id,
+                        "lease_owner": lease_owner,
+                        "lease_expires_at": lease_expires_at,
+                    },
+                )
+            else:
+                older = aliased(ScheduledTaskRunRow)
+                older_same_thread = exists(
+                    select(older.id).where(
+                        older.thread_id == ScheduledTaskRunRow.thread_id,
+                        older.status.in_(ACTIVE_RUN_STATUSES),
+                        or_(
+                            older.created_at < ScheduledTaskRunRow.created_at,
+                            and_(
+                                older.created_at == ScheduledTaskRunRow.created_at,
+                                older.id < ScheduledTaskRunRow.id,
+                            ),
                         ),
-                    ),
+                    )
                 )
-            )
-            result = await session.execute(
-                update(ScheduledTaskRunRow)
-                .where(
-                    ScheduledTaskRunRow.id == run_record_id,
-                    ScheduledTaskRunRow.status == "queued",
-                    ~older_same_thread,
+                result = await session.execute(
+                    update(ScheduledTaskRunRow)
+                    .where(
+                        ScheduledTaskRunRow.id == run_record_id,
+                        ScheduledTaskRunRow.status == "queued",
+                        ~older_same_thread,
+                    )
+                    .values(
+                        status="launching",
+                        lease_owner=lease_owner,
+                        lease_expires_at=lease_expires_at,
+                        attempt_count=ScheduledTaskRunRow.attempt_count + 1,
+                    )
                 )
-                .values(
-                    status="launching",
-                    lease_owner=lease_owner,
-                    lease_expires_at=now + timedelta(seconds=lease_seconds),
-                    attempt_count=ScheduledTaskRunRow.attempt_count + 1,
-                )
-            )
             if result.rowcount != 1:
                 await session.rollback()
                 return None

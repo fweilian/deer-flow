@@ -33,6 +33,11 @@ class ScheduledTaskRunRow(Base):
 
     __table_args__ = (
         Index("uq_scheduled_task_run_occurrence_seq", "task_id", "occurrence_seq", unique=True),
+        # ``list_queued_runs`` filters queued work and orders it by retry
+        # fairness then FIFO.  This is a MySQL locking-correctness index, not
+        # speculative query tuning: without it a queue claim can scan-lock the
+        # occurrence table.
+        Index("idx_scheduled_task_runs_status_created", "status", "attempt_count", "created_at", "id"),
         # At most one non-terminal (queued/launching/running) occurrence per
         # task. Queued occurrences are deliberately durable; ``launching`` is
         # a short lease-fenced claim used so multiple gateway instances cannot
