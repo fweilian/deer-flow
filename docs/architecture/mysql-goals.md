@@ -1,558 +1,435 @@
-# PostgreSQL → MySQL 8.0.24 Migration Goals
+# G1 — MySQL Compatibility Gates
 
-基于 [`mysql-migration-design.md`](./mysql-migration-design.md)（**权威设计口径**）执行 PostgreSQL → MySQL 8.0.24 fresh-cutover。
+**推荐模型：GPT-5.6 Terra**
+**推理强度：High**
 
-> **当前状态**：调查基线 = 仓库 HEAD **`a55e5734`**（`feat_portal`）。
-> **Goal 0 已完成**；**Goal 1 是当前起点**（G1-A / G1-B / G1-C）。
-> Application Schema 现状：**12 张应用表 / 139 列**。
-> 多轮修订的对照记录见 [`mysql-migration-plan.md`](./mysql-migration-plan.md)（**过程留档，非实施依据**）。
+你现在要执行 PostgreSQL → MySQL 8.0.24 Migration 的 **Goal 1：Compatibility Gates**。
 
-## 🔴 冻结结论（本迁移的既定前提，不再讨论）
+这是一个 **Gate + focused implementation / verification Goal**，不是全面迁移 Goal。
 
-> 本次 MySQL Migration 的 CheckpointSaver **已确定使用**
-> `langgraph-checkpoint-mysql[asyncmy]==3.0.0`。
->
-> **默认采用精确版本依赖，不 vendor。**
->
-> **V5 用于验证该固定实现与 DeerFlow 当前 Runtime 的兼容性和正确性，
-> 不再承担 CheckpointSaver 选型职责。**
->
-> 若 V5 发现必须修改上游内部实现的真实缺口，
-> 才将**同一个 3.0.0 版本** vendor 后做最小 patch。
->
-> **Production Runtime 永远不调用 `setup()`，
-> Checkpoint DDL 由运维 / DBA 独立执行。**
+开始前必须先阅读：
 
-⛔ **以下问题不得再出现在任何 Open Questions / Owner Decisions / G1 待确认事项中**：
+* `mysql-migration-design.md` —— **唯一权威迁移设计**
+* 当前仓库 `HEAD`
+* 当前 `AGENTS.md`
+* 与 migration / checkpointer / persistence 相关的现有测试
 
-* 是否使用 `langgraph-checkpoint-mysql`？
-* 直接依赖还是 vendor？
-* 是否接受第三方 Saver？
-* 候选 Saver 有哪些？
-* V5 通过后是否采用？
+如果代码与文档中的历史行号不一致，以**当前 HEAD 的真实代码结构**为准，但不得擅自改变已经冻结的设计结论。
 
-## 全局约束
+## 已冻结结论
 
-整个迁移严格遵循：
+以下事项不要重新讨论：
 
-* 不迁移 PostgreSQL 历史数据；
-* MySQL 从空库开始；
-* 不做 dual-read / dual-write；
-* 不做 backfill；
-* 不设计 MySQL → PostgreSQL 数据回滚；
-* PostgreSQL 最终完全删除；
-* 生产 Runtime DB 账号没有 DDL 权限；
-* 生产 Runtime 不执行：
+* CheckpointSaver 已确定：
+  `langgraph-checkpoint-mysql[asyncmy]==3.0.0`
+* 默认 direct dependency，不 vendor
+* V5 不是 Saver selection Gate
+* Production Runtime 永远不调用 `saver.setup()`
+* Production Runtime zero DDL
+* Checkpoint DDL 由运维 / DBA 执行
+* fresh cutover
+* 不迁移 PG 历史数据
+* 不 dual-read / dual-write
+* 不 backfill
+* 不设计 MySQL → PostgreSQL 数据回滚
+* `checkpoint_channel_mode=full`
+* 不引入 Redis checkpoint cache
+* 不做 Checkpoint Object Storage overflow
+* V3 已关闭
+* V6 已关闭
+* V2 已关闭
+* Goal 0 已完成，不恢复已删除能力
 
-  * `CREATE DATABASE`
-  * `CREATE TABLE`
-  * `ALTER TABLE`
-  * `DROP TABLE`
-  * `CREATE INDEX`
-  * `create_all`
-  * `alembic upgrade`
-  * `stamp`
-  * CheckpointSaver `setup()`
-* 所有生产 DDL 由运维 / DBA 使用独立 migration 账号执行；
-* Runtime 只连接、读写数据和验证 Schema/version；
-* Schema 缺失或版本不匹配必须 fail closed；
-* `checkpoint_channel_mode=full` 保持不变；
-* 不引入 Redis checkpoint cache；
-* 不引入 Checkpoint Object Storage overflow；
-* 不新增通用 PG/MySQL dialect abstraction；
-* 不做无关索引优化；
-* 不做 PG/MySQL 全量双后端参数化测试；
-* Optional Compliance 不阻塞 Core Migration。
+本 Goal 只关闭：
 
-实施顺序必须为：
-
-`Goal 0 -> Goal 1 -> Goal 2 -> Goal 3 -> Goal 4 -> Goal 5`
-
-Goal 1 未通过前，不允许进入 Goal 2。
+1. **V1 — MySQL Alembic independent chain**
+2. **V5 — `langgraph-checkpoint-mysql==3.0.0` compatibility / correctness**
 
 ---
 
-# Goal 0 — Runtime Scope Cleanup ✅ **DONE**
+## Part A — V1 Alembic Independent Chain Gate
 
-> 🔴 **状态：已完成** —— 产出提交 **`a55e5734`**
-> （`refactor(runtime): remove channels, background MCP tasks, subagent batches, and LangGraph Store`）。
-> 审计记录：`docs/architecture/mysql-goal0-audit.md`。
->
-> **⛔ 不要把本节任何一项再列为 Goal 1 的待实施前置项。**
-> 下面的 0-A ~ 0-F 是**已执行的实施记录**，保留用于追溯。
+目标：
 
-## 目标
+证明 MySQL 可以使用独立 Alembic migration chain，而且不会与现有 PostgreSQL legacy chain 串联。
 
-在开始任何 MySQL Schema 实现之前，先删除本期明确不需要迁移的 Runtime 能力，使后续 MySQL baseline 只包含真正需要的模型。
+确认当前 PG legacy chain：
 
-本 Goal 不实现 MySQL。
+* 当前 PG head；
+* `0001`–`0023` 保持 immutable；
+* 本 Goal 不修改 PG historical revisions。
 
-## 0-A. 删除 Channel / GitHub Webhook
+实现或验证 MySQL chain 的最小接线方式：
 
-完整删除当前 DeerFlow Channel / GitHub Webhook Runtime，包括：
-
-* `app/channels/`
-* Channel routers
-* `channel_connections`
-* GitHub webhook router / dispatcher
-* `gateway/github/`
-* Channel 配置
-* Channel persistence
-* webhook delivery persistence
-* Channel SDK 依赖
-* Channel lifecycle / dependency injection
-* Channel 专属测试
-
-先处理 Channel 与 GitHub 的双向 import，再删除主体。
-
-保留普通 Web/API Chat、SSE、Runtime StreamBridge。
-
-注意：
-
-名字里带 `channel` 的 LangGraph `DeltaChannel` 不是 IM Channel，不得误删。
-
-必须保留相关 checkpoint regression tests。
-
-## 0-B. 删除 `mcp_tasks`
-
-正式删除 MCP 长任务 Runtime：
-
-* `persistence/mcp_tasks/`
-* `mcp/tasks/`
-* `app/mcp_tasks/`
-* `routers/mcp_tasks.py`
-* `background_tasks_tool.py`
-* `McpTasksConfig`
-* lifespan / deps 注入
-* `task_toolsets` 后台任务包装路径
-* 相关测试
-
-必须保留：
-
-* 普通 MCP Tool；
-* MCP Server；
-* MCP OAuth；
-* 普通同步 MCP 调用。
-
-未来如重新需要 MCP 长任务，以新的 MySQL-native feature 重新实现，不恢复旧 PG persistence。
-
-## 0-C. 删除 `subagent_batches`
-
-正式删除 Batch SubAgent Runtime：
-
-* `persistence/subagent_batches/`
-* `subagent_batches`
-* `subagent_batch_items`
-* `batch_runtime`
-* `batch_service`
-* batch router
-* `batch_task_tool`
-* batch feature flag
-* batch tool mounting
-* batch prompt 文案
-* batch tests
-
-必须保留：
-
-* 普通 `task`；
-* Lead Agent → SubAgent 委派；
-* `managed_subagents`。
-
-未来若需要批量 SubAgent，以新的 MySQL-native feature 增量增加：
-
-`000N_add_subagent_batches`
-
-不得修改 `0001_mysql_baseline`。
-
-## 0-D. 删除 LangGraph Store
-
-删除：
-
-* `runtime/store/provider.py`
-* `runtime/store/async_provider.py`
-* Store lifecycle
-* `app.state.store`
-* graph / agent 的无效 store 挂载
-* orphan thread 历史迁移
-* `reset_store`
-* Store health probe
-* Store re-export
-
-不要创建 MySQL Store，也不要创建 `ag_store`。
-
-### `_sqlite_utils.py`
-
-不能跟 Store 一起删除。
-
-将其中被 Checkpointer / Health 使用的 SQLite helper 移到合适的独立模块，例如：
-
-`runtime/sqlite_utils.py`
-
-或：
-
-`runtime/checkpointer/sqlite_utils.py`
-
-## 0-E. 保留 MemoryThreadMetaStore，但去掉 BaseStore
-
-`database.backend=memory` 仍作为开发和测试能力保留。
-
-将 `MemoryThreadMetaStore` 改为简单内部 dict backend。
-
-只实现当前真实需要的最小接口：
-
-* `aget`
-* `aput`
-* `adelete`
-* `asearch`
-
-不要为了它保留 LangGraph `BaseStore` abstraction。
-
-## 0-F. 同步更新 Feature Inventory
-
-同步修改 `feature-inventory.md`：
-
-* `mcp_tasks`：已决定删除；
-* `subagent_batches`：已决定删除；
-* 不再描述为待评估 / B 类待启用能力；
-* 记录“未来若有真实需求，以新功能形式重新实现”。
-
-## 验证
-
-只做与删除范围直接相关的测试。
-
-至少验证：
-
-* Gateway 可启动；
-* Web/API Chat 不受影响；
-* 普通 MCP Tool 可加载；
-* 普通 SubAgent `task` 可用；
-* Store 删除后 Gateway 主链无 Store 读取；
-* memory thread metadata 测试通过；
-* DeltaChannel checkpoint tests 仍存在并通过；
-* Channel / GitHub / mcp_tasks / subagent_batches 无生产引用残留。
-
-最后重新反射 ORM metadata。
-
-目标结果：
-
-* 12 张应用表；
-* 139 列；
-* `mcp_tasks` 不存在；
-* `subagent_batches` 不存在；
-* `subagent_batch_items` 不存在；
-* 5 张 Channel/Webhook 表不存在于目标模型。
-
-## 退出条件
-
-✅ **全部已满足**（Goal 0 已关闭）：
-
-1. ✅ 所有删除范围已完成；
-2. ✅ Gateway 主链正常；
-3. ✅ MCP 普通调用正常；
-4. ✅ 普通 SubAgent 正常；
-5. ✅ ORM 最终范围稳定（**12 张应用表 / 139 列**，已反射实测）；
-6. ✅ 重新扫描 PostgreSQL dependencies 并保存最新结果（91 个文件命中，生产 44 个）；
-7. ✅ Feature Inventory 与实际代码一致。
-
----
-
-# Goal 1 — MySQL Compatibility & Risk Gates
-
-## 目标
-
-不做大规模迁移实现。
-
-先解决所有可能推翻方案的高风险问题。
-
-> 🔴 **Goal 1 当前只有三项工作：G1-A / G1-B / G1-C。**
-> **CheckpointSaver 选型不在其中** —— 它已经冻结（见下）。
-
-**🔴 冻结结论（Goal 1 的前提，不再讨论）**：
-
-本次 MySQL Migration 的 CheckpointSaver **已确定使用**
-`langgraph-checkpoint-mysql[asyncmy]==3.0.0`。
-
-**默认采用精确版本依赖，不 vendor。**
-
-**V5 用于验证该固定实现与 DeerFlow 当前 Runtime 的兼容性和正确性，
-不再承担 CheckpointSaver 选型职责。**
-
-若 V5 发现必须修改上游内部实现的真实缺口，才将**同一个 3.0.0 版本** vendor 后做最小 patch。
-
-**Production Runtime 永远不调用 `setup()`，Checkpoint DDL 由运维 / DBA 独立执行。**
-
-本 Goal 的核心产出是：
-
-* **G1-A**：Gate V1 关闭（MySQL 独立 Alembic chain）；
-* **G1-B**：Gate V5 关闭（对**已冻结依赖**做兼容性 / 正确性验证）；
-* **G1-C**：最终确认生产 migration 模型。
-
-⛔ **不再包含**："最终确认 CheckpointSaver 引入方式" —— 已冻结。
-
-## 1-A. Gate V1 — MySQL 独立 Alembic Chain
-
-实现 / 验证：
-
-* PostgreSQL legacy chain 保持 immutable；
-* MySQL 使用独立 script location；
-* MySQL root：
+* backend 可以选择独立 MySQL `script_location`；
+* MySQL 最终链根名称固定为：
   `0001_mysql_baseline`
-* 默认继续使用：
-  `alembic_version`
-* 不建立通用 multi-chain framework；
-* 不建立 chain registry；
-* 不建立 per-chain class hierarchy。
+* PG chain 与 MySQL chain 不存在 `down_revision` 关系；
+* 不 replay PostgreSQL historical migrations；
+* 默认继续使用 `alembic_version`；
+* 不创建通用 multi-chain framework。
 
-重新检查：
+处理现有 bootstrap 中：
 
 * `_HEAD_REVISION`
 * `_KNOWN_REVISIONS`
 
-如果没有必要，删除生产 Runtime 对这些 cache 的依赖。
+按照 `mysql-migration-design.md` 的结论：
 
-Runtime 最终只需要知道：
+优先从生产路径移除这些无必要的模块级 revision cache，而不是引入按 chain 缓存的新 abstraction。
 
-“当前连接的 MySQL revision 是否等于当前应用要求的 revision”。
+禁止实现：
 
-生产 Runtime 不执行 migration。
+* migration chain registry；
+* per-chain class hierarchy；
+* migration cache manager；
+* generic database migration framework。
 
-生产 migration：
+### V1 的验证方式
 
-`DBA -> alembic upgrade head`
+本 Goal 不要求现在就冻结最终 Application `0001_mysql_baseline` 内容。
 
-Runtime：
+可以使用：
 
-`read revision -> verify -> start/fail`
+* isolated Alembic fixture；
+* temporary test migration tree；
+* 最小 proof；
 
-验证：
+验证以下语义：
 
-* PG chain 和 MySQL chain 互不串链；
-* MySQL `heads` 只有一个；
-* 空 MySQL 可以由 migration job 建到 head；
-* Runtime 不具有 DDL 权限时仍可读取 revision；
-* revision 不匹配时 fail closed。
+1. PostgreSQL script directory 只看到 PostgreSQL revisions；
+2. MySQL script directory 只看到 MySQL revisions；
+3. 两边都只有各自的 single head；
+4. MySQL chain 不引用 PG revision；
+5. backend 选择不会串 chain；
+6. MySQL migration execution 可以由 Runtime 外部独立调用；
+7. Runtime 侧可以只读判断 current revision；
+8. revision mismatch 可以被识别为 startup/readiness failure 条件。
 
-V1 未通过不得进入 Goal 2。
-
-## 1-B. Gate V5 — 对已冻结依赖 `langgraph-checkpoint-mysql==3.0.0` 的兼容性 / 正确性验证
-
-> 🔴 **V5 是 compatibility / correctness Gate，不是 selection Gate。**
-> 实现基线已经冻结为 `langgraph-checkpoint-mysql[asyncmy]==3.0.0`（见 Goal 1 开头的冻结结论）。
-> V5 只回答一个问题：**这个固定实现在当前 DeerFlow Runtime 中是否满足所需的运行语义和正确性。**
-> ⚠️ **仍然保留真实验证失败的可能性** —— 不要把 V5 描述成"肯定通过"。
-
-在真实 MySQL 8.0.24 上测试原始第三方包。
-
-使用固定版本原包：
-
-`langgraph-checkpoint-mysql[asyncmy]==3.0.0`
-
-不要 vendor。
-
-验证：
-
-* `aget_tuple`
-* `alist`
-* `aput`
-* `aput_writes`
-* `adelete_thread`
-* pending writes
-* resume
-* interrupt
-* retry
-* rollback
-* branch / regenerate
-* long conversation
-* concurrent checkpoint writes
-* `checkpoint_channel_mode=full`
-* asyncmy connection pool
-* event-loop lifecycle
-
-额外核对：
-
-### INSERT IGNORE
-
-确认以下字段真实值不会超过 package Schema 长度：
-
-* thread_id
-* checkpoint_id
-* task_id
-* channel
-* version
-
-确认不存在被 `INSERT IGNORE` 静默吞掉的真实错误。
-
-### Large Checkpoint
-
-实测：
-
-* blob size
-* DB query memory
-* read/write throughput
-* `max_allowed_packet`
-
-不得因为性能猜测提前加入 Object Storage。
-
-### Event Loop
-
-确认 `AsyncMySaver`：
-
-* 在 running event loop 内创建；
-* 不在 module import 阶段构造；
-* 不跨不兼容的 event loop 使用。
-
-## 1-C. V5 失败时的处置阶梯（**选型已冻结，不重新选型**）
-
-> ⛔ **本节不再决定"用不用这个包"。** 实现基线永远是 `langgraph-checkpoint-mysql==3.0.0`。
-> 本节只规定**缺口出现时按什么顺序处理**，**不得跳档**。
-
-1. **确认是否是项目接入方式的问题** —— 池没传对 / 不在 running loop 内构造 /
-   `checkpoint_channel_mode` 不是 `full` / 配置分支或 `Literal` 漏改 / Schema 校验未前置。
-   ⇒ 修接入代码，**不动上游**。多数问题停在这一档。
-2. **adapter / wrapper** —— 不改上游源码，在项目侧包一层。
-3. **subclass 覆写** —— `class DeerFlowMySQLSaver(AsyncMySaver)`；
-   `MIGRATIONS` / `UPSERT_*_SQL` 是类属性可直接覆盖，`SELECT_SQL` 覆写 `_select_sql()`。
-4. **vendor 同一个 3.0.0 + 最小 patch** —— 仅当确实必须修改 package 内部 SQL / 私有实现时。
-   改动登记进 `UPSTREAM.md`。
-5. **architecture blocker** —— 仅当出现结构性、无法修复的 correctness 问题时，
-   才升级并回落档位。
-
-不得因为：
-
-* 表名；
-* COMMENT；
-* `orjson`；
-* JSON；
-* BLOB；
-* 索引命名；
-
-而 vendor。
-
-如果组织明确禁止直接引入该第三方 Runtime dependency，则记录正式依赖准入结论，
-并走 vendor fallback —— ⚠️ **仍然只能 vendor 同一个 3.0.0**，不是换包。
-
-## 1-D. 确认 Production Migration Model
-
-正式冻结：
-
-### Application Schema
-
-运维执行：
-
-`alembic upgrade head`
-
-### Checkpoint Schema
-
-由 Saver 3.0.0 `MIGRATIONS` 导出 / 固化成独立的运维 migration artifact。
-
-例如：
-
-`database/mysql/checkpoint/`
-
-生产 Runtime 不调用 `setup()`。
-
-### Runtime
-
-只读验证：
-
-* Application revision；
-* checkpoint 4 表存在；
-* `checkpoint_migrations` version。
-
-不满足：
-
-* startup fail closed；
-* readiness=false。
-
-## 1-E. 固化已经完成的 Gate 结论
-
-V3 已完成：
-
-`SELECT MAX(seq) ... FOR UPDATE`
-
-在 MySQL RC 下不能串行化。
-
-实施阶段采用真实存在的 thread metadata 行作为锁锚点。
-
-🔴 **真实表名与主键（已按当前 HEAD `a55e5734` 确认）**：
-
-* 表：`threads_meta`（`persistence/thread_meta/model.py:13-16`）
-* 主键：`thread_id`（`String(64)`）
-* 仓库中**不存在**名为 `threads` 的表 —— 早期草稿的
-  `SELECT id FROM threads WHERE id = ? FOR UPDATE` **是错的，不得作为实施方案**。
-
-⚠️ **锚点存在性（Goal 3 必须处理）**：`threads_meta` 行由
-`app/gateway/services.py:190-226` 的 `_ensure_thread_metadata()` 在 run admission 阶段创建，
-**但失败是非致命的** —— 默认路径 `require_existing_thread=False`，
-异常只记 warning 并**继续走 `run_agent`**（`services.py:1628-1633` / `:1662-1665`），
-且全仓无调用点传 `True`。
-
-⇒ **不能假设锚点行一定存在。** 修法必须在事件写入路径上**自保证锚点存在**：
-先做幂等 upsert（`INSERT ... ON DUPLICATE KEY UPDATE thread_id = thread_id`，no-op，不覆盖既有字段），
-再 `SELECT thread_id FROM threads_meta WHERE thread_id = ? FOR UPDATE`，最后读 `max(seq)`。
-⚠️ 实现时需确认与 `SqlThreadMetaStore` 的写入不构成死锁环。
-
-V6 已完成：
-
-MySQL `JSON_TYPE()` 返回大写类型。
-
-V2 已降级：
-
-checkpoint namespace 主键使用 hash，不再是阻塞风险。
-
-## 验证
-
-输出一份 Gate Result：
-
-* V1 PASS / FAIL；
-* V5 PASS / FAIL（**对已冻结的 3.0.0 的兼容性 / 正确性结论**）；
-* V5 失败时落在处置阶梯的哪一档（1️⃣–5️⃣）；
-* migration execution model；
-* remaining blockers。
-
-## 退出条件
-
-必须同时满足：
-
-* V1 PASS；
-* V5 有明确结论（PASS，或 FAIL 且已按阶梯给出可接受处置）；
-* 生产 Runtime 零 DDL 方案已固定；
-* Checkpoint migration artifact 的生成方式已固定，且**与 3.0.0 版本绑定**；
-* ⛔ 不再要求"Saver 版本已固定" —— **它已经是前提，不是产出**（见 Goal 1 开头的冻结结论）。
-
-否则停止，不进入 Goal 2。
+不要为了 V1 提前实现完整业务 Schema。
 
 ---
 
-# Goal 2 — MySQL Persistence Foundation
+## Part B — V5 CheckpointSaver Gate
 
-## 目标
+使用真实：
 
-建立 MySQL 的基础运行能力：
+`MySQL 8.0.24`
 
-* driver；
-* config；
-* connection pool；
-* migration plumbing；
-* Checkpoint runtime；
-* Schema verification；
-* migration artifacts。
+验证已经冻结的：
 
-本 Goal 不处理所有业务 SQL 并发细节，那些留到 Goal 3。
+`langgraph-checkpoint-mysql[asyncmy]==3.0.0`
 
-## 2-A. MySQL Dependencies
+这是 compatibility/correctness verification，不是选型。
 
-新增 mysql extra，至少包含：
+测试环境允许显式调用：
 
-* `asyncmy`
-* `PyMySQL`
+`saver.setup()`
+
+因为测试环境拥有 DDL 权限。
+
+这不代表 Production Runtime 可以调用 `setup()`。
+
+### 必测核心 API
+
+真实执行：
+
+* `aput`
+* `aget_tuple`
+* `alist`
+* `aput_writes`
+* `adelete_thread`
+
+覆盖：
+
+* checkpoint namespace；
+* parent checkpoint；
+* metadata；
+* pending writes；
+* pending sends（若当前 Runtime 会触达）；
+* filter；
+* before；
+* limit；
+* serde round-trip。
+
+### 必测 DeerFlow Runtime 语义
+
+优先复用现有 regression tests，验证：
+
+* resume；
+* interrupt；
+* retry；
+* rollback；
+* branch / regenerate；
+* pending writes；
+* 多轮长会话；
+* concurrent checkpoint writes；
+* `checkpoint_channel_mode=full`。
+
+不要为已经有覆盖的行为重复创建大量新测试。
+
+### asyncmy Pool
+
+不能只验证上游：
+
+`AsyncMySaver.from_conn_string()`
+
+因为它走单 connection。
+
+需要验证：
+
+`AsyncMySaver(conn=<asyncmy.Pool>)`
+
+确认：
+
+* `_ainternal.get_connection` 可以识别 pool 的 `acquire()`；
+* 并发调用能从 pool 获取不同连接；
+* connection / transaction lifecycle 正确；
+* pool close 正确。
+
+### Event Loop Lifecycle
+
+确认：
+
+* Saver 在 running event loop 内构造；
+* 不在 module import 阶段构造；
+* 不跨错误的 event loop 使用；
+* 当前 DeerFlow async provider 的生命周期可以满足上游 `asyncio.get_running_loop()` 约束。
+
+### INSERT IGNORE 风险
+
+核对第三方实现涉及 `INSERT IGNORE` 的列：
+
+* `thread_id`
+* `checkpoint_id`
+* `task_id`
+* `channel`
+* `version`
+
+确认 DeerFlow 实际产生的值不会因为列长产生 silent truncation / ignored write。
+
+只基于真实取值和 Schema 做结论，不做理论性无限边界测试。
+
+### Large Checkpoint
+
+构造具有代表性的长会话 / 大 checkpoint。
+
+记录：
+
+* max blob size；
+* 典型 blob size；
+* read/write latency；
+* base64 transport amplification；
+* MySQL memory / materialization 风险；
+* 当前 `max_allowed_packet`；
+* payload 距离 packet limit 的余量。
+
+这里只收集证据。
+
+禁止因此实现：
+
+* Object Storage overflow；
+* blob threshold；
+* blob_ref；
+* GC；
+* 新 checkpoint abstraction。
+
+---
+
+## V5 失败处理
+
+出现失败时，必须严格按顺序：
+
+1. 检查是不是项目接入方式错误；
+2. adapter / wrapper；
+3. subclass；
+4. 必须改 package internal SQL / private implementation 时才 vendor **同一个 3.0.0**；
+5. 只有结构性、无法修复的 correctness 问题才升级为 architecture blocker。
+
+不得跳级。
+
+不得重新进行 Saver 市场选型。
+
+不得仅因为：
+
+* 表名；
+* COMMENT；
+* 索引命名；
+* JSON；
+* LONGBLOB；
+* `orjson`
+
+而 vendor。
+
+---
+
+## Testing Policy
+
+遵守 Risk-Adjusted Verification：
+
+* 优先复用现有 tests；
+* 只增加能够证明 V1/V5 风险的 focused tests；
+* 不测试 framework 自身显然保证的行为；
+* 不构建 PG×MySQL 全量参数化矩阵；
+* 不做 exhaustive edge-case matrix；
+* 不运行与本 Goal 无关的大型测试。
+
+真实 MySQL 验证优先级高于 mock。
+
+---
+
+## 本 Goal 禁止做
+
+不要：
+
+* 修改大批 ORM model；
+* 改 29 个时间列；
+* 改 RETURNING；
+* 改 advisory lock；
+* 改 generated column；
+* 改 Scheduler；
+* 接入正式生产 MySQL Runtime；
+* 删除 PostgreSQL；
+* vendor 第三方源码；
+* 实现 Redis；
+* 实现 Compliance Pass。
+
+这些属于后续 Goal。
+
+---
+
+## 输出
+
+完成后给出：
+
+### V1
+
+* PASS / FAIL
+* 验证证据
+* 是否存在 blocker
+
+### V5
+
+* PASS / FAIL
+* 每类 Runtime semantics 的验证结果
+* asyncmy pool 结果
+* event-loop 结果
+* large payload 结果
+* `INSERT IGNORE` 结论
+* 如果失败：落在 fallback ladder 第几档
+
+### 总结
+
+明确回答：
+
+> 是否允许进入 Goal 2？
+
+如果不能进入，停止，不要自行开始 Goal 2。
+
+---
+
+# Review R1 — G1 Gate Review
+
+**推荐模型：GPT-5.6 Sol**
+**推理强度：High**
+
+这是一次**只读 Gate Review**。
+
+不要实现新功能，不要重写方案，不要扩大范围。
+
+阅读：
+
+* `mysql-migration-design.md`
+* 当前 HEAD
+* G1 diff
+* V1 evidence
+* V5 evidence
+* G1 新增/修改的测试
+
+重点审查：
+
+1. V1 是否真的证明 MySQL / PG migration chain 隔离；
+2. 是否存在 revision/head 串链风险；
+3. 是否无必要地引入了 migration abstraction；
+4. V5 是否真正覆盖 DeerFlow 使用的 Checkpoint semantics；
+5. resume / interrupt / retry / rollback / branch / pending writes 是否证据充分；
+6. asyncmy pool 是否真正工作，而不是退化成单 connection；
+7. Saver/event-loop 生命周期是否正确；
+8. `INSERT IGNORE` 是否存在被忽略的真实 correctness 风险；
+9. large checkpoint 是否暴露 blocker；
+10. 是否有任何证据要求进入 wrapper / subclass / vendor；
+11. 是否可以安全进入 Goal 2。
+
+只报告：
+
+### Blocking issues
+
+### High-risk issues
+
+### Missing evidence
+
+### Gate verdict
+
+不要：
+
+* 给代码风格建议；
+* 给命名建议；
+* 给 Optional Compliance 建议；
+* 给未来性能优化建议；
+* 重复已经通过测试证明的低风险事项。
+
+如果没有 blocker，明确写：
+
+`G1 PASS — safe to proceed to Goal 2`
+
+---
+
+# G2 — MySQL Persistence Foundation
+
+**推荐模型：GPT-5.6 Terra**
+**推理强度：High**
+
+前置条件：
+
+* G1 V1 PASS；
+* G1 V5 PASS，或已经按固定 fallback ladder 得到可接受实现；
+* R1 没有 blocker。
+
+现在实现 **MySQL Persistence Foundation**。
+
+设计来自 `mysql-migration-design.md`，架构结论已经冻结。
+
+不要重新设计迁移架构。
+
+如果实现过程中发现设计与当前代码存在真实矛盾：
+
+记录为 blocker，并说明证据。
+
+不要通过新增通用 abstraction 自行绕开。
+
+---
+
+## 1. Dependencies
+
+新增/确认 MySQL optional dependencies：
+
+* `asyncmy>=0.2.10`
+* `PyMySQL>=1.1.1`
 * `langgraph-checkpoint-mysql[asyncmy]==3.0.0`
 
-版本严格固定 CheckpointSaver。
+CheckpointSaver 必须精确固定：
 
-不要引入 Postgres → MySQL compatibility framework。
+`==3.0.0`
 
-## 2-B. Database Config
+保留 PyMySQL：
+
+它用于同步 `SqlAgentStore`。
+
+不要因此启用同步 MySQL CheckpointSaver。
+
+---
+
+## 2. Config
 
 扩展：
 
@@ -570,7 +447,7 @@ checkpoint namespace 主键使用 hash，不再是阻塞风险。
 
 `mysql`
 
-新增 / 明确：
+新增/完善：
 
 `mysql_url`
 
@@ -581,848 +458,1685 @@ checkpoint namespace 主键使用 hash，不再是阻塞风险。
 * sync SQLAlchemy URL：
   `mysql+pymysql://`
 
-保留 PyMySQL：
+保留现有：
 
-它用于 `SqlAgentStore`，不是同步 CheckpointSaver。
+* memory
+* sqlite
+* postgres
 
-## 2-C. MySQL Application Engine
+直到 Goal 6。
 
-实现 MySQL engine 参数：
+不要创建 generic dialect config hierarchy。
 
-* `pool_pre_ping`
-* `pool_recycle`
-* READ COMMITTED isolation
-* MySQL 合适的 timeout
+---
 
-删除 Runtime 自动数据库创建能力。
+## 3. Application MySQL Engine
 
-不要实现：
+实现 MySQL engine 支持。
+
+至少处理：
+
+* asyncmy；
+* pool sizing；
+* pool_pre_ping；
+* pool_recycle；
+* timeout；
+* READ COMMITTED；
+* engine disposal。
+
+明确验证实际 MySQL connection：
+
+`@@transaction_isolation`
+
+确实为：
+
+`READ-COMMITTED`
+
+不要只依赖配置对象值。
+
+---
+
+## 4. 删除 Runtime 自动建库
+
+生产 Runtime 不允许：
+
+`CREATE DATABASE`
+
+不要把：
+
+`_auto_create_postgres_db`
+
+改造成：
 
 `CREATE DATABASE IF NOT EXISTS`
 
-目标 database 不存在：
+MySQL database 不存在：
 
-Runtime 启动失败。
+Runtime 必须失败。
 
-## 2-D. Checkpoint Connection Pool
+Dev / Compose 的 database 创建交给：
 
-为 `AsyncMySaver` 创建真正 asyncmy pool。
+* MySQL container；
+* explicit migration/dev tooling；
+* DBA/Migrator。
 
-不要直接依赖只提供单 connection 的 convenience API。
+---
 
-保持：
+## 5. Async MySQL Checkpointer Integration
 
-* 独立 Checkpointer pool；
-* Application SQLAlchemy pool 与 Checkpoint pool 生命周期分离。
+正式接入：
 
-## 2-E. Checkpoint Runtime Integration
+`AsyncMySaver`
 
-`async_provider.py` 新增 MySQL 分支：
+使用项目自己的：
 
-* 创建 pool；
-* 创建 `AsyncMySaver`；
-* 不调用 `setup()`；
-* 先执行 `verify_checkpoint_schema()`；
-* schema 正确才 yield saver。
+`asyncmy.Pool`
 
 保持：
 
-`checkpoint_channel_mode=full`
+Application SQLAlchemy pool
 
-不要挂 Redis checkpoint cache。
+与：
 
-不要启用同步 MySQL Saver。
+Checkpointer asyncmy pool
 
-## 2-F. Checkpoint Migration Artifact
+相互独立。
 
-从固定的 Saver 3.0.0 `MIGRATIONS` 中生成 / 冻结生产运维可执行 artifact。
+MySQL checkpointer Runtime path：
 
-要求：
+1. create pool；
+2. create `AsyncMySaver(conn=pool)`；
+3. verify checkpoint schema；
+4. yield saver；
+5. close pool。
 
-* 明确版本；
-* 可审查；
-* 可重复执行或有明确版本推进规则；
-* DBA 可独立运行；
-* 不依赖 Gateway；
-* 与 Runtime process 生命周期无关。
+明确：
 
-Runtime 不能执行该 artifact。
+**Production Runtime 不调用 `setup()`。**
 
-## 2-G. Application MySQL Migration Chain
+---
 
-建立：
+## 6. Checkpoint Schema Verification
 
-`persistence/migrations_mysql/`
+实现只读：
 
-包含独立：
+`verify_checkpoint_schema`
 
-`env.py`
-
-不要复用 PostgreSQL search_path / schema 逻辑。
-
-此时完成 migration infrastructure。
-
-`0001_mysql_baseline` 的最终 Schema 必须和 Goal 3 的最终 ORM 形态一致。
-
-如果当前 Goal 2 先建立 chain plumbing，可先准备 baseline 文件框架；
-
-**最终 baseline 内容必须在 Goal 3 的 ORM / Schema 修改完成后一次性冻结。**
-
-不要产生：
-
-* backfill revision；
-* transitional revision；
-* PG compatibility revision。
-
-## 2-H. Runtime Schema Verification
-
-新增只读校验：
-
-### Application
-
-验证：
-
-`alembic_version == required_head`
-
-### Checkpoint
-
-验证：
+检查：
 
 * `checkpoint_migrations`
 * `checkpoints`
 * `checkpoint_blobs`
 * `checkpoint_writes`
-* required checkpoint migration version
 
-任何不匹配：
+并验证：
+
+`MAX(v) == len(MIGRATIONS) - 1`
+
+required version 从固定的 3.0.0 定义推导。
+
+不要散落 magic number。
+
+失败时：
 
 * fail closed；
 * readiness=false；
-* 明确错误信息。
+* 明确报错。
 
-不能自动 repair。
+不得：
 
-## 2-I. Dev/Test Migration Path
-
-开发 / CI 可以显式：
-
-* 建 database；
-* `alembic upgrade head`；
-* Saver `setup()`。
-
-但该能力必须放在 dev/test migration utility 或测试 fixture。
-
-不得进入生产 Gateway startup。
-
-## 验证
-
-至少验证：
-
-1. MySQL config 解析；
-2. asyncmy engine 建立；
-3. PyMySQL AgentStore 路径；
-4. Checkpoint pool；
-5. Checkpoint schema verification；
-6. Application revision verification；
-7. migration 缺失时 fail closed；
-8. 无 DDL Runtime 不会尝试 repair；
-9. Dev/Test 可以显式初始化。
-
-## 退出条件
-
-* MySQL persistence 基础设施完成；
-* Runtime 已具备零 DDL 启动模型；
-* Application / Checkpoint 两套 migration artifact 路径明确；
-* Checkpointer 可以连接预先初始化好的 MySQL；
-* 没有自动 `setup()`；
-* 没有自动 Alembic migration；
-* 没有自动 CREATE DATABASE。
+* 自动 setup；
+* 自动 upgrade；
+* 自动 repair。
 
 ---
 
-# Goal 3 — Application Schema, SQL & Concurrency Migration
+## 7. Application Schema Verification 基础能力
 
-## 目标
+实现 Runtime 只读 Application revision check 的基础能力：
 
-完成真正的 Application Data MySQL 迁移。
+* 读取 `alembic_version`；
+* 确保只存在期望 revision；
+* mismatch 明确失败。
 
-本 Goal 结束后：
+本 Goal 还没有冻结最终 `0001_mysql_baseline`。
 
-MySQL 已经具备完整业务运行语义。
+因此：
 
-## 3-A. Final ORM Shape
+* 可以实现 verification mechanism；
+* focused tests 可以使用 synthetic / test revision；
+* 最终真实 baseline acceptance 留到 Goal 5。
 
-目标：
+不要为了现在通过 Gateway E2E 而提前冻结错误的 baseline。
 
-12 张 Application tables / 139 columns。
+---
 
-处理全部：
+## 8. MySQL Migration Infrastructure
 
-`DateTime(timezone=True)`
+建立 MySQL 独立 Alembic infrastructure：
 
-改为 MySQL：
+例如：
 
-`DATETIME(6)`
+`persistence/migrations_mysql/`
 
-并建立统一时间边界：
+包括：
 
-`UTC aware -> naive UTC for DB`
+* env；
+* script config；
+* versions location；
+* backend selection。
 
-读取时统一按 UTC 恢复。
+不要复制：
+
+* postgres search_path；
+* CREATE SCHEMA；
+* libpq options；
+* postgres_schema handling。
+
+暂时不要把最终 business schema 锁死。
+
+---
+
+## 9. Checkpoint Migration Artifact
+
+建立生产运维可执行的：
+
+`database/mysql/checkpoint/`
+
+或等价清晰目录。
+
+内容必须从：
+
+`langgraph-checkpoint-mysql==3.0.0`
+
+的 `MIGRATIONS` 派生。
+
+要求：
+
+* versioned；
+* linear；
+* auditable；
+* DBA 可以脱离 Gateway 执行；
+* 与 Saver 3.0.0 明确绑定；
+* checkpoint 4 tables 不进入 Alembic Application revisions。
+
+升级 Saver 版本时必须重新 review migration artifact。
+
+---
+
+## 10. Dev / CI / Compose
+
+Dev / CI 可以显式拥有 DDL 权限。
+
+允许：
+
+* Alembic migrate；
+* Saver `setup()`；
+* test fixture create/reset DB。
+
+但这些调用路径不能被 Production Gateway startup 复用。
+
+安全依赖**调用路径隔离**。
+
+不要增加：
+
+`auto_setup=true/false`
+
+这种生产安全开关。
+
+---
+
+## 11. Docker / Compose
+
+如果当前 Docker/Compose 是本项目的开发验证入口：
+
+增加最小的：
+
+`mysql:8.0.24`
+
+开发服务。
+
+避免：
+
+* Kubernetes；
+* Helm MySQL StatefulSet；
+* Operator；
+* 生产拓扑扩展。
+
+支持 external MySQL DSN。
+
+---
+
+## 12. Health / Capability Gates
+
+扩展现存：
+
+* health probe；
+* checkpointer backend Literal；
+* database backend guards；
+* `("sqlite","postgres")` 类能力守卫；
+
+使 MySQL 不再被错误拒绝。
+
+只改真实存在的 current HEAD 调用点。
+
+不要根据旧文档行号机械修改。
+
+---
+
+## 13. Checkpoint Mode
 
 保持：
 
-* MySQL native JSON；
-* 当前必要 FK；
-* 当前 Python default；
-* 已存在的 4 个真实 `server_default`。
+`checkpoint_channel_mode=full`
+
+不要挂：
+
+`CachedHistorySaver`
+
+不要引入 Redis。
+
+---
+
+## 14. Sync Path
+
+确认：
+
+`SqlAgentStore`
+
+在：
+
+`mysql+pymysql://`
+
+下正常工作。
+
+重点验证 graph subprocess 所需同步 Agent definition read path。
+
+不要实现：
+
+`PyMySQLSaver`
+
+或其它同步 CheckpointSaver。
+
+---
+
+## Testing
+
+只跑 Foundation 相关测试：
+
+* config parsing；
+* URL conversion；
+* engine connect/dispose；
+* READ COMMITTED；
+* sync SqlAgentStore；
+* asyncmy pool；
+* AsyncMySaver smoke；
+* schema verification；
+* missing schema fail-closed；
+* checkpoint migration artifact；
+* migration script-location isolation；
+* health/capability gates。
+
+不要跑完整 Agent E2E。
+
+不要跑完整 multi-instance。
+
+这些留给 G5。
+
+---
+
+## 退出条件
+
+必须达到：
+
+* MySQL Application engine 可连接；
+* sync MySQL AgentStore 可连接；
+* Async MySQL Checkpointer 可连接预初始化 schema；
+* Runtime Checkpointer path zero DDL；
+* schema verification 可用；
+* Application revision verification mechanism 可用；
+* MySQL migration infrastructure 可用；
+* Checkpoint migration artifact 可由 DBA 独立执行；
+* dev/test 有独立 migration/setup path；
+* Production Runtime 无自动建库、建表、upgrade、setup。
+
+完成后停止。
+
+不要开始 G3。
+
+---
+
+# G3 — Application Schema & SQL Compatibility
+
+**推荐模型：GPT-5.6 Terra**
+**推理强度：High**
+
+前置：
+
+Goal 2 PASS。
+
+现在处理 Application ORM / SQL 的 MySQL compatibility。
+
+这个 Goal 处理**确定性的方言与类型兼容问题**。
+
+不要在本 Goal 做复杂 multi-instance concurrency redesign；并发锁语义留给 Goal 4。
+
+---
+
+## 1. 时间类型
+
+当前有约 29 个：
+
+`DateTime(timezone=True)`
+
+MySQL 必须保留微秒精度：
+
+`DATETIME(6)`
+
+实现时必须同时兼顾过渡期仍然存在的 sqlite / postgres backend。
+
+使用最小、清晰的 dialect-specific mapping。
+
+不要为了这一点建立通用 Type System abstraction。
+
+统一 DB boundary：
+
+写入：
+
+`UTC-aware datetime -> naive UTC`
+
+读取：
+
+按 UTC 恢复业务语义。
+
+重点验证：
+
+* microseconds 不丢；
+* Scheduler FIFO；
+* lease expiry；
+* created_at ordering；
+* scheduled_for；
+* retry / timeout 时间比较。
+
+---
+
+## 2. JSON
+
+保留现有 11 个：
+
+`sa.JSON`
+
+MySQL 使用 native JSON。
 
 不要：
 
 * JSON → TEXT；
-* 应用层 FK cascade；
-* orphan patrol；
-* 机械新增 server_default。
+* 拆 scalar columns；
+* 新 serialization adapter。
 
-## 3-B. Final `0001_mysql_baseline`
+---
 
-现在一次性冻结：
+## 3. JsonMatch
 
-`0001_mysql_baseline`
+实现：
 
-必须直接表达最终 Schema。
+`@compiles(JsonMatch, "mysql")`
 
-包含：
+必须遵循已经实测的：
 
-* 12 张应用表；
-* 139 列；
-* `DATETIME(6)`；
-* 1 个真实 FK；
-* 原有索引；
-* MySQL 能力补偿索引；
-* 2 个 active-state generated-column unique constraints。
+`JSON_TYPE()` 返回大写：
 
-不要包含：
+* `INTEGER`
+* `DOUBLE`
+* `STRING`
+* `BOOLEAN`
+* `NULL`
+* `OBJECT`
+* `ARRAY`
 
-* Channel tables；
-* `mcp_tasks`；
-* `subagent_batches`；
-* Checkpoint 4 表；
-* backfill；
-* historical PG migrations。
+覆盖现有真实调用：
 
-OAuth identity：
+* pinned；
+* archived；
+* metadata filter/sort。
 
-直接使用：
+只为当前实际调用写测试。
 
-`UNIQUE (oauth_provider, oauth_id)`
+---
 
-不要 generated column / CONCAT workaround。
+## 4. Partial Unique
 
-## 3-C. Partial Unique
+现有三个 partial unique 语义中：
 
-只处理两处：
+只有两处需要 MySQL generated-column workaround：
 
-1. 每 thread 最多一个 active run；
-2. 每 scheduled task 最多一个 active occurrence。
+### runs
 
-使用 MySQL generated column + unique index。
+每 thread 最多一个 active run：
 
-不要为 OAuth 创建 generated column。
+`pending / running`
 
-## 3-D. JsonMatch
+### scheduled_task_runs
 
-给 `persistence/json_compat.py` 增加 MySQL compiler。
+每 task 最多一个 active occurrence：
 
-必须使用 MySQL `JSON_TYPE()` 的大写值：
+`queued / launching / running`
 
-* INTEGER
-* DOUBLE
-* STRING
-* BOOLEAN
-* NULL
-* OBJECT
-* ARRAY
+使用设计文档确定的 generated-column + unique semantics。
 
-覆盖 pinned / archived filtering and sorting。
+不得扩展到 OAuth。
 
-## 3-E. Rewrite `RETURNING`
+---
 
-全部清除 4 处 PostgreSQL `RETURNING`：
+## 5. OAuth Identity
 
-* lease renew；
-* cancel；
-* finalize；
-* occurrence sequence。
+MySQL 直接：
 
-根据实际语义使用：
+`UNIQUE(oauth_provider, oauth_id)`
 
-* `rowcount`
+允许多个：
+
+* `(NULL,NULL)`
+* `('github',NULL)`
+* `(NULL,'x')`
+
+拒绝重复真实 OAuth identity。
+
+不要：
+
+* generated column；
+* CONCAT；
+* separator encoding。
+
+---
+
+## 6. RETURNING
+
+清除全部 4 处生产 `RETURNING`。
+
+逐条保持业务语义：
+
+### renew_lease
+
+* conditional UPDATE；
+* rowcount 判断成功；
+* 同 transaction 读取 `cancel_action`。
+
+### request_cancel
+
 * `SELECT ... FOR UPDATE`
-* `UPDATE`
+* 根据当前值决定 first-writer-wins；
+* UPDATE。
+
+### finalize_if_not_cancelled
+
+* conditional UPDATE；
+* `rowcount == 1`。
+
+### scheduled occurrence seq
+
+* `SELECT last_occurrence_seq ... FOR UPDATE`
+* Python +1
+* UPDATE。
 
 不要使用：
 
 `LAST_INSERT_ID(expr)`
 
-## 3-F. Rewrite PostgreSQL UPSERT
-
-`user_preferences`
-
-从 PostgreSQL：
-
-`ON CONFLICT`
-
-改为 MySQL：
-
-`ON DUPLICATE KEY UPDATE`
-
-不要使用可能吞异常的 `INSERT IGNORE` 替代正常 upsert。
-
-## 3-G. `run_events.seq`
-
-按已关闭的 V3 结果实施。
-
-不要：
-
-`MAX(seq) FOR UPDATE`
-
-不要 Redis sequence。
-
-不要 GET_LOCK。
-
-使用当前真实存在的 Thread Metadata row 作为 transaction lock anchor。
-
-按当前 Schema，应核实为：
-
-`threads_meta.thread_id`
-
-在同事务：
-
-1. `SELECT thread_id FROM threads_meta WHERE thread_id=? FOR UPDATE`
-2. 获取锁后再读 `MAX(run_events.seq)`
-3. 分配下一 seq
-4. insert event
-5. commit
-
-必须先确认实际 ORM table / PK，不能使用文档里不存在的 `threads` 示例表。
-
-增加并发 regression：
-
-两个独立 transaction / worker 同时写同一 thread：
-
-* 都成功；
-* 无 1062；
-* seq 连续；
-* 无事件丢失。
-
-## 3-H. Scheduler Advisory Lock
-
-替换 Scheduler 全局 budget PG advisory lock。
-
-使用 MySQL transaction-scoped row locking：
-
-* 已存在可作为锁锚点的真实行优先；
-* 若确实不存在，再使用最小 sentinel row。
-
-不要 GET_LOCK。
-
-不要 Redis。
-
-## 3-I. READ COMMITTED
-
-所有 MySQL Runtime connection 必须明确使用：
-
-`READ COMMITTED`
-
-不要依赖 MySQL 默认 RR。
-
-验证：
-
-* Application SQLAlchemy pool；
-* Checkpoint pool；
-
-实际 connection isolation 都正确。
-
-## 3-J. `FOR UPDATE` / `SKIP LOCKED`
-
-重新审计 Goal 0 后真实剩余调用。
-
-预计：
-
-* 28 处 `FOR UPDATE`
-* 2 处 `SKIP LOCKED`
-
-逐个确认：
-
-* WHERE 有可用索引；
-* 锁范围合理；
-* 无意外全表锁。
-
-重点：
-
-`scheduled_task_runs`
-
-增加真正为 queue claim 正确性需要的复合索引。
-
-不要做其它 workload tuning。
-
-## 3-K. MySQL Error Mapping
-
-补 MySQL：
-
-* 1062 duplicate；
-* 1213 deadlock；
-
-尤其修复 auth repository 的 constraint detection。
-
-OAuth / email duplicate 必须继续转换为业务层已定义错误。
-
-不得让 MySQL `IntegrityError` 直接向 API 冒泡变成 500。
-
-## 3-L. Silent SQL Compatibility Scan
-
-全仓扫描并清除：
-
-* `RETURNING`
-* `date_trunc`
-* `EXTRACT(epoch)`
-* PG-only SQL function
-* PG-only system catalog
-* raw `ON CONFLICT`
-* advisory lock
-* PG regex / JSON-specific syntax
-
-注意 SQLAlchemy 能编译通过不代表 MySQL 能运行。
-
-增加 CI guard：
-
-对核心 ORM statement 使用 MySQL dialect 编译 / 静态扫描。
-
-## 3-M. Multi-instance Semantics
-
-重点重新验证：
-
-### Scheduler
-
-* claim；
-* lease；
-* occurrence；
-* reconciliation；
-* SKIP LOCKED。
-
-### Run Ownership
-
-* worker lease；
-* renew；
-* cancel；
-* finalize；
-* failover。
-
-不再验证已经删除的：
-
-* MCP Tasks；
-* SubAgent Batches。
-
-## 验证
-
-真实 MySQL 8.0.24 上执行：
-
-* ORM CRUD；
-* user/auth；
-* threads；
-* runs；
-* run events；
-* agents；
-* managed subagents；
-* projects；
-* scheduler；
-* preferences；
-* feedback；
-* checkpoint interaction；
-* duplicate constraints；
-* concurrency tests。
-
-必须验证：
-
-* 所有 4 类静默兼容问题均被消除；
-* `run_events.seq` 高并发无 1062；
-* Scheduler 多实例不重复执行；
-* Run lease 多实例正确；
-* 时间亚秒精度保留；
-* JSON filtering 正确。
-
-## 退出条件
-
-* Application Schema final；
-* `0001_mysql_baseline` final；
-* 所有 PostgreSQL-specific Application SQL 都有 MySQL 最终实现；
-* 多实例 correctness tests 通过；
-* 无已知 MySQL 静默语义错误。
+作为序号传递机制。
 
 ---
 
-# Goal 4 — Full MySQL Integration & Production-Like Acceptance
+## 7. User Preferences UPSERT
 
-## 目标
+将 PostgreSQL：
 
-以接近生产的方式证明：
+`ON CONFLICT`
 
-**完全不依赖 PostgreSQL 的 Runtime 可以在真实 MySQL 8.0.24 + 无 DDL 权限应用账号下稳定工作。**
+替换为 MySQL：
 
-这是切换前最终门禁。
+`ON DUPLICATE KEY UPDATE`
 
-## 4-A. 准备真实 MySQL 8.0.24
+保持逐-key patch semantics。
 
-使用：
+不要用：
 
-* MySQL 8.0.24；
-* `utf8mb4`；
-* READ COMMITTED；
-* 明确 `max_allowed_packet`；
-* migration admin account；
-* Runtime application account。
+`INSERT IGNORE`
 
-Runtime account 只授予需要的 DML 权限。
+代替普通业务 upsert。
 
-不授予 DDL。
+---
 
-## 4-B. 运维模拟发布
+## 8. MySQL Error Mapping
 
-使用 migration account：
+补 MySQL：
 
-1. 创建 database；
-2. 执行 Application Alembic migrations；
-3. 执行 Checkpoint migration artifact；
-4. 验证版本。
+* duplicate key `1062`
+* deadlock `1213`
 
-然后切换为 Runtime account。
+尤其修复：
 
-## 4-C. Runtime Permission Acceptance
+`app/gateway/auth/repositories/sqlite.py`
 
-Runtime account 启动 Gateway。
+或当前 HEAD 中等价位置。
 
-必须成功。
+MySQL 1062 应通过 **key/index name** 判定具体 constraint。
 
-同时确认：
+OAuth duplicate 与 email duplicate 必须继续转换为现有业务错误。
 
-* 没有 CREATE；
-* 没有 ALTER；
-* 没有 DROP；
-* 没有 CREATE INDEX；
-* 没有 Alembic upgrade；
-* 没有 Saver setup。
+不得让：
 
-可通过：
+`IntegrityError`
 
-* MySQL audit/general log；
-* information_schema；
-* 权限拒绝测试；
+直接冒泡成 500。
 
-进行确认。
+保留现有 PG/SQLite 行为直到 Goal 6。
 
-## 4-D. Schema Missing Failure Test
+---
 
-分别制造：
+## 9. Server Defaults / FK
 
-* Application revision 缺失；
-* Application revision 过旧；
-* checkpoint table 缺失；
-* checkpoint migration version 过旧。
+保留现有真实：
 
-Runtime 必须：
+4 个 `server_default`
 
-* fail closed；
-* readiness=false；
-* 给出明确错误；
-* 不尝试自动修复。
+不要机械给所有 Python defaults 加 DB default。
 
-## 4-E. End-to-End Agent
+保留：
+
+`user_preferences.user_id -> users.id ON DELETE CASCADE`
+
+不要去 FK。
+
+不要实现 orphan patrol。
+
+---
+
+## 10. SQL Compatibility Scan
+
+全仓扫描 current production code：
+
+* RETURNING；
+* ON CONFLICT；
+* date_trunc；
+* EXTRACT(epoch)；
+* pg_*；
+* PG JSON operators；
+* regex；
+* PG system catalog；
+* PostgreSQL-only raw SQL。
+
+区分：
+
+### 当前仍在 production runtime 的 PG-only SQL
+
+需要后续迁移或 Goal 4 处理。
+
+### legacy PG migration files
+
+暂时保留到 Goal 6。
+
+不要因为 legacy migration 命中就改历史 revision。
+
+---
+
+## 11. CI Guard
+
+增加最小静态 / compile guard，防止 MySQL dialect 静默接受：
+
+* RETURNING；
+* date_trunc；
+* EXTRACT(epoch)
+
+这类实际服务端不支持的语句。
+
+不要试图构建完整 SQL compatibility framework。
+
+---
+
+## Testing
+
+focused tests：
+
+* DateTime(6) precision；
+* UTC boundary；
+* JsonMatch；
+* active run uniqueness；
+* scheduled active uniqueness；
+* OAuth NULL uniqueness；
+* user preference upsert；
+* renew/cancel/finalize；
+* occurrence sequence；
+* auth duplicate mapping；
+* representative MySQL CRUD。
+
+至少关键行为需要真实 MySQL 8.0.24 验证。
+
+不要跑完整 multi-instance suite。
+
+---
+
+## 退出条件
+
+* 29 个时间列语义安全；
+* JSON 保持 native；
+* JsonMatch 正确；
+* 4 RETURNING 清除；
+* 1 ON CONFLICT 清除；
+* 2 partial-unique workaround 正确；
+* OAuth unique 正确；
+* 1062 contract 正确；
+* 当前 Application SQL 不存在已知 MySQL silent incompatibility；
+* PG legacy chain 未被破坏。
+
+完成后停止。
+
+不要开始 Goal 4。
+
+---
+
+# G4 — Concurrency, Locking & Multi-instance Semantics
+
+**推荐模型：GPT-5.6 Terra**
+**推理强度：High**
+
+这是本次 Application migration 中风险最高的实现 Goal。
+
+架构方案已经在 `mysql-migration-design.md` 中确定。
+
+先按已确定方案实现。
+
+不要重新研究 V3。
+
+不要重新发明锁机制。
+
+---
+
+## 1. Isolation
+
+确保 MySQL Application connections 真实工作在：
+
+`READ COMMITTED`
+
+使用真实连接验证：
+
+`@@transaction_isolation`
+
+不得依赖 MySQL 默认：
+
+`REPEATABLE READ`
+
+---
+
+## 2. run_events.seq
+
+V3 已经关闭。
+
+已证明以下方案错误：
+
+* `MAX(seq) ... FOR UPDATE`
+* `INSERT ... SELECT MAX(seq)+1`
+* 只依赖 unique constraint
+* Redis sequence
+* GET_LOCK
+
+实现已经确定的方案：
+
+### MySQL 路径
+
+同一个 transaction 内：
+
+1. 确保 `threads_meta` anchor row 存在；
+2. 创建必须是幂等的；
+3. 不得覆盖已存在 metadata；
+4. `SELECT thread_id FROM threads_meta ... FOR UPDATE`；
+5. 获取行锁之后再查询该 thread 的 max seq；
+6. 计算 next seq；
+7. insert run_event；
+8. commit。
+
+真实表：
+
+`threads_meta`
+
+真实 PK：
+
+`thread_id`
+
+禁止使用不存在的：
+
+`threads.id`
+
+---
+
+## 3. Anchor Row Race
+
+特别验证：
+
+线程 metadata 创建失败、超时或未提前完成时：
+
+事件路径仍然能够自己保证 anchor row 存在。
+
+并发两个 writer 首次写同一个全新 thread 时：
+
+* 不重复创建错误；
+* 不覆盖 metadata；
+* 不产生 seq collision；
+* 不产生 lost update。
+
+---
+
+## 4. Lock Ordering
+
+检查：
+
+event path 对 `threads_meta` 的新锁
+
+与现存：
+
+* thread create；
+* owner update；
+* project update；
+* archive/pin；
+* run admission；
+
+之间是否形成 lock-order inversion。
+
+只处理有真实可达路径的死锁风险。
+
+不要穷举理论状态空间。
+
+---
+
+## 5. Scheduler Global Budget Lock
+
+替换：
+
+PostgreSQL transaction advisory lock。
+
+目标必须是：
+
+transaction-scoped correctness。
+
+禁止：
+
+* GET_LOCK；
+* Redis；
+* process-local asyncio lock。
+
+优先：
+
+已有持久行作为锁锚点。
+
+如果没有安全、语义明确的现存锚点：
+
+采用最小 sentinel-row 方案。
+
+不要为了锁创建通用 distributed lock abstraction。
+
+必须证明：
+
+多个 Gateway/Worker 下 global budget 不被超卖。
+
+---
+
+## 6. `FOR UPDATE` Audit
+
+基于 current HEAD 重新扫描实际数量。
+
+设计基线约：
+
+28 处。
+
+逐处确认：
+
+* WHERE predicate；
+* 是否使用 PK / unique / 有效索引；
+* 是否可能退化成大量扫描锁；
+* lock order；
+* transaction boundary。
+
+不要因为审计顺手做 query tuning。
+
+---
+
+## 7. `SKIP LOCKED`
+
+剩余设计基线约：
+
+2 处。
+
+验证 Scheduler due-task claim：
+
+* 一个 worker 锁住后；
+* 第二个 worker 能跳过；
+* 不重复 claim；
+* 不长时间等待同一行。
+
+---
+
+## 8. Scheduler Claim Index
+
+`scheduled_task_runs` occurrence queue claim 需要 correctness-level composite index。
+
+基于真实查询：
+
+* WHERE
+* ORDER BY
+* lock behaviour
+
+确定最小正确索引。
+
+不要添加“也许以后有用”的索引。
+
+---
+
+## 9. Run Ownership / Lease
+
+真实 MySQL 下验证：
+
+* try_start；
+* renew lease；
+* cancel；
+* finalize；
+* owner fail；
+* lease expiry；
+* worker takeover。
+
+关注：
+
+* lost update；
+* duplicate owner；
+* stale lease；
+* 1213；
+* lock wait。
+
+---
+
+## 10. MySQL Deadlock 1213
+
+不要尝试“彻底消灭数据库出现 1213”这种不现实目标。
+
+需要确认：
+
+* 当前核心 transaction lock order 尽量一致；
+* 1213 不被错误识别成业务唯一冲突；
+* 可恢复路径有明确行为；
+* 不产生 silent data loss。
+
+只有存在真实可复现风险时才添加 bounded retry。
+
+不要全局套一层盲目 DB retry middleware。
+
+---
+
+## 11. Concurrency Tests
+
+必须使用真实 MySQL 8.0.24。
 
 至少覆盖：
 
-`thread create`
-→ `run`
-→ `SSE`
-→ `checkpoint`
-→ `resume`
-→ `tool call`
-→ `final response`
+### run_events
 
-再覆盖：
+两个独立 connection / worker 同时写同一 thread：
 
-* interrupt；
-* retry；
-* rollback；
-* regenerate / branch；
-* project；
-* agent；
-* managed subagent；
-* ordinary MCP；
-* ordinary SubAgent task。
+预期：
 
-## 4-F. Scheduler
+* 两个都成功；
+* 无 1062；
+* seq 唯一；
+* seq 连续；
+* 无 event loss。
 
-真实测试：
+### empty/new thread
 
-* cron / scheduled task；
-* occurrence claim；
-* overlapping policy；
-* lease；
-* retry；
-* multi-instance。
+两个 writer 同时首次写：
 
-至少两个 Gateway / worker 实例。
+同样满足以上结果。
 
-## 4-G. Run/Event Multi-instance
+### Scheduler
 
-至少验证：
+两个 worker 同时 claim：
 
-* 同 thread 并发事件；
-* run ownership；
-* lease renew；
-* cancel；
-* worker fail/recovery；
-* SSE history consistency。
+* 无 duplicate launch；
+* budget 不超限；
+* SKIP LOCKED 正确。
 
-## 4-H. Checkpoint Acceptance
+### Runs
+
+两个 worker 同时：
+
+* claim；
+* renew；
+* cancel/finalize；
+
+保持现有业务 contract。
+
+---
+
+## Testing Policy
+
+本 Goal 只跑：
+
+* concurrency tests；
+* lock tests；
+* Scheduler focused tests；
+* run ownership focused tests；
+* event store focused tests。
+
+不要再次跑：
+
+* V5 大 payload；
+* 全 Agent E2E；
+* 全套 application tests。
+
+完整系统验收在 Goal 5。
+
+---
+
+## 本 Goal 不做
+
+* 不冻结最终 production acceptance；
+* 不删除 PostgreSQL；
+* 不做 Redis；
+* 不做 performance tuning；
+* 不做 Compliance Pass；
+* 不做 speculative index cleanup；
+* 不改 CheckpointSaver 选型。
+
+---
+
+## 输出
+
+给出：
+
+* 实际 `FOR UPDATE` audit 结果；
+* 实际 `SKIP LOCKED` 结果；
+* run_events concurrency evidence；
+* Scheduler concurrency evidence；
+* Run lease evidence；
+* 1213 处理结论；
+* 新增 correctness index；
+* 是否存在尚未解决的并发 blocker。
+
+若存在 blocker：
+
+停止。
+
+不要进入 Goal 5。
+
+---
+
+# Review R2 — Concurrency Correctness Review
+
+**推荐模型：GPT-5.6 Sol**
+**推理强度：High**
+
+这是一次只读 correctness review。
+
+阅读：
+
+* `mysql-migration-design.md`
+* 当前 HEAD
+* Goal 4 diff
+* concurrency tests
+* lock traces / error logs
+* transaction implementations
+
+只关注：
+
+### Lost update
+
+是否存在两个 transaction 都成功但覆盖结果。
+
+### Lock anchor
+
+`threads_meta` anchor：
+
+* 是否保证存在；
+* upsert 是否真正 no-op；
+* 是否可能覆盖业务字段。
+
+### Lock ordering
+
+是否存在：
+
+A：threads_meta → runs
+
+B：runs → threads_meta
+
+这类可达 lock-order inversion。
+
+### Transaction boundary
+
+是否存在：
+
+锁在 transaction A 获取，
+
+但 read/update 在 transaction B 执行。
+
+### run_events seq
+
+是否仍存在：
+
+* duplicate；
+* gap due to failed transaction；
+* batch rollback event loss；
+* no-row lock hole。
+
+### Scheduler
+
+是否真正防止：
+
+* duplicate claim；
+* budget oversubscription；
+* double launch。
+
+### FOR UPDATE
+
+是否有无索引导致过宽锁范围。
+
+### READ COMMITTED
+
+是否实际生效。
+
+### 1213
+
+是否存在明显可避免的 deadlock loop，或错误的 retry behaviour。
+
+只输出：
+
+1. Blocking correctness issues
+2. High-risk concurrency issues
+3. Missing concurrency evidence
+4. Review verdict
+
+不要输出：
+
+* 代码风格问题；
+* 性能微优化；
+* schema 命名；
+* COMMENT；
+* Redis 建议；
+* Optional Compliance。
+
+如果无 blocker：
+
+`G4 concurrency semantics approved — safe to proceed to Goal 5`
+
+---
+
+# G5 — Final MySQL Baseline & Full Production-like Acceptance
+
+**推荐模型：GPT-5.6 Terra**
+**推理强度：High**
+
+前置：
+
+* G1 PASS
+* G2 PASS
+* G3 PASS
+* G4 PASS
+* R2 没有 blocker
+
+现在执行唯一一次**完整 MySQL production-like acceptance**。
+
+本 Goal 同时冻结最终：
+
+`0001_mysql_baseline`
+
+---
+
+## 1. Freeze Final ORM / Schema
+
+先确认当前实际 ORM：
+
+目标核心范围仍为：
+
+12 application tables。
+
+G0 已删除对象不得重新出现。
+
+重新反射 current metadata。
+
+不要盲信旧统计。
+
+如果 business columns 与设计基线 139 有差异：
+
+先解释差异。
+
+只有明确属于 G2/G3/G4 的设计变化才允许接受。
+
+---
+
+## 2. `0001_mysql_baseline`
+
+现在才正式冻结：
+
+`0001_mysql_baseline`
+
+这是 fresh-cutover root revision。
+
+必须直接生成最终 MySQL Application Schema。
+
+包含：
+
+* 12 application tables；
+* 当前最终 business columns；
+* MySQL `DATETIME(6)`；
+* native JSON；
+* 1 个现有 FK；
+* 现有必要 indexes；
+* 2 个 active-state generated-column uniqueness workaround；
+* OAuth full unique；
+* Scheduler correctness composite index；
+* 其它 G3/G4 确认必须存在的 correctness schema。
+
+Checkpoint 4 tables：
+
+**不得进入该 revision。**
+
+它们由：
+
+`database/mysql/checkpoint/`
+
+独立迁移。
+
+不要包含：
+
+* Channel；
+* GitHub webhook；
+* mcp_tasks；
+* subagent_batches；
+* LangGraph Store；
+* PG history；
+* transitional schema；
+* backfill；
+* dual-write；
+* Optional Compliance。
+
+---
+
+## 3. Fresh Migration Acceptance
+
+从真正空的 MySQL 8.0.24 database 开始。
+
+使用：
+
+**Migration account**
+
+执行：
+
+1. create database；
+2. Application Alembic migration；
+3. Checkpoint migration artifact；
+4. revision/version verification。
 
 验证：
 
+* MySQL chain single head；
+* `0001_mysql_baseline` 可以从空库一次到最终状态；
+* 不依赖 PG revision；
+* 不包含 PG-specific SQL；
+* checkpoint 4 tables 独立存在；
+* Application / Checkpoint version 都正确。
+
+---
+
+## 4. Production Runtime Account
+
+创建/使用只拥有：
+
+* SELECT
+* INSERT
+* UPDATE
+* DELETE
+
+的 Runtime account。
+
+明确不授予：
+
+* CREATE
+* ALTER
+* DROP
+* INDEX
+* REFERENCES / DDL related privileges
+
+使用该账号启动 Gateway。
+
+成功启动本身就是 zero-DDL 的核心证明之一。
+
+---
+
+## 5. Missing Migration Negative Tests
+
+分别验证：
+
+### Application revision 缺失
+
+预期：
+
+* fail closed；
+* readiness=false；
+* 不自动 migrate。
+
+### Application revision outdated
+
+同上。
+
+### Checkpoint table 缺失
+
+同上。
+
+### checkpoint_migrations outdated
+
+同上。
+
+### Database 不存在
+
+startup failure。
+
+禁止 Runtime：
+
+* create database；
+* create table；
+* setup；
+* alembic upgrade；
+* stamp；
+* create_all；
+* auto repair。
+
+---
+
+## 6. Single-instance E2E
+
+使用真实 MySQL。
+
+覆盖核心生产链：
+
+* auth/basic user；
+* thread create；
+* run create；
+* SSE；
+* messages；
+* run event history；
+* checkpoint write；
+* next-turn resume；
+* interrupt/resume；
+* retry；
+* rollback；
+* regenerate/branch；
+* project；
+* agent CRUD；
+* managed subagent；
+* ordinary SubAgent `task`；
+* ordinary MCP；
+* preferences；
+* feedback；
+* scheduler basic run。
+
+只验证当前真实产品能力。
+
+不要恢复 G0 删除能力。
+
+---
+
+## 7. Multi-instance
+
+至少：
+
+2 个 Gateway / Worker instance。
+
+验证：
+
+* same thread active-run uniqueness；
+* Run ownership；
+* lease；
+* failover；
+* cancel；
+* finalize；
+* run_events seq；
+* SSE history；
+* Scheduler claim；
+* SKIP LOCKED；
+* occurrence sequence；
+* global budget；
+* overlap policy；
+* retry/reconciliation。
+
+---
+
+## 8. Checkpoint Final Acceptance
+
+验证：
+
+* pending writes；
 * resume；
 * interrupt；
-* pending writes；
+* retry；
 * rollback；
-* concurrent writes；
+* branch；
+* concurrent checkpoint writes；
 * long conversation；
-* large checkpoint payload。
+* large payload；
+* Runtime restart；
+* MySQL restart；
+* durable recovery。
 
 记录：
 
 * max blob；
-* p99 blob；
+* representative p99 / high percentile blob；
 * read/write latency；
-* `max_allowed_packet` 余量。
+* max_allowed_packet；
+* margin。
 
-只观察，不做 Object Storage 优化。
+如果数据健康：
 
-## 4-I. Fresh Cutover Strategy
-
-开发 /测试期间可以分别验证：
-
-* Application MySQL；
-* Checkpoint MySQL。
-
-但**生产 fresh cutover 不要求经历 PG/MySQL hybrid backend 阶段**。
-
-生产最终一次切换到：
-
-`Application = MySQL`
-`Checkpointer = MySQL`
-
-不要为了迁移人为维护：
-
-`Application=PG + Checkpoint=MySQL`
-
-或：
-
-`Application=MySQL + Checkpoint=PG`
-
-作为生产阶段。
-
-## 验证总表
-
-必须全部 PASS：
-
-1. Gateway startup；
-2. Agent chat；
-3. SSE；
-4. Checkpoint resume；
-5. interrupt；
-6. retry；
-7. rollback；
-8. Scheduler；
-9. multi-instance；
-10. MCP ordinary tools；
-11. SubAgent ordinary task；
-12. long conversation；
-13. large payload；
-14. Runtime application account 无 DDL；
-15. migration 未执行时 fail closed；
-16. migration 完成时 ready；
-17. Runtime 全程零 DDL；
-18. MySQL restart 后 durable state 正常。
-
-## 退出条件
-
-只有全部通过才能进入 Goal 5。
-
-不要因为“大部分测试通过”提前删除 PostgreSQL。
+不实现 Object Storage overflow。
 
 ---
 
-# Goal 5 — PostgreSQL Removal & Final Cleanup
+## 9. Runtime DDL Audit
 
-## 目标
+确认应用完整生命周期：
 
-在 MySQL 已成为唯一生产持久化后端后，彻底删除 PostgreSQL implementation。
+DDL = 0。
 
-最终仓库不保留“以后也许会切回 PG”的兼容代码。
+优先通过：
 
-## 5-A. 删除 PostgreSQL Driver
+* DML-only account；
+* database audit/general log（若测试环境方便）；
+* information_schema；
+
+证明。
+
+不要为了测试专门搭复杂审计平台。
+
+---
+
+## 10. Test Strategy
+
+这是整个迁移**唯一一次完整大验收**。
+
+在本 Goal 才执行：
+
+* full MySQL integration；
+* multi-instance；
+* production permission model；
+* major checkpoint regression；
+* Scheduler integration。
+
+如果已有测试已经覆盖，不重复创建第二套测试。
+
+测试失败：
+
+先定位真实失败层：
+
+* migration；
+* ORM；
+* pool；
+* CheckpointSaver；
+* locking；
+* Runtime；
+
+不要通过增加 sleep/retry 隐藏 race。
+
+---
+
+## 11. Baseline Freeze Rule
+
+G5 PASS 后：
+
+`0001_mysql_baseline`
+
+视为冻结。
+
+后续新的业务 Schema 变化：
+
+必须新增：
+
+`0002+`
+
+不得继续编辑 `0001_mysql_baseline`。
+
+---
+
+## 退出条件
+
+只有全部满足才允许进入 Goal 6：
+
+* fresh MySQL migration PASS；
+* Application revision correct；
+* Checkpoint version correct；
+* DML-only Runtime startup PASS；
+* missing migration fail closed PASS；
+* Runtime zero DDL；
+* Agent E2E PASS；
+* Scheduler PASS；
+* multi-instance PASS；
+* Checkpoint resume/interrupt/retry/rollback PASS；
+* long conversation PASS；
+* restart durability PASS；
+* 无已知 correctness blocker。
+
+如果存在 blocker：
+
+停止。
+
+不要删除 PostgreSQL。
+
+---
+
+# G6 — PostgreSQL Removal & Final Cleanup
+
+**推荐模型：GPT-5.6 Terra**
+**推理强度：Medium**
+
+如果仓库耦合比预期复杂，可以升 High。
+
+前置：
+
+Goal 5 全部 PASS。
+
+现在 MySQL 已经成为唯一 production relational backend。
+
+本 Goal 是 **removal / cleanup Goal**。
+
+不是架构重设计 Goal。
+
+不要添加替代 abstraction。
+
+---
+
+## 1. Remove PostgreSQL Dependencies
 
 删除：
 
 * asyncpg；
 * psycopg；
 * psycopg-pool；
+* langgraph-checkpoint-postgres；
 * postgres optional extra；
-* PG-only connection config。
 
-保留：
+以及不再使用的 PG dependency glue。
+
+保持：
 
 * asyncmy；
 * PyMySQL；
-* MySQL CheckpointSaver dependency。
+* langgraph-checkpoint-mysql 3.0.0。
 
-## 5-B. 删除 PostgreSQL Checkpointer
+---
+
+## 2. Remove PostgreSQL Runtime
 
 删除：
 
 * AsyncPostgresSaver；
 * PostgresSaver；
-* Postgres pool；
-* postgres checkpointer provider branch；
-* PG health probe。
+* postgres pool；
+* postgres checkpointer provider branches；
+* PostgreSQL health probe；
+* PG engine branches；
+* PG-only error handling；
+* PG schema support。
 
-同步 MySQL Saver仍然不需要增加。
+同步 MySQL CheckpointSaver仍然不要增加。
 
-## 5-C. 删除 PostgreSQL Schema Helpers
+---
+
+## 3. Remove PostgreSQL Schema Helpers
 
 删除：
 
-* `postgres_schema.py`
-* search_path
-* libpq options
-* CREATE SCHEMA support
-* PostgreSQL schema validation。
+* postgres_schema helpers；
+* CREATE SCHEMA；
+* search_path；
+* libpq options；
+* schema validation only used by PG。
 
-## 5-D. 删除 PostgreSQL Migration Chain
+不要碰 SQLite 自己需要的 helper。
 
-删除旧 PG migration history：
+---
+
+## 4. Remove PG Migration Legacy
+
+现在可以删除旧 PostgreSQL：
 
 `0001`–`0023`
 
-只保留最终 MySQL migration chain。
+legacy migration chain。
 
-删除 PG-only：
+同时删除仅服务旧 PG migration 的：
 
 * migration env；
-* revision helpers；
-* PG system catalog handling。
+* revision helper；
+* forward-compatible bootstrap；
+* PG schema floor；
+* old baseline constants；
+* PG historical upgrade tests。
 
-Git history 本身已经保留历史，不需要在 active source tree 再维护。
+Git history 已经保留历史。
 
-## 5-E. 删除 Legacy Bootstrap
+active source tree 不需要再留一份“以防万一”。
 
-删除只为 PostgreSQL 历史升级服务的：
+---
 
-* `_CANONICAL_0019_SCHEMA_FLOOR`
-* `_BASELINE_TABLE_NAMES`
-* `_BASELINE_INDEX_NAMES`
-* `_BASELINE_REVISION`
-* `_FORWARD_COMPATIBLE_REVISION`
-* `_validate_forward_schema`
-* `_run_baseline_create_all_sync`
-* `_postgres_lock`
-* `_PG_LOCK_KEY`
-* PG legacy branch
-* PG forward-compatible branch
-* 对应 pin tests
-
-注意：
-
-如果 SQLite / dev path 仍使用 `_run_create_all_sync()`，保留该通用能力。
-
-## 5-F. 删除 PostgreSQL SQL Branches
-
-删除所有：
-
-`if dialect == "postgresql"`
-
-仅保留仍实际支持的：
-
-* mysql；
-* sqlite / memory（如果仍作为 dev/test backend）。
+## 5. Remove PG Bootstrap
 
 删除：
 
-* `pg_insert`
-* `ON CONFLICT`
-* advisory locks
-* PG JSON compiler
-* PG-specific error parsing。
+* PG session advisory bootstrap lock；
+* PG-specific bootstrap state；
+* `_auto_create_postgres_db` 残留；
+* PG create_all/stamp compatibility；
+* old forward-schema checks。
 
-`json_compat.py` 保留：
+最终 Runtime 只保留：
 
+MySQL production read-only schema verification
+
+以及：
+
+明确的 dev/test migration path。
+
+---
+
+## 6. Remove PG SQL Branches
+
+扫描：
+
+`dialect == "postgresql"`
+
+逐个判断。
+
+删除已经没有消费者的：
+
+* pg_insert；
+* ON CONFLICT；
+* advisory lock；
+* PG JsonMatch compiler；
+* pg system catalog；
+* search_path；
+* PG SQL functions。
+
+保留：
+
+* mysql；
 * sqlite；
-* mysql；
 
-如果两者仍需要。
+如果 SQLite / memory 仍是支持的 dev/test backend。
 
-## 5-G. 清理 Tests
+不要为了“以后可能重新支持 PostgreSQL”留 dead branch。
+
+---
+
+## 7. Remove PG Tests
 
 删除：
 
-* PG-only tests；
+* PG-only driver tests；
 * PG bootstrap tests；
 * PG migration tests；
-* PG driver tests。
+* PG schema tests；
+* 已不存在实现对应的 PG-only fixture。
 
-把真正 backend-neutral 的测试保留。
+backend-neutral behaviour tests 必须保留。
 
-不要留下大规模 PG/MySQL parameterization。
+不要删除只是因为测试名字里出现 postgres 就删除：
 
-最终核心集成测试使用：
+先确认它是否还在验证 backend-neutral contract。
 
-MySQL 8.0.24。
+---
 
-## 5-H. 清理 Deployment
+## 8. Deployment Cleanup
 
 删除：
 
 * Helm PostgreSQL StatefulSet；
+* PostgreSQL values；
 * PG secrets；
-* PG environment variables；
-* PG Docker/deploy references。
+* PG env；
+* PG deployment docs；
+* old PG connection examples。
 
-不要因此新增 Kubernetes MySQL StatefulSet。
+不要新增：
 
-生产 MySQL 继续支持 external DSN。
+* Kubernetes MySQL StatefulSet；
+* MySQL Operator。
 
-Docker Compose 只保留开发所需 MySQL。
+生产仍支持：
 
-## 5-I. 清理 Documentation
+external MySQL DSN。
+
+---
+
+## 9. Config / Documentation
 
 更新：
 
-* `README`
-* `README-zh`
-* `backend/AGENTS.md`
-* `config.example.yaml`
+* README
+* README-zh
+* AGENTS
+* config.example.yaml
+* Docker docs
 * deployment docs
-* migration docs
-* Feature Inventory
+* MySQL migration docs
 
 明确：
 
-* Production persistence = MySQL；
-* PostgreSQL 不再是 supported backend；
-* Redis 不承担 durable truth；
-* production Runtime zero DDL；
-* migrations 由运维执行。
+Production relational DB = MySQL.
 
-## 5-J. Final Dead-code Scan
+PostgreSQL no longer supported.
+
+Production Runtime zero DDL.
+
+Application Schema 与 Checkpoint Schema 均由运维迁移。
+
+---
+
+## 10. Final Dead-code Scan
 
 全仓扫描：
 
@@ -1431,78 +2145,86 @@ Docker Compose 只保留开发所需 MySQL。
 * asyncpg
 * psycopg
 * pg_
-* ON CONFLICT
-* RETURNING
-* advisory
-* search_path
 * pg_catalog
 * pg_index
 * to_regclass
+* advisory
+* search_path
+* ON CONFLICT
+* RETURNING
 
-每个剩余命中必须：
+每一个剩余命中：
 
-* 有明确保留理由；
-* 或删除。
+要么：
 
-不得留下无法解释的 PG compatibility branch。
+* 有明确合理原因；
 
-## 最终验收
+要么：
 
-重新从全新环境执行：
+* 删除。
 
-1. 创建空 MySQL 8.0.24 database；
-2. 运维 migration account 执行 Application migration；
-3. 运维执行 Checkpoint migration artifact；
-4. 使用无 DDL Runtime account 启动系统；
-5. Gateway ready；
-6. 跑完整 Agent E2E；
-7. 跑 Scheduler；
-8. 跑 multi-instance；
-9. 跑 checkpoint resume / interrupt / rollback；
-10. 确认无 PostgreSQL 依赖。
-
-## 最终退出条件
-
-满足以下所有条件：
-
-* PostgreSQL Runtime code = 0；
-* PostgreSQL driver = 0；
-* PostgreSQL active migrations = 0；
-* PostgreSQL deploy dependency = 0；
-* MySQL 是唯一生产关系数据库；
-* production Runtime zero DDL；
-* MySQL fresh bootstrap 可重复；
-* Checkpoint migration 可由 DBA 独立执行；
-* 全量核心测试通过；
-* 文档与实现一致。
-
-至此 PostgreSQL → MySQL fresh-cutover 完成。
+不要机械删除文档中的历史说明，如果它明确属于 migration archive / historical note。
 
 ---
 
-# Non-Goals
+## 11. Verification
 
-整个迁移过程中不要顺手实现：
+本 Goal 不需要重新完整重复 Goal 5 的所有压力测试。
 
-* Redis checkpoint cache；
-* delta checkpoint；
-* Redis durable lease；
-* Object Storage checkpoint overflow；
-* Kubernetes MySQL；
-* Helm MySQL Operator；
-* `mcp_tasks`；
-* `subagent_batches`；
-* sync MySQL CheckpointSaver；
-* Store MySQL backend；
-* JSON → TEXT；
-* 去 FK；
-* 全量 server_default；
-* Schema Compliance；
-* 无关索引优化；
-* query tuning；
-* 历史数据 migration；
-* dual write；
-* rollback to PostgreSQL；
-* 通用 database portability framework。
+按照 Risk-Adjusted Verification：
 
-这些全部属于迁移之外的独立问题。
+先跑：
+
+* import/startup；
+* config；
+* migration head；
+* MySQL smoke；
+* Agent smoke；
+* Checkpoint resume smoke；
+* Scheduler smoke；
+* relevant focused regression。
+
+如果 G6 删除触及了核心 Runtime execution path：
+
+再扩大到相应 G5 regression。
+
+只有发现真实风险时才重新跑 full suite。
+
+---
+
+## 最终退出条件
+
+最终仓库满足：
+
+* PostgreSQL runtime code = 0；
+* PostgreSQL drivers = 0；
+* PostgreSQL active migration chain = 0；
+* PostgreSQL deployment dependency = 0；
+* MySQL 是唯一 production relational backend；
+* Application MySQL migration single head；
+* Checkpoint MySQL artifact 独立；
+* Production Runtime zero DDL；
+* SQLite / memory dev path（如仍支持）正常；
+* ordinary MCP 正常；
+* ordinary SubAgent 正常；
+* Scheduler 正常；
+* Checkpoint 正常；
+* 文档与实现一致。
+
+最后输出：
+
+### Removed
+
+### Intentionally retained
+
+### Tests run
+
+### Remaining known risks
+
+### Final migration status
+
+如果没有 remaining correctness blocker：
+
+明确写：
+
+`PostgreSQL → MySQL 8.0.24 fresh-cutover implementation complete.`
