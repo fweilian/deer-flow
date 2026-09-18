@@ -3,7 +3,7 @@
 Provides an **async context manager** for long-running async servers that need
 proper resource cleanup.
 
-Supported backends: memory, sqlite, postgres.
+Supported backends: memory, sqlite, postgres, mysql.
 
 Usage (e.g. FastAPI lifespan)::
 
@@ -25,7 +25,7 @@ from collections.abc import AsyncIterator
 from langgraph.types import Checkpointer
 
 from deerflow.config.app_config import AppConfig, get_app_config
-from deerflow.persistence.postgres_schema import create_schema_sql, dsn_with_search_path, normalize_libpq_dsn
+from deerflow.persistence.postgres_schema import dsn_with_search_path, normalize_libpq_dsn
 from deerflow.runtime.checkpointer.provider import (
     POSTGRES_CONN_REQUIRED,
     POSTGRES_INSTALL,
@@ -76,15 +76,6 @@ def _build_postgres_pool(conn_string: str, schema: str = ""):
     )
 
 
-async def _ensure_postgres_schema_with_pool(pool, schema: str) -> None:
-    """Create the configured schema before LangGraph creates its tables."""
-    statement = create_schema_sql(schema)
-    if statement is None:
-        return
-    async with pool.connection() as conn:
-        await conn.execute(statement)
-
-
 def _ensure_postgres_imports():
     """Import and return (AsyncPostgresSaver, AsyncConnectionPool), raising ImportError on failure."""
     try:
@@ -98,6 +89,47 @@ def _ensure_postgres_imports():
         raise ImportError(POSTGRES_INSTALL) from exc
 
     return AsyncPostgresSaver, AsyncConnectionPool
+
+
+@contextlib.asynccontextmanager
+async def _mysql_saver(
+    conn_string: str,
+    *,
+    pool_size: int,
+    pool_recycle: int,
+    connect_timeout: float | None,
+) -> AsyncIterator[Checkpointer]:
+    """Yield a Saver over DeerFlow's own asyncmy pool, without DDL."""
+    try:
+        import asyncmy
+        from langgraph.checkpoint.mysql.asyncmy import AsyncMySaver
+    except ImportError as exc:
+        raise ImportError("MySQL checkpointer requires deerflow-harness[mysql]") from exc
+    if not conn_string:
+        raise ValueError("MySQL checkpointer requires a connection string")
+
+    options = AsyncMySaver.parse_conn_string(conn_string)
+    pool_options = {
+        "minsize": 1,
+        "maxsize": pool_size,
+        "autocommit": True,
+        "pool_recycle": pool_recycle,
+        **options,
+    }
+    if connect_timeout is not None:
+        pool_options["connect_timeout"] = connect_timeout
+    pool = await asyncmy.create_pool(
+        **pool_options,
+    )
+    try:
+        from deerflow.persistence.mysql_schema import verify_checkpoint_schema
+
+        async with pool.acquire() as connection:
+            await verify_checkpoint_schema(connection)
+        yield AsyncMySaver(conn=pool)
+    finally:
+        pool.close()
+        await pool.wait_closed()
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +154,6 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
 
         conn_str = await asyncio.to_thread(_prepare_sqlite_checkpointer_path, config.connection_string or "store.db")
         async with AsyncSqliteSaver.from_conn_string(conn_str) as saver:
-            await saver.setup()
             yield saver
         return
 
@@ -133,9 +164,12 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
         AsyncPostgresSaver, _ = _ensure_postgres_imports()
         pool = _build_postgres_pool(config.connection_string, config.postgres_schema)
         async with pool:
-            await _ensure_postgres_schema_with_pool(pool, config.postgres_schema)
             saver = AsyncPostgresSaver(conn=pool)
-            await saver.setup()
+            yield saver
+        return
+
+    if config.type == "mysql":
+        async with _mysql_saver(config.connection_string or "", pool_size=5, pool_recycle=300, connect_timeout=30) as saver:
             yield saver
         return
 
@@ -164,7 +198,6 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
 
         conn_str = await asyncio.to_thread(_prepare_database_sqlite_checkpointer_path, db_config)
         async with AsyncSqliteSaver.from_conn_string(conn_str) as saver:
-            await saver.setup()
             yield saver
         return
 
@@ -175,9 +208,19 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
         AsyncPostgresSaver, _ = _ensure_postgres_imports()
         pool = _build_postgres_pool(db_config.postgres_url, db_config.postgres_schema)
         async with pool:
-            await _ensure_postgres_schema_with_pool(pool, db_config.postgres_schema)
             saver = AsyncPostgresSaver(conn=pool)
-            await saver.setup()
+            yield saver
+        return
+
+    if db_config.backend == "mysql":
+        if not db_config.mysql_url:
+            raise ValueError("database.mysql_url is required for the mysql backend")
+        async with _mysql_saver(
+            db_config.mysql_url,
+            pool_size=db_config.pool_size,
+            pool_recycle=db_config.pool_recycle,
+            connect_timeout=db_config.command_timeout,
+        ) as saver:
             yield saver
         return
 

@@ -1,0 +1,172 @@
+"""Focused Goal 2 coverage for the MySQL persistence foundation."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+from deerflow.config.checkpointer_config import CheckpointerConfig
+from deerflow.config.database_config import DatabaseConfig
+from deerflow.persistence import engine as engine_mod
+from deerflow.persistence.mysql_schema import (
+    CHECKPOINT_TABLES,
+    SCHEMA_ERROR,
+    required_checkpoint_migration_version,
+    verify_application_revision,
+    verify_checkpoint_schema,
+)
+from deerflow.runtime.checkpointer.provider import _resolve_checkpointer_config
+
+
+class _Cursor:
+    def __init__(self, responses: list[list[tuple[object, ...]]]) -> None:
+        self._responses = responses
+        self._current: list[tuple[object, ...]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def execute(self, _statement: str, _params: tuple[object, ...] = ()) -> None:
+        self._current = self._responses.pop(0)
+
+    async def fetchall(self) -> list[tuple[object, ...]]:
+        return self._current
+
+    async def fetchone(self) -> tuple[object, ...] | None:
+        return self._current[0] if self._current else None
+
+
+class _Connection:
+    def __init__(self, responses: list[list[tuple[object, ...]]]) -> None:
+        self._cursor = _Cursor(responses)
+
+    def cursor(self) -> _Cursor:
+        return self._cursor
+
+
+def test_mysql_config_generates_async_and_sync_urls() -> None:
+    config = DatabaseConfig(backend="mysql", mysql_url="mysql://alice:secret@db.example:3307/deerflow")
+
+    assert config.app_sqlalchemy_url == "mysql+asyncmy://alice:secret@db.example:3307/deerflow"
+    assert config.app_sync_sqlalchemy_url == "mysql+pymysql://alice:secret@db.example:3307/deerflow"
+    assert CheckpointerConfig(type="mysql", connection_string=config.mysql_url).type == "mysql"
+
+    sync_url_config = DatabaseConfig(backend="mysql", mysql_url="mysql+pymysql://alice:secret@db.example/deerflow")
+    assert sync_url_config.app_sqlalchemy_url == "mysql+asyncmy://alice:secret@db.example/deerflow"
+
+
+def test_mysql_engine_kwargs_harden_the_pool_and_set_read_committed() -> None:
+    kwargs = engine_mod._mysql_engine_kwargs(echo=False, pool_size=7, pool_recycle=123, command_timeout=9)
+
+    assert kwargs["pool_size"] == 7
+    assert kwargs["pool_pre_ping"] is True
+    assert kwargs["pool_recycle"] == 123
+    assert kwargs["isolation_level"] == "READ COMMITTED"
+    assert kwargs["connect_args"] == {"connect_timeout": 9}
+
+
+def test_unified_mysql_config_selects_async_only_checkpointer() -> None:
+    config = type("AppConfig", (), {"database": DatabaseConfig(backend="mysql", mysql_url="mysql://user:pass@db/deerflow"), "checkpointer": None})()
+
+    resolved = _resolve_checkpointer_config(config)
+
+    assert resolved.type == "mysql"
+    assert resolved.connection_string == "mysql://user:pass@db/deerflow"
+
+
+@pytest.mark.anyio
+async def test_application_revision_verification_requires_one_expected_row() -> None:
+    await verify_application_revision(_Connection([[("0001_mysql_baseline",)]]), "0001_mysql_baseline")
+
+    with pytest.raises(RuntimeError, match=SCHEMA_ERROR):
+        await verify_application_revision(_Connection([[("wrong",)]]), "0001_mysql_baseline")
+    with pytest.raises(RuntimeError, match=SCHEMA_ERROR):
+        await verify_application_revision(_Connection([[("a",), ("b",)]]), "a")
+
+
+@pytest.mark.anyio
+async def test_checkpoint_schema_verification_is_read_only_and_fail_closed() -> None:
+    table_rows = [(name,) for name in CHECKPOINT_TABLES]
+    await verify_checkpoint_schema(_Connection([table_rows, [(required_checkpoint_migration_version(),)]]))
+
+    with pytest.raises(RuntimeError, match=SCHEMA_ERROR):
+        await verify_checkpoint_schema(_Connection([table_rows[:-1], [(required_checkpoint_migration_version(),)]]))
+    with pytest.raises(RuntimeError, match=SCHEMA_ERROR):
+        await verify_checkpoint_schema(_Connection([table_rows, [(required_checkpoint_migration_version() - 1,)]]))
+
+
+def test_checkpoint_artifact_is_complete_and_derived_from_pinned_saver() -> None:
+    pytest.importorskip("langgraph.checkpoint.mysql.base")
+    from langgraph.checkpoint.mysql.base import MIGRATIONS
+
+    artifact_dir = Path(__file__).resolve().parents[2] / "database/mysql/checkpoint"
+    migrations = sorted(artifact_dir.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+
+    assert len(MIGRATIONS) == 22
+    assert len(migrations) == len(MIGRATIONS)
+    for version, (path, upstream) in enumerate(zip(migrations, MIGRATIONS, strict=True)):
+        statement, marker = path.read_text(encoding="utf-8").rsplit("INSERT INTO checkpoint_migrations", 1)
+        assert " ".join(statement.split()) == " ".join(upstream.split())
+        assert f"VALUES ({version});" in marker
+    readme = (artifact_dir / "README.md").read_text(encoding="utf-8")
+    assert "SAVER_VERSION = 3.0.0" in readme
+    assert "MIGRATIONS_COUNT = 22" in readme
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_mysql_runtime_paths_use_preinitialized_schema_without_ddl() -> None:
+    """Exercise the actual app engine, async pool Saver, and sync AgentStore.
+
+    The disposable database must already contain the DBA-owned checkpoint
+    artifact. This test creates only its isolated ``agents``/``alembic_version``
+    fixtures and never calls a Saver setup method.
+    """
+    uri = os.environ.get("TEST_MYSQL_URI")
+    if not uri:
+        pytest.skip("TEST_MYSQL_URI is not set")
+
+    from langgraph.checkpoint.base import empty_checkpoint
+    from sqlalchemy import create_engine, text
+
+    from app.gateway.health import DATABASE_OK, _probe_checkpointer_backend
+    from deerflow.persistence.agents.model import AgentRow
+    from deerflow.persistence.agents.sql import SqlAgentStore
+    from deerflow.runtime.checkpointer.async_provider import _async_checkpointer_from_database
+
+    config = DatabaseConfig(backend="mysql", mysql_url=uri, pool_size=2, pool_recycle=120, command_timeout=10)
+    await engine_mod.init_engine_from_config(config)
+    try:
+        engine = engine_mod.get_engine()
+        assert engine is not None
+        async with engine.connect() as connection:
+            assert (await connection.execute(text("SELECT @@transaction_isolation"))).scalar_one() == "READ-COMMITTED"
+        # Borrowing again exercises SQLAlchemy's pool_pre_ping path.
+        async with engine.connect() as connection:
+            assert (await connection.execute(text("SELECT 1"))).scalar_one() == 1
+
+        async with _async_checkpointer_from_database(config) as saver:
+            checkpoint_config = {"configurable": {"thread_id": "goal2-provider-smoke", "checkpoint_ns": ""}}
+            checkpoint = empty_checkpoint()
+            checkpoint["channel_values"] = {"goal2": "smoke"}
+            checkpoint["channel_versions"] = {"goal2": "00000000000000000000000000000001.0000000000000001"}
+            await saver.aput(checkpoint_config, checkpoint, {}, {})
+        assert await _probe_checkpointer_backend(CheckpointerConfig(type="mysql", connection_string=uri)) == DATABASE_OK
+
+        sync_engine = create_engine(config.app_sync_sqlalchemy_url)
+        try:
+            AgentRow.__table__.drop(sync_engine, checkfirst=True)
+            AgentRow.__table__.create(sync_engine)
+            store = SqlAgentStore(config.app_sync_sqlalchemy_url)
+            store.create("goal2", {"name": "goal2", "description": "MySQL AgentStore smoke"}, "soul", user_id="goal2-user")
+            assert store.get("goal2", user_id="goal2-user").name == "goal2"
+        finally:
+            AgentRow.__table__.drop(sync_engine, checkfirst=True)
+            sync_engine.dispose()
+    finally:
+        await engine_mod.close_engine()

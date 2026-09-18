@@ -71,7 +71,12 @@ def _migration_script_location(backend: str) -> Path:
 def _get_alembic_config(engine: AsyncEngine, *, backend: str = "postgres", postgres_schema: str = "") -> AlembicConfig:
     cfg = AlembicConfig()
     cfg.set_main_option("script_location", str(_migration_script_location(backend)))
-    cfg.set_main_option("sqlalchemy.url", _alembic_safe_url(engine))
+    url = _alembic_safe_url(engine)
+    # Alembic's MySQL environment is synchronous and DBA-owned.  The runtime
+    # engine is asyncmy, while migrations intentionally use PyMySQL.
+    if backend == "mysql":
+        url = url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
+    cfg.set_main_option("sqlalchemy.url", url)
     if postgres_schema:
         cfg.set_main_option("deerflow_pg_schema", postgres_schema)
     return cfg

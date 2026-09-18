@@ -33,6 +33,6 @@ class AgentStorageConfig(BaseModel):
             "'file' (default) keeps their on-disk layouts and is node-local without a shared mount. "
             "'db' stores both definition types in the shared SQL persistence layer so a "
             "multi-instance deployment sees the same catalog on every node; it requires "
-            "database.backend to be 'sqlite' or 'postgres'."
+            "database.backend to be 'sqlite', 'postgres', or 'mysql'."
         ),
     )

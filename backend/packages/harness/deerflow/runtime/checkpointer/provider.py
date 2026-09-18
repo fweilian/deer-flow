@@ -3,7 +3,7 @@
 Provides a **sync singleton** and a **sync context manager** for LangGraph
 graph compilation and CLI tools.
 
-Supported backends: memory, sqlite, postgres.
+Supported backends: memory, sqlite, postgres. MySQL is intentionally async-only.
 
 Usage::
 
@@ -74,6 +74,10 @@ def _resolve_checkpointer_config(app_config: AppConfig) -> CheckpointerConfig:
         if not database.postgres_url:
             raise ValueError("database.postgres_url is required for the postgres backend")
         return CheckpointerConfig(type="postgres", connection_string=database.postgres_url, postgres_schema=database.postgres_schema)
+    if database.backend == "mysql":
+        if not database.mysql_url:
+            raise ValueError("database.mysql_url is required for the mysql backend")
+        return CheckpointerConfig(type="mysql", connection_string=database.mysql_url)
     raise ValueError(f"Unknown database backend: {database.backend!r}")
 
 
@@ -143,6 +147,9 @@ def _sync_checkpointer_cm(config: CheckpointerConfig) -> Iterator[Checkpointer]:
             logger.info("Checkpointer: using PostgresSaver")
             yield saver
         return
+
+    if config.type == "mysql":
+        raise ValueError("MySQL is supported only by the async checkpointer; SqlAgentStore uses database.mysql_url through mysql+pymysql://.")
 
     raise ValueError(f"Unknown checkpointer type: {config.type!r}")
 

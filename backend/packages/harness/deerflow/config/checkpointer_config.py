@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from deerflow.config.postgres_schema import POSTGRES_SCHEMA_PATTERN, validate_postgres_schema
 
-CheckpointerType = Literal["memory", "sqlite", "postgres"]
+CheckpointerType = Literal["memory", "sqlite", "postgres", "mysql"]
 
 
 class CheckpointerConfig(BaseModel):
@@ -16,11 +16,12 @@ class CheckpointerConfig(BaseModel):
         description="Checkpointer backend type. "
         "'memory' is in-process only (lost on restart). "
         "'sqlite' persists to a local file (requires langgraph-checkpoint-sqlite). "
-        "'postgres' persists to PostgreSQL (install with deerflow-harness[postgres])."
+        "'postgres' persists to PostgreSQL (install with deerflow-harness[postgres]). "
+        "'mysql' persists to MySQL (install with deerflow-harness[mysql])."
     )
     connection_string: str | None = Field(
         default=None,
-        description="Connection string for sqlite (file path) or postgres (DSN). "
+        description="Connection string for sqlite (file path), postgres, or mysql (DSN). "
         "Optional for sqlite and defaults to 'store.db' when omitted. "
         "Required for postgres. "
         "For sqlite, use a file path like '.deer-flow/checkpoints.db' or ':memory:' for in-memory. "

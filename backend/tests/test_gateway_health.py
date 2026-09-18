@@ -279,6 +279,19 @@ async def test_probe_checkpointer_postgres_without_psycopg_is_unreachable(monkey
     assert result == DATABASE_UNREACHABLE
 
 
+@pytest.mark.anyio
+async def test_probe_checkpointer_mysql_uses_mysql_probe(monkeypatch):
+    async def _ok(conn_string: str) -> str:
+        assert conn_string == "mysql://user:pass@db/deerflow"
+        return DATABASE_OK
+
+    monkeypatch.setattr(health_module, "_probe_mysql_backend", _ok)
+
+    result = await _probe_checkpointer_backend(CheckpointerConfig(type="mysql", connection_string="mysql://user:pass@db/deerflow"))
+
+    assert result == DATABASE_OK
+
+
 def test_resolve_checkpointer_config_passes_through_resolution(monkeypatch):
     resolved = CheckpointerConfig(type="memory")
     monkeypatch.setattr(

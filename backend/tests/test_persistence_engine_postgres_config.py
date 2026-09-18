@@ -6,7 +6,7 @@ import asyncio
 import sys
 from time import monotonic
 from types import ModuleType
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -77,13 +77,10 @@ async def test_configured_command_timeout_ends_stalled_command() -> None:
         assert kwargs["pool_pre_ping"] is True
         return _StalledAsyncpgEngine(kwargs["connect_args"]["command_timeout"])
 
-    bootstrap_schema = AsyncMock()
-
     with (
         patch.dict(sys.modules, {"asyncpg": ModuleType("asyncpg")}),
         patch.object(engine_mod, "create_async_engine", side_effect=_create_engine),
         patch.object(engine_mod, "async_sessionmaker", return_value=MagicMock()),
-        patch("deerflow.persistence.bootstrap.bootstrap_schema", new=bootstrap_schema),
     ):
         try:
             await engine_mod.init_engine_from_config(config)
@@ -110,13 +107,10 @@ async def test_init_engine_from_config_preserves_longer_command_timeout_override
     )
     mock_engine = MagicMock()
     mock_engine.dispose = AsyncMock()
-    bootstrap_schema = AsyncMock()
-
     with (
         patch.dict(sys.modules, {"asyncpg": ModuleType("asyncpg")}),
         patch.object(engine_mod, "create_async_engine", return_value=mock_engine) as create_engine,
         patch.object(engine_mod, "async_sessionmaker", return_value=MagicMock()),
-        patch("deerflow.persistence.bootstrap.bootstrap_schema", new=bootstrap_schema),
     ):
         try:
             await engine_mod.init_engine_from_config(config)
@@ -133,51 +127,35 @@ async def test_init_engine_postgres_uses_hardened_kwargs() -> None:
     url = "postgresql+asyncpg://user:password@localhost/deerflow"
     mock_engine = MagicMock()
     mock_engine.dispose = AsyncMock()
-    bootstrap_schema = AsyncMock()
-
     with (
         patch.dict(sys.modules, {"asyncpg": ModuleType("asyncpg")}),
         patch.object(engine_mod, "create_async_engine", return_value=mock_engine) as create_engine,
         patch.object(engine_mod, "async_sessionmaker", return_value=MagicMock()),
-        patch("deerflow.persistence.bootstrap.bootstrap_schema", new=bootstrap_schema),
     ):
         try:
             await engine_mod.init_engine(backend="postgres", url=url, echo=True, pool_size=12)
 
             create_engine.assert_called_once_with(url, **engine_mod._postgres_engine_kwargs(echo=True, pool_size=12))
-            bootstrap_schema.assert_awaited_once_with(mock_engine, backend="postgres", postgres_schema="")
         finally:
             await engine_mod.close_engine()
 
 
 @pytest.mark.asyncio
-async def test_init_engine_postgres_retry_uses_hardened_kwargs() -> None:
+async def test_init_engine_postgres_never_auto_creates_or_bootstraps_schema() -> None:
     url = "postgresql+asyncpg://user:password@localhost/deerflow"
-    initial_engine = MagicMock()
-    initial_engine.dispose = AsyncMock()
-    retry_engine = MagicMock()
-    retry_engine.dispose = AsyncMock()
-    bootstrap_schema = AsyncMock(side_effect=[Exception("database does not exist"), None])
-    auto_create = AsyncMock()
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
 
     with (
         patch.dict(sys.modules, {"asyncpg": ModuleType("asyncpg")}),
-        patch.object(engine_mod, "create_async_engine", side_effect=[initial_engine, retry_engine]) as create_engine,
+        patch.object(engine_mod, "create_async_engine", return_value=engine) as create_engine,
         patch.object(engine_mod, "async_sessionmaker", return_value=MagicMock()),
-        patch.object(engine_mod, "_auto_create_postgres_db", new=auto_create),
-        patch("deerflow.persistence.bootstrap.bootstrap_schema", new=bootstrap_schema),
     ):
         try:
             await engine_mod.init_engine(backend="postgres", url=url, echo=False, pool_size=8)
 
             kwargs = engine_mod._postgres_engine_kwargs(echo=False, pool_size=8)
-            assert create_engine.call_args_list == [call(url, **kwargs), call(url, **kwargs)]
-            auto_create.assert_awaited_once_with(url)
-            initial_engine.dispose.assert_awaited_once()
-            assert bootstrap_schema.await_args_list == [
-                call(initial_engine, backend="postgres", postgres_schema=""),
-                call(retry_engine, backend="postgres", postgres_schema=""),
-            ]
+            create_engine.assert_called_once_with(url, **kwargs)
         finally:
             await engine_mod.close_engine()
 
@@ -188,7 +166,6 @@ async def test_init_engine_sqlite_omits_postgres_kwargs_and_keeps_wal_listener(t
     mock_engine = MagicMock()
     mock_engine.sync_engine = object()
     mock_engine.dispose = AsyncMock()
-    bootstrap_schema = AsyncMock()
     registered: dict[str, object] = {}
 
     def _capture_listener(target, event_name):
@@ -205,7 +182,6 @@ async def test_init_engine_sqlite_omits_postgres_kwargs_and_keeps_wal_listener(t
         patch.object(engine_mod, "create_async_engine", return_value=mock_engine) as create_engine,
         patch.object(engine_mod, "async_sessionmaker", return_value=MagicMock()),
         patch("sqlalchemy.event.listens_for", new=_capture_listener),
-        patch("deerflow.persistence.bootstrap.bootstrap_schema", new=bootstrap_schema),
     ):
         try:
             await engine_mod.init_engine(backend="sqlite", url=url, echo=True, sqlite_dir=str(tmp_path))

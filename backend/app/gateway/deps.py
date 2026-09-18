@@ -125,9 +125,9 @@ def _validate_agent_storage(config: AppConfig) -> None:
     agent_storage = getattr(config, "agent_storage", None)
     backend = getattr(agent_storage, "backend", "file")
     db_backend = getattr(getattr(config, "database", None), "backend", None)
-    if backend == "db" and db_backend not in ("sqlite", "postgres"):
+    if backend == "db" and db_backend not in ("sqlite", "postgres", "mysql"):
         raise SystemExit(
-            f"agent_storage.backend='db' requires database.backend to be 'sqlite' or 'postgres', "
+            f"agent_storage.backend='db' requires database.backend to be 'sqlite', 'postgres', or 'mysql', "
             f"but database.backend is '{db_backend}'. A 'memory' database is per-process and cannot "
             "share agent definitions across nodes. Set database.backend, or use agent_storage.backend='file'."
         )
@@ -420,8 +420,8 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
 
         app.state.stream_bridge = await stack.enter_async_context(make_stream_bridge(config))
 
-        # Initialize persistence engine BEFORE checkpointer so that
-        # auto-create-database logic runs first (postgres backend).
+        # Initialize the connection-only persistence engine before the
+        # checkpointer. Schema DDL is owned by migration tooling, never here.
         # Own cleanup before initialization so partial startup and host
         # cancellation cannot strand an engine created along the way.
         stack.push_async_callback(close_engine)

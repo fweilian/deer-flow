@@ -215,18 +215,41 @@ async def _probe_postgres_backend(conn_string: str, schema: str) -> str:
     return DATABASE_OK
 
 
+async def _probe_mysql_backend(conn_string: str) -> str:
+    """Probe a MySQL checkpointer database with a bounded SELECT 1."""
+    try:
+        import asyncmy
+        from langgraph.checkpoint.mysql.asyncmy import AsyncMySaver
+
+        options = AsyncMySaver.parse_conn_string(conn_string)
+        async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
+            connection = await asyncmy.connect(connect_timeout=_PROBE_TIMEOUT_SECONDS, **options)
+            try:
+                async with connection.cursor() as cursor:
+                    await cursor.execute("SELECT 1")
+                from deerflow.persistence.mysql_schema import verify_checkpoint_schema
+
+                await verify_checkpoint_schema(connection)
+            finally:
+                connection.close()
+    except Exception:
+        logger.warning("Readiness mysql checkpointer probe failed", exc_info=True)
+        return DATABASE_UNREACHABLE
+    return DATABASE_OK
+
+
 async def _probe_checkpointer_backend(config: CheckpointerConfig) -> str:
     """Probe the LangGraph checkpointer/Store backend described by *config*.
 
     *config* is the startup-bound snapshot (see :func:`resolve_checkpointer_config`);
     an in-process memory backend has nothing external to probe. Probes that
-    open a connection (sqlite file, postgres) are serialized so concurrent
+    open a connection (sqlite file, postgres, mysql) are serialized so concurrent
     unauthenticated requests cannot exhaust the database's connections.
     """
     if config.type == "memory":
         # In-process backend: there is nothing external to probe.
         return DATABASE_NOT_CONFIGURED
-    if config.type not in ("sqlite", "postgres"):
+    if config.type not in ("sqlite", "postgres", "mysql"):
         logger.warning("Readiness probe: unknown checkpointer backend %r", config.type)
         return DATABASE_UNREACHABLE
     async with _probe_gate():
@@ -234,6 +257,8 @@ async def _probe_checkpointer_backend(config: CheckpointerConfig) -> str:
             return await _probe_sqlite_backend(config.connection_string)
         if not config.connection_string:
             return DATABASE_UNREACHABLE
+        if config.type == "mysql":
+            return await _probe_mysql_backend(config.connection_string)
         return await _probe_postgres_backend(config.connection_string, config.postgres_schema)
 
 

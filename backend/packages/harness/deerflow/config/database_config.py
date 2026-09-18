@@ -11,13 +11,13 @@ blocking, making a unified file safe for both workloads.  Writers
 that contend for the lock wait via the default 5-second sqlite3
 busy timeout rather than failing immediately.
 
-Postgres mode: both use the same database URL but maintain independent
+Postgres/MySQL mode: both use the same database URL but maintain independent
 connection pools with different lifecycles.
 
 Memory mode: checkpointer uses MemorySaver, app uses in-memory stores.
 No database is initialized.
 
-Sensitive values (postgres_url) should use $VAR syntax in config.yaml
+Sensitive values (postgres_url/mysql_url) should use $VAR syntax in config.yaml
 to reference environment variables from .env:
 
     database:
@@ -140,7 +140,7 @@ class CheckpointCacheConfig(BaseModel):
 
 
 class DatabaseConfig(BaseModel):
-    backend: Literal["memory", "sqlite", "postgres"] = Field(
+    backend: Literal["memory", "sqlite", "postgres", "mysql"] = Field(
         default="memory",
         description=("Storage backend for both checkpointer and application data. 'memory' for development (no persistence across restarts), 'sqlite' for single-node deployment, 'postgres' for production multi-node deployment."),
     )
@@ -176,6 +176,12 @@ class DatabaseConfig(BaseModel):
             "Use $DATABASE_URL in config.yaml to reference .env. "
             "Example: postgresql://user:pass@host:5432/deerflow "
             "(the +asyncpg driver suffix is added automatically where needed)."
+        ),
+    )
+    mysql_url: str = Field(
+        default="",
+        description=(
+            "MySQL connection URL, shared by the checkpointer and app. Use $MYSQL_DATABASE_URL in config.yaml to reference .env. Example: mysql://user:pass@host:3306/deerflow (the asyncmy/PyMySQL driver suffix is added automatically)."
         ),
     )
     echo_sql: bool = Field(
@@ -291,6 +297,13 @@ class DatabaseConfig(BaseModel):
                 # libpq's short alias: accepted by the psycopg checkpointer, but not a SQLAlchemy dialect.
                 url = url.replace("postgres://", "postgresql+asyncpg://", 1)
             return url
+        if self.backend == "mysql":
+            url = self.mysql_url
+            if url.startswith("mysql://"):
+                url = url.replace("mysql://", "mysql+asyncmy://", 1)
+            elif url.startswith("mysql+pymysql://"):
+                url = url.replace("mysql+pymysql://", "mysql+asyncmy://", 1)
+            return url
         raise ValueError(f"No SQLAlchemy URL for backend={self.backend!r}")
 
     @property
@@ -315,5 +328,12 @@ class DatabaseConfig(BaseModel):
                 url = url.replace("postgresql://", "postgresql+psycopg://", 1)
             elif url.startswith("postgres://"):
                 url = url.replace("postgres://", "postgresql+psycopg://", 1)
+            return url
+        if self.backend == "mysql":
+            url = self.mysql_url
+            if url.startswith("mysql+asyncmy://"):
+                url = url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
+            elif url.startswith("mysql://"):
+                url = url.replace("mysql://", "mysql+pymysql://", 1)
             return url
         raise ValueError(f"No SQLAlchemy URL for backend={self.backend!r}")

@@ -25,6 +25,29 @@
 # Access: http://localhost:${PORT:-2026}
 
 services:
+  # ── MySQL (development / CI migration target) ────────────────────────────
+  # The image creates MYSQL_DATABASE for local use. Production databases and
+  # schemas are created by DBA-owned migration credentials instead.
+  mysql:
+    image: mysql:8.0.24
+    container_name: deer-flow-mysql
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-deerflow}
+      MYSQL_USER: ${MYSQL_USER:-deerflow}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-deerflow}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-deerflow-root}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3307}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "--password=$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - deer-flow
+
   # ── Redis Stream Bridge ────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
@@ -187,6 +210,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
+      mysql:
+        condition: service_healthy
       redis:
         condition: service_healthy
       minio-init:
@@ -235,6 +260,7 @@ services:
       timeout: 5s
       retries: 6
 volumes:
+  mysql-data:
   redis-data:
   minio-data:
 

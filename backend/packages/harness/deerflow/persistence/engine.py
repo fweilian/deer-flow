@@ -16,7 +16,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-# Recycle pooled Postgres connections before stale idle sockets can hang
+# Recycle pooled database connections before stale idle sockets can hang
 # pool_pre_ping. The command timeout bounds stalled ORM queries independently.
 POSTGRES_POOL_RECYCLE_SECONDS = 300
 POSTGRES_COMMAND_TIMEOUT_SECONDS = 30
@@ -49,37 +49,49 @@ def _postgres_engine_kwargs(
     }
 
 
+def _mysql_engine_kwargs(
+    *,
+    echo: bool,
+    pool_size: int,
+    pool_recycle: int = POSTGRES_POOL_RECYCLE_SECONDS,
+    command_timeout: float | None = POSTGRES_COMMAND_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    """Build SQLAlchemy options for the MySQL asyncmy application pool."""
+    connect_args: dict[str, object] = {}
+    if command_timeout is not None:
+        connect_args["connect_timeout"] = command_timeout
+    return {
+        "echo": echo,
+        "pool_size": pool_size,
+        "pool_pre_ping": True,
+        "pool_recycle": pool_recycle,
+        "isolation_level": "READ COMMITTED",
+        "connect_args": connect_args,
+        "json_serializer": _json_serializer,
+    }
+
+
+def _mysql_pre_ping_dialect():
+    """Return the smallest asyncmy-specific fix for SQLAlchemy pre-ping.
+
+    SQLAlchemy 2.0.49's asyncmy adapter requires the positional ``reconnect``
+    argument while its base ``do_ping`` calls ``ping()`` without one.  Passing
+    ``False`` preserves pool_pre_ping's non-reconnecting probe semantics.
+    """
+    from sqlalchemy.dialects.mysql.asyncmy import MySQLDialect_asyncmy
+
+    class _MySQLDialectWithPrePing(MySQLDialect_asyncmy):
+        def do_ping(self, dbapi_connection) -> bool:
+            dbapi_connection.ping(False)
+            return True
+
+    return _MySQLDialectWithPrePing()
+
+
 logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
-
-
-async def _auto_create_postgres_db(url: str) -> None:
-    """Connect to the ``postgres`` maintenance DB and CREATE DATABASE.
-
-    The target database name is extracted from *url*.  The connection is
-    made to the default ``postgres`` database on the same server using
-    ``AUTOCOMMIT`` isolation (CREATE DATABASE cannot run inside a
-    transaction).
-    """
-    from sqlalchemy import text
-    from sqlalchemy.engine.url import make_url
-
-    parsed = make_url(url)
-    db_name = parsed.database
-    if not db_name:
-        raise ValueError("Cannot auto-create database: no database name in URL")
-
-    # Connect to the default 'postgres' database to issue CREATE DATABASE
-    maint_url = parsed.set(database="postgres")
-    maint_engine = create_async_engine(maint_url, isolation_level="AUTOCOMMIT")
-    try:
-        async with maint_engine.connect() as conn:
-            await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-        logger.info("Auto-created PostgreSQL database: %s", db_name)
-    finally:
-        await maint_engine.dispose()
 
 
 async def init_engine(
@@ -93,20 +105,17 @@ async def init_engine(
     sqlite_dir: str = "",
     postgres_schema: str = "",
 ) -> None:
-    """Create the async engine and session factory, then auto-create tables.
+    """Create the async engine and session factory.
 
     Args:
-        backend: "memory", "sqlite", or "postgres".
-        url: SQLAlchemy async URL (for sqlite/postgres).
+        backend: "memory", "sqlite", "postgres", or "mysql".
+        url: SQLAlchemy async URL (for sqlite/postgres/mysql).
         echo: Echo SQL to log.
         pool_size: Postgres connection pool size.
         pool_recycle: Seconds before Postgres connections are recycled.
         command_timeout: Timeout in seconds for app ORM Postgres commands, or None to disable.
         sqlite_dir: Directory to create for SQLite (ensured to exist).
-        postgres_schema: Target PostgreSQL schema. When set, the engine
-            pins the connection ``search_path`` to it via asyncpg
-            ``server_settings`` and the schema is created (if missing)
-            before tables are auto-created. Ignored for non-postgres.
+        postgres_schema: Target PostgreSQL schema. Ignored for non-postgres.
     """
     global _engine, _session_factory
 
@@ -128,6 +137,12 @@ async def init_engine(
                 "explicitly. Or switch to backend: sqlite in config.yaml for\n"
                 "single-node deployment."
             ) from None
+
+    if backend == "mysql":
+        try:
+            import asyncmy  # noqa: F401
+        except ImportError:
+            raise ImportError("database.backend is set to 'mysql' but asyncmy is not installed.\nInstall it with:\n    cd backend && uv sync --all-packages --extra mysql") from None
 
     if backend == "sqlite":
         import os
@@ -180,62 +195,36 @@ async def init_engine(
                 connect_args=pg_connect_args,
             ),
         )
+    elif backend == "mysql":
+        _engine = create_async_engine(
+            url,
+            dialect=_mysql_pre_ping_dialect(),
+            **_mysql_engine_kwargs(
+                echo=echo,
+                pool_size=pool_size,
+                pool_recycle=pool_recycle,
+                command_timeout=command_timeout,
+            ),
+        )
     else:
         raise ValueError(f"Unknown persistence backend: {backend!r}")
 
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
-    # Schema bootstrap (hybrid):
-    #   - empty DB        -> create_all + alembic stamp head
-    #   - legacy DB       -> create_all (baseline tables only, backfill) + alembic stamp baseline + upgrade head
-    #   - already managed -> alembic upgrade head
-    # Concurrency: Postgres advisory lock (true cross-process); SQLite uses an
-    # in-process asyncio.Lock plus a 30s PRAGMA busy_timeout (also set on
-    # alembic's own connections in env.py) -- multi-process SQLite bootstrap
-    # is best-effort, gated by SQLite's natural file-level write lock.
-    # See deerflow.persistence.bootstrap for the full state machine.
-    from deerflow.persistence.bootstrap import bootstrap_schema
+    # Schema DDL belongs exclusively to DBA/migration and test fixtures.
+    # Runtime owns connections only; a missing MySQL database fails closed
+    # during startup rather than being silently auto-created.
+    if backend == "mysql":
+        from sqlalchemy import text
 
-    async def _ensure_postgres_schema() -> None:
-        # CREATE SCHEMA is DDL and is unaffected by search_path, so it is
-        # safe even though the connection's search_path already points at
-        # the (not-yet-existing) target schema. It must run before
-        # ``bootstrap_schema`` so the subsequent ``create_all`` / alembic
-        # DDL lands in the target schema instead of failing on a missing one.
-        if backend == "postgres" and postgres_schema:
-            from sqlalchemy.schema import CreateSchema
-
-            async with _engine.begin() as conn:
-                await conn.execute(CreateSchema(postgres_schema, if_not_exists=True))
-
-    try:
-        await _ensure_postgres_schema()
-        await bootstrap_schema(_engine, backend=backend, postgres_schema=postgres_schema)
-    except Exception as exc:
-        if backend == "postgres" and "does not exist" in str(exc):
-            # Database not yet created -- attempt to auto-create it, then retry.
-            await _auto_create_postgres_db(url)
-            # Rebuild engine against the now-existing database. The rebuilt
-            # engine MUST keep the same connect_args so the retried bootstrap
-            # lands in the target schema, not the default one.
+        async with _engine.connect() as conn:
+            isolation = (await conn.execute(text("SELECT @@transaction_isolation"))).scalar_one()
+        if str(isolation).upper() != "READ-COMMITTED":
             await _engine.dispose()
-            _engine = create_async_engine(
-                url,
-                **_postgres_engine_kwargs(
-                    echo=echo,
-                    pool_size=pool_size,
-                    pool_recycle=pool_recycle,
-                    command_timeout=command_timeout,
-                    connect_args=pg_connect_args,
-                ),
-            )
-            _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
-            await _ensure_postgres_schema()
-            await bootstrap_schema(_engine, backend=backend, postgres_schema=postgres_schema)
-        else:
-            raise
-
-    logger.info("Persistence engine initialized: backend=%s", backend)
+            _engine = None
+            _session_factory = None
+            raise RuntimeError(f"MySQL transaction isolation must be READ-COMMITTED; server reported {isolation!r}")
+    logger.info("Persistence engine initialized without schema bootstrap: backend=%s", backend)
 
 
 async def init_engine_from_config(config) -> None:

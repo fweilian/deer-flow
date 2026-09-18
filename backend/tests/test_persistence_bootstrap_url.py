@@ -86,6 +86,14 @@ def test_alembic_config_omits_schema_option_when_unset() -> None:
     assert cfg.get_main_option("deerflow_pg_schema") is None
 
 
+def test_mysql_alembic_config_uses_the_dba_pymysql_driver() -> None:
+    engine = _fake_engine("mysql+asyncmy://alice:secret@db.example/deerflow")
+
+    cfg = _get_alembic_config(engine, backend="mysql")
+
+    assert cfg.get_main_option("sqlalchemy.url") == "mysql+pymysql://alice:secret@db.example/deerflow"
+
+
 def test_env_module_pins_search_path_from_schema_option() -> None:
     """env.py must read ``deerflow_pg_schema`` and pin the alembic-spawned
     engine's search_path. That engine is built from the bare URL and does not

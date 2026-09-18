@@ -770,6 +770,32 @@ tools:
     group: file:write
     use: deerflow.sandbox.tools:str_replace_tool
 
+  # KPlus knowledge retrieval (read-only, optional). Authenticates against
+  # /v1/auth/login with open_id + service_id, then sends the returned ragToken as
+  # the ragToken cookie on /v1/search/api/search. One ragToken is cached per
+  # DeerFlow instance and re-acquired when it expires; no Redis or database is
+  # involved, so a restart simply authenticates again.
+  #
+  # Credentials come from the environment; `host`, `open_id`, `service_id` and
+  # `knowledge_id` never reach the model. `top_k` on the tool is clamped to
+  # `sort_count` (KPlus caps sortCount at 15). Uncomment and fill in to enable.
+  # - name: knowledge_search
+  #   group: knowledge
+  #   use: deerflow.community.kplus_knowledge.tools:knowledge_search_tool
+  #   host: https://kplus.example.com  # Docker: use a backend-reachable URL
+  #   open_id: $KPLUS_OPEN_ID
+  #   service_id: $KPLUS_SERVICE_ID
+  #   knowledge_id: 00000000000000000000000000000000  # Replace with a KPlus knowledge ID
+  #   atom_ids: []        # Optional; omit to let the service choose
+  #   node_ids: []        # Optional; omit to let the service choose
+  #   sort_count: 15      # Upper bound on the model-supplied top_k (1-15)
+  #   sort_score: 0.5     # KPlus sortScore threshold (0.01-1)
+  #   recall_count: 8     # Per-knowledge recall depth (1-15)
+  #   html_clear: true    # Ask KPlus to strip HTML from returned passages
+  #   timeout_seconds: 30
+  #   max_chars_per_result: 1200
+  #   max_total_chars: 8000
+
   # Bash execution tool
   # Active only when using an isolated shell sandbox or when
   # sandbox.allow_host_bash: true explicitly opts into host bash.
@@ -1688,7 +1714,8 @@ skill_evolution:
 #
 # backend: memory  -- No persistence, data lost on restart
 # backend: sqlite  -- Single-node deployment, files in sqlite_dir
-# backend: postgres -- Production multi-node deployment
+# backend: postgres -- Legacy production multi-node deployment
+# backend: mysql    -- MySQL 8.0.24 deployment (requires DBA-run migrations)
 #
 # If this section is omitted or empty in config.yaml, DeerFlow uses:
 #   backend: sqlite
@@ -1734,6 +1761,13 @@ skill_evolution:
 #   # tables in this schema. Leave empty to use the server default
 #   # search_path, usually public.
 #   postgres_schema: deerflow
+#
+# database:
+#   backend: mysql
+#   mysql_url: $MYSQL_DATABASE_URL
+#   # Install with: cd backend && uv sync --all-packages --extra mysql
+#   # Run the DBA-owned application and checkpoint migration artifacts before
+#   # starting Gateway. Runtime validates schema only and never creates it.
 #
 # postgres_schema only takes effect for new tables. On startup DeerFlow runs
 # CREATE SCHEMA IF NOT EXISTS and pins the connection search_path; it never
@@ -1797,9 +1831,9 @@ database:
 # dedupe_storage:
 #   backend: auto
 
-  # Recycle app ORM PostgreSQL connections before the environment's idle cutoff.
+  # Recycle app ORM PostgreSQL/MySQL connections before the environment's idle cutoff.
   pool_recycle: 300
-  # App ORM PostgreSQL command timeout. Set to null to disable it or raise it
+  # App ORM PostgreSQL/MySQL connection timeout. Set to null to disable it or raise it
   # for intentionally long commands.
   command_timeout: 30
   # Restart required. Use one value across every process sharing this database.
@@ -1895,7 +1929,7 @@ run_events:
 #                   Node-local without a shared mount.
 # backend: db    -- Both definition types use the shared SQL persistence layer,
 #                   so every node sees them. Requires database.backend to be
-#                   'sqlite' or 'postgres' (rejected at startup on 'memory').
+#                   'sqlite', 'postgres', or 'mysql' (rejected at startup on 'memory').
 #
 # Switching an existing install to 'db'? Import the on-disk Custom Agents and
 # managed subagents once with:
