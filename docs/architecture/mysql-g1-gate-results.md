@@ -24,6 +24,8 @@
 - `aput`、`aget_tuple`、`alist`（filter / before / limit）、`aput_writes`、`adelete_thread`；
 - namespace、parent checkpoint / resume、metadata、pending writes（normal / interrupt / retry channel）、branch/regenerate 所用的 `aget_tuple` + `aput` 复制语义、serde 二进制 round-trip；
 - `checkpoint_channel_mode=full` 所需的非 shallow `AsyncMySaver`、并发 checkpoint 写入，以及 asyncmy pool 的多连接借用与关闭；
+- 真实 LangGraph / DeerFlow Runtime：`interrupt → checkpoint → Command(resume)`、节点 retry、Gateway `_prepare_regenerate_payload()` 解析历史 checkpoint 并由 LangGraph 从 replay base 生成新回答、Gateway `_branch_thread_with_reservation()` 将 source checkpoint 写入新 thread，以及 DeerFlow `_rollback_to_pre_run_checkpoint()` 均由 `AsyncMySaver(conn=asyncmy.Pool)` 在 MySQL 8.0.24 上执行；中断 checkpoint 的 pending writes 可读，rollback 恢复原 messages 并只重新附加原 task 的 pending write；
+- focused pool concurrency：同一 `AsyncMySaver(conn=pool)` 上以 `asyncio.gather()` 并发启动两个独立 LangGraph thread 的 interrupt/resume 流程；两条结果仅含各自 thread 的输入与 resume 值，无 transaction/state contamination 或 event-loop error；
 - `LONGBLOB` / 4 GiB schema、`INSERT IGNORE` 所涉 identifier 列均为 `VARCHAR(150)` 且 DeerFlow 实际值在界限内；
 - 大 checkpoint：raw blob `1,048,592 B`，JSON/base64 transport 估算 `1,398,124 B`，`max_allowed_packet = 67,108,864 B`，余量 `65,710,740 B`。最终验证样本写入 `59.73 ms`、读取 `11.37 ms`；这是 Gate 证据，不是性能 SLA。
 
