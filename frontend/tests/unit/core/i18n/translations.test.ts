@@ -14,7 +14,5 @@ describe("core copy loading", () => {
     expect(chinese.inputBox.disclaimer).toBe(
       "内容由AI生成，重要信息请务必核查",
     );
-    expect(english.channels.descriptions).toEqual({});
-    expect(chinese.channels.descriptions).toEqual({});
   });
 });

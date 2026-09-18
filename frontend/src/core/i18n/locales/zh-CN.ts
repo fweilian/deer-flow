@@ -289,7 +289,6 @@ export const zhCN: Translations = {
   sidebar: {
     newChat: "新对话",
     chats: "对话",
-    channels: "渠道",
     recentChats: "最近的对话",
     demoChats: "演示对话",
     agents: "智能体",
@@ -326,76 +325,6 @@ export const zhCN: Translations = {
     settings: "设置",
     notFound: "项目不存在或已被删除。",
     projectUnavailable: "无法关联到该项目，消息未发送。请重试。",
-  },
-
-  backgroundTasks: {
-    label: "后台任务",
-    title: "后台任务",
-    description: "当前对话中的 MCP 长程任务。",
-    active: "进行中",
-    recent: "最近任务",
-    empty: "暂无后台任务",
-    emptyHint: "在当前对话中启动的 MCP 长程任务会显示在这里。",
-    loadFailed: "无法加载后台任务",
-    retry: "重试",
-    cancel: "取消任务",
-    cancelling: "正在取消…",
-    cancelFailed: "取消任务失败",
-    cancellationRetrying: (attempt) =>
-      `第 ${attempt} 次取消失败；DeerFlow 将继续重试。`,
-    notificationRetrying: (attempt) =>
-      `第 ${attempt} 次聊天通知失败；DeerFlow 将退避后重试。`,
-    notificationStopped: "聊天通知因反复失败或永久拒绝，已停止重试。",
-    trackingDegraded: "状态检查有所延迟，DeerFlow 仍在重试。",
-    viewDetails: "查看详情",
-    hideDetails: "收起详情",
-    detailsFailed: "无法加载任务详情",
-    result: "结果",
-    resultArtifact: "结果产物",
-    inputRequired: "需要输入",
-    inputUnavailable: "当前集成暂时无法将你的回复发回远端任务。",
-    lastPollError: "最近一次状态错误",
-    created: (time) => `开始于${time}`,
-    updated: (time) => `更新于${time}`,
-    status: {
-      submitted: "已提交",
-      working: "进行中",
-      inputRequired: "需要输入",
-      completed: "已完成",
-      failed: "已失败",
-      cancelled: "已取消",
-    },
-  },
-
-  subagentBatches: {
-    label: "批处理",
-    title: "子智能体批处理",
-    description: "面向大量独立条目的持久化、可恢复执行。",
-    workerUnavailable:
-      "批处理 worker 未运行。历史批次仍可查看和导出，当前为只读模式。",
-    empty: "暂无子智能体批处理",
-    emptyHint: "当前对话通过 batch_task 提交的批处理会显示在这里。",
-    loadFailed: "无法加载子智能体批处理",
-    active: "进行中",
-    recent: "最近任务",
-    pause: "暂停",
-    resume: "继续",
-    cancel: "取消",
-    retryItem: "重试",
-    exportResults: "导出 JSONL",
-    viewItems: "查看条目",
-    hideItems: "收起条目",
-    itemsFailed: "无法加载批处理条目",
-    progress: (completed, total) => `${completed}/${total} 已结束`,
-    limits: (live, running) => `存活 ${live} · 运行 ${running}`,
-    status: {
-      queued: "排队中",
-      running: "运行中",
-      paused: "已暂停",
-      completed: "已完成",
-      failed: "已失败",
-      cancelled: "已取消",
-    },
   },
 
   // 定时任务
@@ -718,31 +647,6 @@ export const zhCN: Translations = {
       "选区跨越了多条消息，请在同一条回复内选择要引用的文本。",
   },
 
-  // Channels
-  channels: {
-    title: "渠道",
-    connect: "连接",
-    modify: "修改",
-    reconnect: "重新连接",
-    disconnect: "断开连接",
-    connected: "已连接",
-    notConnected: "未连接",
-    pending: "待完成",
-    revoked: "已断开",
-    disabled: "已停用",
-    unconfigured: "未配置",
-    unavailable: "当前无法使用渠道连接。",
-    unavailableShort: "不可用",
-    setupTitle: (name: string) => `连接 ${name}`,
-    setupEditTitle: (name: string) => `修改 ${name}`,
-    setupDescription:
-      "填写当前服务进程需要的配置值。这些内容不会写入 config.yaml。",
-    saveAndConnect: "保存并连接",
-    saveChanges: "保存修改",
-    descriptions: {},
-    connectedAs: (name: string) => `已连接为 ${name}。`,
-  },
-
   // Page titles (document title)
   pages: {
     appName: "DeerFlow",
@@ -877,7 +781,6 @@ export const zhCN: Translations = {
     sections: {
       account: "账号",
       appearance: "外观",
-      channels: "渠道",
       memory: "记忆",
       tools: "工具",
       subagents: "子智能体",
@@ -1051,12 +954,6 @@ export const zhCN: Translations = {
       noneAllowed: "不允许使用子智能体",
       selectedAllowed: "仅允许选中的子智能体",
       missing: "已缺失或不可用；取消勾选后移除",
-    },
-    channels: {
-      title: "渠道",
-      description: "连接可在浏览器外向 DeerFlow 发送消息的即时通讯账号。",
-      disabled:
-        "当前服务器未启用渠道连接。请联系管理员开启 channel_connections。",
     },
     skills: {
       exportPrevious: "上 50 项",

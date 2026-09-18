@@ -4,7 +4,7 @@ Bytedance/deer-flow issue #3144: gateway request dependencies resolve
 ``AppConfig`` through ``get_app_config()`` on every request, so per-run
 fields take effect on the next message without restarting the gateway.
 The fields listed in this module are the **infrastructure** subset that
-the gateway captures once at startup — engines, singletons, IM clients,
+the gateway captures once at startup — engines, singletons,
 the logging handler — and that therefore require a process restart to
 change at runtime.
 
@@ -16,9 +16,6 @@ The registry covers two kinds of entries:
   ``"startup-only: ..."`` prefix that the matching Pydantic
   ``Field(description=...)`` carries, so the boundary surfaces in IDE
   hover next to the field itself.
-- Top-level ``config.yaml`` sections that are not part of the
-  ``AppConfig`` schema (``channels``). These cannot be standardised at
-  the schema level, so the registry is their only canonical location.
 
 Any future "needs restart" scanner — operator tooling, lint hooks, doc
 generators — should drive off this registry rather than re-parsing
@@ -65,33 +62,16 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
         "and a freshly reloaded AppConfig does not retrigger it, so a runtime edit to logging.enhance.* needs a Gateway restart. Only log output is "
         "affected: trace ids are issued unconditionally and always returned in the X-Trace-Id response header, whatever this setting says."
     ),
-    # Not part of the AppConfig Pydantic schema — channel credentials are
-    # consumed directly by ``start_channel_service()`` once at lifespan
-    # startup and the live channel clients are not rebuilt on
-    # config.yaml edits.
-    "channels": ("start_channel_service() is invoked once during startup; registered Channel clients are not rebuilt when channels.* changes."),
-    "channel_connections": (
-        "start_channel_service() wires the connection repository and channel workers once at startup, and the channel-connections router caches the merged provider config on app.state; channel_connections.* edits need a restart."
-    ),
     "scheduler": (
         "ScheduledTaskService is constructed and started once during Gateway lifespan startup; enabled, poll_interval_seconds, lease_seconds, "
         "max_concurrent_runs, queue_timeout_seconds, and multi_instance are captured into the service instance and the background poller task is not rebuilt on config.yaml edits. "
         "Changing multi-instance recovery prerequisites or lease behavior requires restarting every Gateway Pod together. "
         "scheduler.recursion_limit is not captured there: launch_scheduled_thread_run reads it from get_app_config() on each dispatch, so a YAML edit applies to the next scheduled run without a Gateway restart."
     ),
-    "mcp_tasks": (
-        "McpTaskService is constructed and started once during Gateway lifespan startup; enabled, poll_interval_seconds, lease_seconds, "
-        "and max_concurrent_polls are captured into the service instance and the background poller task is not rebuilt on config.yaml edits."
-    ),
     "subagent_runtime": ("the shared native-subagent admission controller and isolated execution loop are configured once during Gateway lifespan startup; changing process slots, queue policy, or queue bounds requires a restart."),
-    "subagent_batches": ("the durable subagent batch service is constructed and started once during Gateway lifespan startup; scheduler limits, leases, and recovery behavior are captured by that service instance."),
     "run_ownership": (
         "RunOwnershipConfig is captured once into RunManager at langgraph_runtime() startup; the lease heartbeat background task is created and "
         "started there, and heartbeat_enabled / lease_seconds / grace_seconds are not re-read on config.yaml edits."
-    ),
-    "dedupe_storage": (
-        "make_inbound_dedupe_store() resolves the inbound dedupe store once when ChannelService is constructed at startup; the store "
-        "(in-process memory or shared Postgres) is captured onto ChannelManager and is not rebuilt on config.yaml edits."
     ),
 }
 

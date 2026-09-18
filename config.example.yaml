@@ -1250,25 +1250,6 @@ subagent_runtime:
 #   # Set `model` to use a different model (e.g., a local Ollama model for cost savings).
 #   # The model name must match a name defined in the `models:` section above.
 
-# Durable native-subagent batches. Disabled by default because enabling it can
-# materially increase model usage and requires database.backend sqlite/postgres.
-# The three limits are intentionally separate:
-# - total: all persisted items in one batch
-# - live: pending work admitted as queued/running at one time
-# - running: items from one batch allowed to hold real execution slots
-subagent_batches:
-  enabled: false
-  poll_interval_seconds: 1
-  lease_seconds: 120
-  max_items_per_batch: 5000
-  default_max_live_items: 100
-  max_live_items_per_batch: 1000
-  default_max_running_items: 3
-  max_running_items_per_batch: 64
-  max_attempts: 3
-  max_result_chars: 100000
-  result_preview_max_chars: 2000
-
 # ============================================================================
 # Tool Result Verification
 # ============================================================================
@@ -1764,8 +1745,8 @@ skill_evolution:
 #      (run as the DB owner). Missing any table strands its rows: after restart
 #      DeerFlow recreates an empty counterpart in the target schema and the old
 #      rows stay invisible in `public`. Moving the ORM tables but leaving
-#      `alembic_version` behind is especially dangerous -- bootstrap then treats
-#      the target schema as unversioned, re-baselines it, and replays migrations.
+#      `alembic_version` behind is especially dangerous -- Gateway rejects a
+#      legacy schema rather than replaying historical migrations.
 #        CREATE SCHEMA IF NOT EXISTS deerflow;
 #        -- Application ORM tables:
 #        ALTER TABLE public.runs                  SET SCHEMA deerflow;
@@ -1774,11 +1755,6 @@ skill_evolution:
 #        ALTER TABLE public.feedback              SET SCHEMA deerflow;
 #        ALTER TABLE public.users                 SET SCHEMA deerflow;
 #        ALTER TABLE public.agents                SET SCHEMA deerflow;
-#        -- IM channel tables:
-#        ALTER TABLE public.channel_connections   SET SCHEMA deerflow;
-#        ALTER TABLE public.channel_credentials   SET SCHEMA deerflow;
-#        ALTER TABLE public.channel_oauth_states  SET SCHEMA deerflow;
-#        ALTER TABLE public.channel_conversations SET SCHEMA deerflow;
 #        -- Scheduled-task tables:
 #        ALTER TABLE public.scheduled_tasks       SET SCHEMA deerflow;
 #        ALTER TABLE public.scheduled_task_runs   SET SCHEMA deerflow;
@@ -1966,35 +1942,6 @@ scheduler:
   recursion_limit: 1000
 
 # ============================================================================
-# Long-running MCP Tasks Configuration
-# ============================================================================
-# Durable runtime for ordinary MCP submit/status/cancel task toolsets. It is
-# disabled by default; task_toolsets are configured per server in
-# extensions_config.json.
-# All fields are restart-required (captured at Gateway lifespan startup).
-#
-# mcp_tasks:
-#   enabled: false               # Master switch for the background status poller
-#   poll_interval_seconds: 5     # Scan interval and default task retry interval
-#   lease_seconds: 120           # Expired claims become recoverable after this delay
-#   max_concurrent_polls: 8      # Maximum status calls started by one worker per scan
-#   max_poll_backoff_seconds: 300             # Cap for exponential retries after transient errors
-#   input_required_poll_interval_seconds: 60  # Minimum poll interval while waiting for user input
-#   tracking_degraded_after_errors: 3         # Consecutive errors before query API reports degraded tracking
-#   max_result_bytes: 65536                    # Full JSON result storage limit
-#   result_preview_max_chars: 2000             # Text preview retained when a result exceeds the limit
-mcp_tasks:
-  enabled: false
-  poll_interval_seconds: 5
-  lease_seconds: 120
-  max_concurrent_polls: 8
-  max_poll_backoff_seconds: 300
-  input_required_poll_interval_seconds: 60
-  tracking_degraded_after_errors: 3
-  max_result_bytes: 65536
-  result_preview_max_chars: 2000
-
-# ============================================================================
 # Run Ownership Configuration
 # ============================================================================
 # Controls cross-process run ownership for multi-worker deployments.
@@ -2067,29 +2014,6 @@ run_ownership:
 # mid-run Redis outage fails the active run — there is no automatic retry/backoff
 # or fallback to the in-memory bridge. Run Redis with HA / a restart policy.
 
-# ============================================================================
-# Generic Channel framework
-# ------------------------
-# The Gateway keeps the Channel contract, MessageBus, connection store and
-# inbound/outbound routing available for extension-provided adapters. No
-# built-in provider is enabled in this distribution.
-#
-# channel_connections:
-#   enabled: false
-#   require_bound_identity: true
-#   providers: {}
-#
-# channels:
-#   langgraph_url: http://localhost:8001/api
-#   gateway_url: http://localhost:8001
-#   inbound_queue_maxsize: 1000
-#   max_concurrency: 5
-#   shutdown_grace_period_seconds: 3
-#
-# Extensions may register a Channel and add a provider entry under
-# channel_connections.providers. The adapter maps external events to
-# InboundMessage, publishes them to MessageBus, and sends OutboundMessage
-# values through Channel.send(). See backend/app/channels/base.py.
 # Guardrails Configuration
 # ============================================================================
 # Optional pre-execution authorization for tool calls.

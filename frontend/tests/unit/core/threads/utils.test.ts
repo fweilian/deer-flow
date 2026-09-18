@@ -3,7 +3,6 @@ import { expect, test } from "@rstest/core";
 
 import type { AgentThread } from "@/core/threads/types";
 import {
-  channelSourceOfThread,
   isThreadPinned,
   pathOfThread,
   sortPinnedThreads,
@@ -58,21 +57,6 @@ test("uses provided context when pathOfThread is called with a thread id", () =>
   );
 });
 
-test("routes an IM-selected thread to its custom agent from search metadata", () => {
-  expect(
-    pathOfThread({
-      thread_id: "thread-456",
-      // Thread-search results do not include run context. The channel manager
-      // therefore persists both its restart key and this canonical routing key.
-      metadata: {
-        channel_source: { type: "im_channel", provider: "custom" },
-        channel_agent_name: "coder",
-        agent_name: "coder",
-      },
-    }),
-  ).toBe("/workspace/agents/coder/chats/thread-456");
-});
-
 test("prefers context.agent_name over metadata.agent_name", () => {
   expect(
     pathOfThread({
@@ -119,60 +103,6 @@ test("sortPinnedThreads keeps pinned threads first without reordering groups", (
     "recent-1",
     "recent-2",
   ]);
-});
-
-test("reads IM channel source metadata", () => {
-  expect(
-    channelSourceOfThread({
-      metadata: {
-        channel_source: {
-          type: "im_channel",
-          provider: "custom",
-          chat_id: "oc_123",
-        },
-      },
-    }),
-  ).toEqual({
-    type: "im_channel",
-    provider: "custom",
-    label: "custom",
-  });
-});
-
-test("formats a generic channel source label", () => {
-  expect(
-    channelSourceOfThread({
-      metadata: {
-        channel_source: {
-          type: "im_channel",
-          provider: "custom",
-        },
-      },
-    }),
-  ).toEqual({
-    type: "im_channel",
-    provider: "custom",
-    label: "custom",
-  });
-});
-
-test("ignores threads without valid IM channel source metadata", () => {
-  expect(channelSourceOfThread({ metadata: {} })).toBeNull();
-  expect(
-    channelSourceOfThread({
-      metadata: { channel_source: { provider: "" } },
-    }),
-  ).toBeNull();
-  expect(
-    channelSourceOfThread({
-      metadata: {
-        channel_source: {
-          type: "other",
-          provider: "custom",
-        },
-      },
-    }),
-  ).toBeNull();
 });
 
 test("textOfMessage concatenates object and bare-string content parts", () => {

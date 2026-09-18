@@ -2,10 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, rs } from "@rstest/core";
 
 import { listAgents } from "@/core/agents/api";
 import { fetch as apiFetch } from "@/core/api/fetcher";
-import {
-  listChannelConnections,
-  listChannelProviders,
-} from "@/core/channels/api";
 import { fetchFeatures } from "@/core/features/api";
 import { loadMCPConfig } from "@/core/mcp/api";
 import { loadMemory } from "@/core/memory/api";
@@ -52,14 +48,7 @@ describe("static website API requests", () => {
   it("loads optional capabilities and empty catalogs without the Gateway", async () => {
     await expect(fetchFeatures()).resolves.toMatchObject({
       agents_api: { enabled: false },
-      mcp_tasks: { enabled: false },
-      subagent_batches: { repository_available: false, worker_running: false },
     });
-    await expect(listChannelProviders()).resolves.toEqual({
-      enabled: false,
-      providers: [],
-    });
-    await expect(listChannelConnections()).resolves.toEqual([]);
     await expect(listAgents()).resolves.toEqual([]);
     await expect(listSubagents()).resolves.toEqual([]);
     await expect(loadSuggestionsConfig()).resolves.toMatchObject({

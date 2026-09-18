@@ -311,7 +311,6 @@ export const enUS: Translations = {
   sidebar: {
     newChat: "New chat",
     chats: "Chats",
-    channels: "Channels",
     recentChats: "Recent chats",
     demoChats: "Demo chats",
     agents: "Agents",
@@ -350,78 +349,6 @@ export const enUS: Translations = {
     notFound: "Project not found or deleted.",
     projectUnavailable:
       "Couldn't link the chat to the project. Your message was not sent — try again.",
-  },
-
-  backgroundTasks: {
-    label: "Background tasks",
-    title: "Background tasks",
-    description: "Long-running MCP work for this chat.",
-    active: "Active",
-    recent: "Recent",
-    empty: "No background tasks yet",
-    emptyHint: "Long-running MCP tasks started in this chat will appear here.",
-    loadFailed: "Couldn't load background tasks",
-    retry: "Try again",
-    cancel: "Cancel task",
-    cancelling: "Cancelling…",
-    cancelFailed: "Failed to cancel task",
-    cancellationRetrying: (attempt) =>
-      `Cancellation attempt ${attempt} failed; DeerFlow will keep retrying.`,
-    notificationRetrying: (attempt) =>
-      `Chat notification attempt ${attempt} failed; DeerFlow will retry with backoff.`,
-    notificationStopped:
-      "Chat notification delivery stopped after repeated or permanent failures.",
-    trackingDegraded: "Status checks are delayed; DeerFlow is still retrying.",
-    viewDetails: "View details",
-    hideDetails: "Hide details",
-    detailsFailed: "Couldn't load task details",
-    result: "Result",
-    resultArtifact: "Result artifact",
-    inputRequired: "Input required",
-    inputUnavailable:
-      "This integration cannot send your response back to the remote task yet.",
-    lastPollError: "Latest status error",
-    created: (time) => `Started ${time}`,
-    updated: (time) => `Updated ${time}`,
-    status: {
-      submitted: "Submitted",
-      working: "Working",
-      inputRequired: "Input needed",
-      completed: "Completed",
-      failed: "Failed",
-      cancelled: "Cancelled",
-    },
-  },
-
-  subagentBatches: {
-    label: "Batches",
-    title: "Subagent batches",
-    description: "Durable, restart-safe work for many independent items.",
-    workerUnavailable:
-      "The batch worker is not running. Historical batches remain available in read-only mode.",
-    empty: "No subagent batches yet",
-    emptyHint: "Explicit batch_task submissions in this chat will appear here.",
-    loadFailed: "Couldn't load subagent batches",
-    active: "Active",
-    recent: "Recent",
-    pause: "Pause",
-    resume: "Resume",
-    cancel: "Cancel",
-    retryItem: "Retry",
-    exportResults: "Export JSONL",
-    viewItems: "View items",
-    hideItems: "Hide items",
-    itemsFailed: "Couldn't load batch items",
-    progress: (completed, total) => `${completed} of ${total} terminal`,
-    limits: (live, running) => `Live ${live} · running ${running}`,
-    status: {
-      queued: "Queued",
-      running: "Running",
-      paused: "Paused",
-      completed: "Completed",
-      failed: "Failed",
-      cancelled: "Cancelled",
-    },
   },
 
   // Scheduled tasks
@@ -757,31 +684,6 @@ export const enUS: Translations = {
       "Selection spans multiple messages. Select text within a single reply to quote it.",
   },
 
-  // Channels
-  channels: {
-    title: "Channels",
-    connect: "Connect",
-    modify: "Modify",
-    reconnect: "Reconnect",
-    disconnect: "Disconnect",
-    connected: "Connected",
-    notConnected: "Not connected",
-    pending: "Pending",
-    revoked: "Disconnected",
-    disabled: "Disabled",
-    unconfigured: "Not configured",
-    unavailable: "Channel connections are unavailable right now.",
-    unavailableShort: "Unavailable",
-    setupTitle: (name: string) => `Connect ${name}`,
-    setupEditTitle: (name: string) => `Modify ${name}`,
-    setupDescription:
-      "Enter the values needed by this server process. They are not written to config.yaml.",
-    saveAndConnect: "Save and connect",
-    saveChanges: "Save changes",
-    descriptions: {},
-    connectedAs: (name: string) => `Connected as ${name}.`,
-  },
-
   // Page titles (document title)
   pages: {
     appName: "DeerFlow",
@@ -922,7 +824,6 @@ export const enUS: Translations = {
     sections: {
       account: "Account",
       appearance: "Appearance",
-      channels: "Channels",
       memory: "Memory",
       tools: "Tools",
       subagents: "Subagents",
@@ -1103,13 +1004,6 @@ export const enUS: Translations = {
       noneAllowed: "No subagents",
       selectedAllowed: "Selected subagents",
       missing: "Missing or unavailable; deselect to remove",
-    },
-    channels: {
-      title: "Channels",
-      description:
-        "Connect IM accounts that can send messages to DeerFlow from outside the browser.",
-      disabled:
-        "Channel connections are not enabled on this server. Ask an administrator to enable channel_connections.",
     },
     skills: {
       exportPrevious: "Previous 50 files",

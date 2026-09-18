@@ -1,8 +1,8 @@
 """Alembic environment for DeerFlow application tables.
 
-ONLY manages DeerFlow's tables (runs, threads_meta, feedback, users,
-run_events, channel_connections, channel_credentials, channel_oauth_states,
-channel_conversations).
+Historically managed DeerFlow application tables. The migration chain is kept
+for audit only; Gateway initializes fresh current ORM metadata instead of
+replaying historical revisions.
 
 LangGraph's checkpointer tables (``checkpoints``, ``checkpoint_blobs``,
 ``checkpoint_writes``, ``checkpoint_migrations``) are managed by LangGraph

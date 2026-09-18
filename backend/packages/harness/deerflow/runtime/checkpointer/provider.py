@@ -30,7 +30,7 @@ from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.config.checkpointer_config import CheckpointerConfig, ensure_config_loaded, get_checkpointer_config
 from deerflow.persistence.postgres_schema import dsn_with_search_path, ensure_postgres_schema
 from deerflow.runtime.checkpoint_mode import frozen_checkpoint_channel_mode
-from deerflow.runtime.store._sqlite_utils import ensure_sqlite_parent_dir, resolve_sqlite_conn_str
+from deerflow.runtime.sqlite_utils import ensure_sqlite_parent_dir, resolve_sqlite_conn_str
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +59,8 @@ def _resolve_checkpointer_config(app_config: AppConfig) -> CheckpointerConfig:
     """Resolve the checkpointer backend from legacy or unified application config.
 
     The legacy ``checkpointer`` section remains authoritative when present so
-    Checkpointer and Store keep using the same backend. Otherwise the unified
-    ``database`` section drives the checkpointer, matching the async
-    :func:`~deerflow.runtime.checkpointer.async_provider.make_checkpointer`
-    factory and the sync Store provider's ``_resolve_store_config``.
+    Otherwise the unified ``database`` section drives the checkpointer,
+    matching the async factory.
     """
     if app_config.checkpointer is not None:
         return app_config.checkpointer

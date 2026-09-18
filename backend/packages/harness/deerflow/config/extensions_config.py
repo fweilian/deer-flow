@@ -19,8 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from deerflow.config.runtime_paths import existing_project_file
 from deerflow.constants import (
     DEFAULT_MCP_SESSION_INIT_TIMEOUT,
-    MCP_TASK_NAME_MAX_LENGTH,
-    MCP_TASK_SERVER_NAME_MAX_LENGTH,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,32 +71,6 @@ class McpToolOverride(BaseModel):
 
     routing: McpRoutingConfig = Field(default_factory=McpRoutingConfig)
     model_config = ConfigDict(extra="allow")
-
-
-class McpTaskToolsetConfig(BaseModel):
-    """One ordinary submit/status/cancel contract exposed by an MCP server.
-
-    Tool names are the exact raw names advertised by that server. The
-    presentation prefix added by ``langchain-mcp-adapters`` is deliberately not
-    part of this durable binding.
-    """
-
-    name: str = Field(
-        min_length=1,
-        max_length=MCP_TASK_NAME_MAX_LENGTH,
-        description="Stable local name shown for tasks from this toolset",
-    )
-    submit_tool: str = Field(min_length=1, description="Raw MCP tool name used to submit work")
-    status_tool: str = Field(min_length=1, description="Raw MCP tool name used to poll work")
-    cancel_tool: str = Field(min_length=1, description="Raw MCP tool name used to cancel work")
-    model_config = ConfigDict(extra="forbid")
-
-    @field_validator("name")
-    @classmethod
-    def _validate_name_is_not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("MCP task toolset name must not be empty")
-        return value
 
 
 class McpUserScopedAuthConfig(BaseModel):
@@ -242,10 +214,6 @@ class McpServerConfig(BaseModel):
             "construction or the task poller indefinitely. None means no timeout."
         ),
     )
-    task_toolsets: list[McpTaskToolsetConfig] = Field(
-        default_factory=list,
-        description="Ordinary submit/status/cancel tool groups managed by the durable MCP task runtime",
-    )
     model_config = ConfigDict(extra="allow")
 
     @field_validator("headers")
@@ -278,18 +246,6 @@ class McpServerConfig(BaseModel):
         spelling works, with ``type`` taking precedence when both are provided.
         """
         return normalize_mcp_transport_alias(data)
-
-    @model_validator(mode="after")
-    def _validate_task_tool_bindings(self) -> "McpServerConfig":
-        claimed: dict[str, str] = {}
-        for toolset in self.task_toolsets:
-            for role in ("submit_tool", "status_tool", "cancel_tool"):
-                raw_name = getattr(toolset, role)
-                previous = claimed.get(raw_name)
-                if previous is not None:
-                    raise ValueError(f"MCP task tool {raw_name!r} must be unique across task_toolsets and roles; it is configured as both {previous} and {toolset.name}.{role}")
-                claimed[raw_name] = f"{toolset.name}.{role}"
-        return self
 
 
 def resolve_effective_mcp_routing(server_config: McpServerConfig | None, original_tool_name: str) -> dict[str, Any]:
@@ -405,15 +361,6 @@ class ExtensionsConfig(BaseModel):
                 continue
             normalized.append(entry)
         return normalized
-
-    @model_validator(mode="after")
-    def _validate_task_server_names_fit_storage(self) -> "ExtensionsConfig":
-        for server_name, server in self.mcp_servers.items():
-            if not server.task_toolsets:
-                continue
-            if not server_name.strip() or len(server_name) > MCP_TASK_SERVER_NAME_MAX_LENGTH:
-                raise ValueError(f"MCP task server name must contain 1 to {MCP_TASK_SERVER_NAME_MAX_LENGTH} characters")
-        return self
 
     @classmethod
     def resolve_config_path(cls, config_path: str | None = None) -> Path | None:

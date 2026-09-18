@@ -8,10 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  ThreadChannelBadge,
-  ThreadChannelIcon,
-} from "@/components/workspace/thread-channel-source";
 import { VirtualThreadList } from "@/components/workspace/thread-list-virtualizer";
 import { useThreadArchiveAction } from "@/components/workspace/use-thread-archive-action";
 import {
@@ -22,11 +18,7 @@ import {
 import { useI18n } from "@/core/i18n/hooks";
 import { useInfiniteThreads } from "@/core/threads/hooks";
 import { buildThreadListModel } from "@/core/threads/thread-list-model";
-import {
-  channelSourceOfThread,
-  pathOfThread,
-  titleOfThread,
-} from "@/core/threads/utils";
+import { pathOfThread, titleOfThread } from "@/core/threads/utils";
 import { formatTimeAgo } from "@/core/utils/datetime";
 import { env } from "@/env";
 
@@ -142,7 +134,6 @@ export default function ChatsPage() {
                     items={filteredThreads}
                     scrollParentSelector='[data-slot="scroll-area-viewport"]'
                     renderItem={(thread) => {
-                      const channelSource = channelSourceOfThread(thread);
                       return (
                         <div
                           key={thread.thread_id}
@@ -154,14 +145,9 @@ export default function ChatsPage() {
                           >
                             <div className="flex flex-col gap-2 p-4">
                               <div className="flex min-w-0 items-center gap-2">
-                                <ThreadChannelIcon source={channelSource} />
                                 <div className="min-w-0 flex-1 truncate">
                                   {titleOfThread(thread)}
                                 </div>
-                                <ThreadChannelBadge
-                                  source={channelSource}
-                                  className="hidden sm:inline-flex"
-                                />
                               </div>
                               {thread.updated_at && (
                                 <div className="text-muted-foreground text-sm">

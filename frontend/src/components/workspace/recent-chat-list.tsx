@@ -67,7 +67,6 @@ import {
 import { buildThreadListModel } from "@/core/threads/thread-list-model";
 import type { AgentThread, AgentThreadState } from "@/core/threads/types";
 import {
-  channelSourceOfThread,
   isThreadPinned,
   pathOfThread,
   projectIdOfThread,
@@ -77,7 +76,6 @@ import { env } from "@/env";
 import { isIMEComposing } from "@/lib/ime";
 
 import { MoveToProjectMenu, NewProjectDialog } from "./move-to-project-menu";
-import { ThreadChannelIcon } from "./thread-channel-source";
 import { useThreadDeleteDialog } from "./thread-delete-dialog";
 import { VirtualThreadList } from "./thread-list-virtualizer";
 import { useThreadArchiveAction } from "./use-thread-archive-action";
@@ -212,7 +210,6 @@ export function ThreadSidebarItem({
     [t, thread],
   );
 
-  const channelSource = channelSourceOfThread(thread);
   const pinned = isThreadPinned(thread);
   const parentTitle = branchEntry?.parentThread
     ? titleOfThread(branchEntry.parentThread)
@@ -247,7 +244,6 @@ export function ThreadSidebarItem({
               {branchEntry.isLastSibling ? "└─" : "├─"}
             </span>
           )}
-          <ThreadChannelIcon source={channelSource} />
           {pinned && (
             <Pin
               aria-hidden="true"
@@ -255,14 +251,6 @@ export function ThreadSidebarItem({
             />
           )}
           <span className="min-w-0 truncate">{title}</span>
-          {channelSource && (
-            <span
-              className="bg-muted text-muted-foreground ml-auto inline-flex h-5 max-w-14 shrink-0 items-center rounded-md px-1.5 text-[10px] font-medium"
-              title={`${channelSource.label} channel`}
-            >
-              <span className="truncate">{channelSource.label}</span>
-            </span>
-          )}
         </Link>
       </SidebarMenuButton>
       {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" && (

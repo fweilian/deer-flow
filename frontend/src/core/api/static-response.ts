@@ -48,20 +48,7 @@ export async function staticApiResponse(
     case "features":
       data = {
         agents_api: { enabled: false },
-        mcp_tasks: { enabled: false },
-        subagent_batches: {
-          enabled: false,
-          repository_available: false,
-          worker_running: false,
-          max_running: 0,
-        },
       } satisfies FeaturesResponse;
-      break;
-    case "channels/providers":
-      data = { enabled: false, providers: [] };
-      break;
-    case "channels/connections":
-      data = { connections: [] };
       break;
     case "agents":
       data = { agents: [] };

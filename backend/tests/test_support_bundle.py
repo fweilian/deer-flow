@@ -414,13 +414,6 @@ tools:
   - name: web_search
     use: deerflow.community.brave.tools:web_search_tool
     api_key: brave-secret
-channel_connections:
-  enabled: true
-  providers:
-    custom:
-      enabled: true
-      settings:
-        access_token: custom-secret
 """,
         encoding="utf-8",
     )
@@ -468,13 +461,11 @@ channel_connections:
     all_text = "\n".join(_zip_text(bundle_path, name) for name in names if name.endswith(".json"))
     assert "sk-live-secret" not in all_text
     assert "brave-secret" not in all_text
-    assert "custom-secret" not in all_text
     assert "mcp-secret" not in all_text
 
     config_summary = json.loads(_zip_text(bundle_path, "config-summary.json"))
     assert config_summary["models"][0]["api_key"] == "<redacted>"
     assert config_summary["tools"][0]["api_key"] == "<redacted>"
-    assert config_summary["channel_connections"]["providers"]["custom"]["settings"]["access_token"] == "<redacted>"
 
 
 def test_create_support_bundle_writes_ai_triage_entrypoints(tmp_path, monkeypatch):

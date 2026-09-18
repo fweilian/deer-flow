@@ -6,9 +6,9 @@ point sitting between the raw
 ``langchain.agents.create_agent`` primitive and the config-driven
 ``make_lead_agent`` application factory.
 
-Direct callers that need an isolated native-subagent capacity or a durable
-batch worker pass a caller-owned ``SubagentRuntime`` explicitly. When omitted,
-subagent tools retain their application-compatible process-global fallback.
+Direct callers that need isolated native-subagent capacity pass a caller-owned
+``SubagentRuntime`` explicitly. When omitted, subagent tools retain their
+application-compatible process-global fallback.
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ def create_deerflow_agent(
 
     The factory assembly itself reads no config files. Pass ``subagent_runtime``
     when direct SDK-created graphs must share an explicit native-subagent
-    capacity or caller-managed durable batch worker.
+    capacity.
 
     Parameters
     ----------
@@ -121,9 +121,9 @@ def create_deerflow_agent(
         Agent name (passed to middleware that cares, e.g. ``MemoryMiddleware``).
     subagent_runtime:
         Explicit process runtime shared by direct SDK-created graphs. Required
-        only when the caller needs non-default native-subagent capacity or a
-        caller-managed durable batch worker without Gateway/DeerFlowClient
-        startup. Requires ``features.subagent`` to be enabled.
+        only when the caller needs non-default native-subagent capacity without
+        Gateway/DeerFlowClient startup. Requires ``features.subagent`` to be
+        enabled.
 
     Raises
     ------
@@ -144,8 +144,6 @@ def create_deerflow_agent(
         raise ValueError("Cannot use 'extra_middleware' with 'middleware' (full takeover).")
     if subagent_runtime is not None and (middleware is not None or features is None or features.subagent is False):
         raise ValueError("subagent_runtime requires features.subagent to be enabled; it cannot be used with middleware full takeover")
-    if subagent_runtime is not None and subagent_runtime.batch_config is not None and subagent_runtime.batch_submitter is None:
-        raise RuntimeError("The explicit durable batch worker is not running; await subagent_runtime.start() or enter it with 'async with' before calling create_deerflow_agent")
     if extra_middleware:
         for mw in extra_middleware:
             if not isinstance(mw, AgentMiddleware):
@@ -354,23 +352,6 @@ def _assemble_from_features(
                     app_config=subagent_runtime.app_config,
                 )
             )
-
-        if subagent_runtime is not None and subagent_runtime.batch_submitter is not None:
-            from deerflow.tools.builtins.batch_task_tool import bind_batch_tools
-
-            extra_tools.extend(
-                bind_batch_tools(
-                    submitter_provider=lambda: subagent_runtime.batch_submitter,
-                    app_config=subagent_runtime.app_config,
-                )
-            )
-        elif subagent_runtime is None:
-            from deerflow.subagents.batch_runtime import is_subagent_batch_runtime_available
-
-            if is_subagent_batch_runtime_available():
-                from deerflow.tools.builtins import batch_status, batch_task, cancel_batch
-
-                extra_tools.extend((batch_task, batch_status, cancel_batch))
 
     # --- [12] LoopDetection ---
     if feat.loop_detection is not False:

@@ -7,7 +7,7 @@ gateway as ready only when the databases behind agent runs are reachable. Two
 backends can be configured independently:
 
 * the ORM engine behind ``database:`` (application repositories), and
-* the effective LangGraph checkpointer/Store backend - the legacy
+* the effective LangGraph checkpointer backend - the legacy
   ``checkpointer:`` section when present, otherwise derived from ``database:``
   (memory/sqlite/postgres).
 
@@ -102,7 +102,7 @@ async def check_database_health() -> str:
 
 
 def resolve_checkpointer_config(startup_config: AppConfig) -> CheckpointerConfig | None:
-    """Resolve the checkpointer/Store backend bound to a startup config snapshot.
+    """Resolve the checkpointer backend bound to a startup config snapshot.
 
     Mirrors the runtime's own selection (the legacy ``checkpointer`` section
     first, otherwise derived from the unified ``database`` section), so the
@@ -143,7 +143,7 @@ def _sqlite_disk_uri(conn_str: str) -> str:
     readiness probe can never resurrect a checkpointer/Store file that was
     deleted or lost after startup - absence must surface as unreachable. Plain
     filesystem paths (already absolute after
-    ``deerflow.runtime.store._sqlite_utils.resolve_sqlite_conn_str``) are
+    ``deerflow.runtime.sqlite_utils.resolve_sqlite_conn_str``) are
     converted with ``Path.as_uri`` for correct percent-encoding; existing
     ``file:`` URIs keep their path bytes and get ``mode=rw`` merged into the
     query, replacing any pinned mode.
@@ -160,7 +160,7 @@ def _sqlite_disk_uri(conn_str: str) -> str:
 
 
 async def _probe_sqlite_backend(conn_string: str | None) -> str:
-    """Probe a SQLite checkpointer/Store database with a bounded SELECT 1.
+    """Probe a SQLite checkpointer database with a bounded SELECT 1.
 
     Disk-backed databases are opened non-creating (``mode=rw``): a missing
     file stays missing and fails the probe instead of being recreated empty.
@@ -173,7 +173,7 @@ async def _probe_sqlite_backend(conn_string: str | None) -> str:
     except ImportError:
         logger.error("Readiness probe: aiosqlite is not installed for the sqlite checkpointer backend")
         return DATABASE_UNREACHABLE
-    from deerflow.runtime.store._sqlite_utils import resolve_sqlite_conn_str
+    from deerflow.runtime.sqlite_utils import resolve_sqlite_conn_str
 
     conn_str = resolve_sqlite_conn_str(conn_string or "store.db")
     if _sqlite_is_in_memory(conn_str):
@@ -192,7 +192,7 @@ async def _probe_sqlite_backend(conn_string: str | None) -> str:
 
 
 async def _probe_postgres_backend(conn_string: str, schema: str) -> str:
-    """Probe a PostgreSQL checkpointer/Store database with a bounded SELECT 1."""
+    """Probe a PostgreSQL checkpointer database with a bounded SELECT 1."""
     try:
         from psycopg import AsyncConnection
     except ImportError:

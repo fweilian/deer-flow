@@ -121,12 +121,9 @@ class CheckpointStateAccessor:
         graph: Any,
         checkpointer: Any,
         *,
-        store: Any | None = None,
         mode: CheckpointChannelMode = "full",
     ) -> CheckpointStateAccessor:
         graph.checkpointer = checkpointer
-        if store is not None:
-            graph.store = store
         return cls(graph=graph, checkpointer=checkpointer, mode=mode)
 
     def _prepare_config(self, config: dict[str, Any]) -> dict[str, Any]:

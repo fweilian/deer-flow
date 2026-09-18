@@ -31,7 +31,7 @@ from deerflow.runtime.checkpointer.provider import (
     POSTGRES_INSTALL,
     SQLITE_INSTALL,
 )
-from deerflow.runtime.store._sqlite_utils import ensure_sqlite_parent_dir, resolve_sqlite_conn_str
+from deerflow.runtime.sqlite_utils import ensure_sqlite_parent_dir, resolve_sqlite_conn_str
 
 logger = logging.getLogger(__name__)
 

@@ -234,7 +234,6 @@ export interface Translations {
     agents: string;
     scheduledTasks: string;
     agentsDisabledTooltip: string;
-    channels: string;
   };
   // Sidebar projects section
   projects: {
@@ -267,74 +266,6 @@ export interface Translations {
     settings: string;
     notFound: string;
     projectUnavailable: string;
-  };
-
-  // Thread-scoped MCP background tasks
-  backgroundTasks: {
-    label: string;
-    title: string;
-    description: string;
-    active: string;
-    recent: string;
-    empty: string;
-    emptyHint: string;
-    loadFailed: string;
-    retry: string;
-    cancel: string;
-    cancelling: string;
-    cancelFailed: string;
-    cancellationRetrying: (attempt: number) => string;
-    notificationRetrying: (attempt: number) => string;
-    notificationStopped: string;
-    trackingDegraded: string;
-    viewDetails: string;
-    hideDetails: string;
-    detailsFailed: string;
-    result: string;
-    resultArtifact: string;
-    inputRequired: string;
-    inputUnavailable: string;
-    lastPollError: string;
-    created: (time: string) => string;
-    updated: (time: string) => string;
-    status: {
-      submitted: string;
-      working: string;
-      inputRequired: string;
-      completed: string;
-      failed: string;
-      cancelled: string;
-    };
-  };
-
-  subagentBatches: {
-    label: string;
-    title: string;
-    description: string;
-    workerUnavailable: string;
-    empty: string;
-    emptyHint: string;
-    loadFailed: string;
-    active: string;
-    recent: string;
-    pause: string;
-    resume: string;
-    cancel: string;
-    retryItem: string;
-    exportResults: string;
-    viewItems: string;
-    hideItems: string;
-    itemsFailed: string;
-    progress: (completed: number, total: number) => string;
-    limits: (live: number, running: number) => string;
-    status: {
-      queued: string;
-      running: string;
-      paused: string;
-      completed: string;
-      failed: string;
-      cancelled: string;
-    };
   };
 
   // Scheduled tasks
@@ -627,30 +558,6 @@ export interface Translations {
     selectionCrossesMessages: string;
   };
 
-  // Channels
-  channels: {
-    title: string;
-    connect: string;
-    modify: string;
-    reconnect: string;
-    disconnect: string;
-    connected: string;
-    notConnected: string;
-    pending: string;
-    revoked: string;
-    disabled: string;
-    unconfigured: string;
-    unavailable: string;
-    unavailableShort: string;
-    setupTitle: (name: string) => string;
-    setupEditTitle: (name: string) => string;
-    setupDescription: string;
-    saveAndConnect: string;
-    saveChanges: string;
-    descriptions: Record<string, string>;
-    connectedAs: (name: string) => string;
-  };
-
   // Page titles (document title)
   pages: {
     appName: string;
@@ -785,7 +692,6 @@ export interface Translations {
     sections: {
       account: string;
       appearance: string;
-      channels: string;
       memory: string;
       tools: string;
       subagents: string;
@@ -940,11 +846,6 @@ export interface Translations {
       noneAllowed: string;
       selectedAllowed: string;
       missing: string;
-    };
-    channels: {
-      title: string;
-      description: string;
-      disabled: string;
     };
     skills: {
       exportPrevious: string;

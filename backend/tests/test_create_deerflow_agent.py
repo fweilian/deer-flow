@@ -14,7 +14,6 @@ from deerflow.agents.factory import create_deerflow_agent
 from deerflow.agents.features import Next, Prev, RuntimeFeatures
 from deerflow.agents.middlewares.view_image_middleware import ViewImageMiddleware
 from deerflow.agents.thread_state import DeltaThreadState, ThreadState
-from deerflow.config.subagent_batches_config import SubagentBatchesConfig
 from deerflow.config.subagent_runtime_config import SubagentRuntimeConfig
 from deerflow.subagents import SubagentRuntime
 
@@ -247,11 +246,9 @@ def test_subagent_injects_task_tool(mock_create_agent):
 @patch("deerflow.agents.factory.create_agent")
 def test_explicit_subagent_runtime_aligns_factory_middleware_and_tools(mock_create_agent):
     mock_create_agent.return_value = MagicMock()
-    submitter = MagicMock()
     runtime = SubagentRuntime(
         SubagentRuntimeConfig(max_running=7),
         max_total_per_run=12,
-        batch_submitter=submitter,
     )
 
     create_deerflow_agent(
@@ -265,7 +262,7 @@ def test_explicit_subagent_runtime_aligns_factory_middleware_and_tools(mock_crea
     assert limit.max_concurrent == 7
     assert limit.max_total == 12
     tool_names = {tool.name for tool in call_kwargs["tools"]}
-    assert {"task", "batch_task", "batch_status", "cancel_batch"} <= tool_names
+    assert "task" in tool_names
 
 
 def test_explicit_subagent_runtime_requires_the_subagent_feature() -> None:
@@ -275,22 +272,6 @@ def test_explicit_subagent_runtime_requires_the_subagent_feature() -> None:
         create_deerflow_agent(
             _make_mock_model(),
             features=RuntimeFeatures(subagent=False, sandbox=False),
-            subagent_runtime=runtime,
-        )
-
-
-def test_factory_rejects_configured_batch_runtime_before_worker_start() -> None:
-    runtime = SubagentRuntime(
-        SubagentRuntimeConfig(max_running=4),
-        batch_repository=MagicMock(),
-        batch_config=SubagentBatchesConfig(enabled=True),
-        app_config=MagicMock(),
-    )
-
-    with pytest.raises(RuntimeError, match="await subagent_runtime.start"):
-        create_deerflow_agent(
-            _make_mock_model(),
-            features=RuntimeFeatures(subagent=True, sandbox=False),
             subagent_runtime=runtime,
         )
 

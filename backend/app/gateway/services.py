@@ -35,10 +35,8 @@ from app.gateway.internal_auth import (
 )
 from app.gateway.run_models import RunCreateRequest
 from app.gateway.utils import sanitize_log_param
-from app.mcp_tasks.errors import PermanentNotificationError
 from deerflow.agents.human_input import read_human_input_response
 from deerflow.agents.middlewares.dynamic_context_middleware import _DYNAMIC_CONTEXT_REMINDER_KEY, _REMINDER_DATE_KEY
-from deerflow.agents.middlewares.input_sanitization_middleware import frame_untrusted_text
 from deerflow.agents.middlewares.message_utils import _SUMMARY_MESSAGE_NAME
 from deerflow.agents.middlewares.tool_receipt import TOOL_RECEIPT_KEY, TOOL_RECEIPT_LEDGER_KEY
 from deerflow.agents.middlewares.tool_transform_meta import TOOL_TRANSFORMS_KEY
@@ -1192,7 +1190,6 @@ def build_checkpoint_state_accessor(
     accessor = CheckpointStateAccessor.bind(
         graph,
         ctx.checkpointer,
-        store=ctx.store,
         mode=ctx.checkpoint_channel_mode,
     )
     return accessor, config
@@ -1813,95 +1810,6 @@ async def launch_scheduled_thread_run(
             request,
             idempotency_key=idempotency_key,
         )
-    return {"run_id": record.run_id, "thread_id": record.thread_id}
-
-
-def _mcp_task_notification_prompt(event: dict[str, Any]) -> str:
-    """Build the internal user turn for one immutable MCP task event snapshot."""
-    payload = frame_untrusted_text(json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str))
-    instruction = (
-        "A durable background MCP task has an update that requires the user's attention. "
-        "Explain the update clearly and concisely. Do not expose or ask for a remote task ID. "
-        "When status is input_required, show the question but explain that this MCP integration "
-        "cannot resume the remote task with user input yet. When tracking_degraded is true, explain "
-        "that DeerFlow will continue retrying at a lower frequency."
-    )
-    return f"{instruction}\n\n{payload}"
-
-
-async def launch_mcp_task_notification_run(
-    *,
-    app: Any,
-    thread_id: str,
-    assistant_id: str | None,
-    owner_user_id: str,
-    task_id: str,
-    dispatch_version: int,
-    dispatch_attempt: int,
-    event: dict[str, Any],
-) -> dict[str, Any]:
-    """Idempotently launch the Agent run that delivers one task event."""
-    request = SimpleNamespace(
-        app=app,
-        headers={INTERNAL_OWNER_USER_ID_HEADER_NAME: owner_user_id},
-        state=SimpleNamespace(user=get_internal_user(), auth_source=AUTH_SOURCE_INTERNAL),
-        cookies={},
-    )
-    body = RunCreateRequest(
-        assistant_id=assistant_id,
-        input={
-            "messages": [
-                {
-                    "role": "user",
-                    "content": _mcp_task_notification_prompt(event),
-                    "additional_kwargs": {"hide_from_ui": True},
-                }
-            ]
-        },
-        command=None,
-        metadata={
-            "mcp_task_notification": {
-                "task_id": task_id,
-                "dispatch_version": dispatch_version,
-                "dispatch_attempt": dispatch_attempt,
-            }
-        },
-        config=None,
-        context={"non_interactive": True, "user_id": owner_user_id},
-        webhook=None,
-        checkpoint_id=None,
-        checkpoint=None,
-        interrupt_before=None,
-        interrupt_after=None,
-        stream_mode=None,
-        stream_subgraphs=False,
-        stream_resumable=None,
-        on_disconnect="continue",
-        on_completion=None,
-        multitask_strategy="reject",
-        after_seconds=None,
-        if_not_exists="create",
-        feedback_keys=None,
-    )
-    idempotency_key = f"mcp-task:{task_id}:{dispatch_version}:{dispatch_attempt}"
-    # Non-HTTP entry point, same as launch_scheduled_thread_run above: the MCP
-    # task service drives this from its own background loop, so one scope per
-    # notification keeps every delivery attempt separately correlatable.
-    try:
-        with ensure_trace_context():
-            record = await start_run(
-                body,
-                thread_id,
-                request,
-                idempotency_key=idempotency_key,
-                require_existing_thread=True,
-            )
-    except HTTPException as exc:
-        if exc.status_code == 409:
-            raise ConflictError(str(exc.detail)) from exc
-        if exc.status_code == 404:
-            raise PermanentNotificationError(str(exc.detail)) from exc
-        raise
     return {"run_id": record.run_id, "thread_id": record.thread_id}
 
 

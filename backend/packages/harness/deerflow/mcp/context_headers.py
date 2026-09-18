@@ -118,16 +118,6 @@ def build_context_headers_interceptor(extensions_config: ExtensionsConfig) -> An
                 server_config.type,
             )
             continue
-        if server_config.task_toolsets:
-            # Submitting a durable task happens inside the Agent run and carries
-            # the request secrets; the later status/cancel polls do not, because
-            # the task runtime drives them long after that run ended. Those calls
-            # deliberately skip this interceptor (see McpTaskToolCaller), so the
-            # background half authenticates with the server's own credentials.
-            logger.warning(
-                "MCP server '%s' declares both headers_from_context and task_toolsets; background task status/cancel polls run outside an Agent run and will use this server's static/OAuth credentials instead of the per-request headers",
-                server_name,
-            )
         mapping_by_server[server_name] = context_headers
         spellings_by_server[server_name] = header_spellings(server_config.headers)
 

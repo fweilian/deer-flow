@@ -1,7 +1,6 @@
 """Centralized accessors for singleton objects stored on ``app.state``.
 
-**Getters** (used by routers): raise 503 when a required dependency is
-missing, except ``get_store`` which returns ``None``.
+**Getters** (used by routers) raise 503 when a required dependency is missing.
 
 ``AppConfig`` is intentionally *not* cached on ``app.state``. Routers and the
 run path resolve it through :func:`deerflow.config.app_config.get_app_config`,
@@ -38,11 +37,8 @@ logger = logging.getLogger(__name__)
 # Upper bound (seconds) for draining in-flight runs during shutdown, before the
 # AsyncExitStack tears down the checkpointer (and its connection pool). Kept
 # local to avoid an app -> deps -> app import cycle. This is a *separate* budget
-# from ``app.gateway.app._SHUTDOWN_HOOK_TIMEOUT_SECONDS`` (currently also 5.0s,
-# which bounds channel-service stop): the two govern independent teardown steps
-# and may diverge, but both count toward the lifespan shutdown window — revisit
-# them together if their sum must stay within the server's graceful-shutdown
-# timeout.
+# from the application lifespan's other teardown work; both count toward the
+# server's graceful-shutdown timeout.
 _RUN_DRAIN_TIMEOUT_SECONDS = 5.0
 
 
@@ -329,7 +325,7 @@ def get_config() -> AppConfig:
     snapshot.
 
     Hot-reload boundary: fields backed by startup-time singletons
-    (engines, sandbox provider, IM channels, logging handler) require a
+    (engines, sandbox provider, logging handler) require a
     process restart to change at runtime. The authoritative list lives in
     :mod:`deerflow.config.reload_boundary` and is mirrored by the
     standardised ``"startup-only:"`` prefix on the matching
@@ -357,7 +353,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
     ``startup_config`` is the ``AppConfig`` snapshot taken once during
     ``lifespan()`` for one-shot infrastructure bootstrap. The engines and
     stores constructed here (stream bridge, persistence engine, checkpointer,
-    store, run-event store) are restart-required by design — they hold live
+    run-event store) are restart-required by design — they hold live
     connections, file handles, or singleton providers — so they bind to this
     snapshot and survive across `config.yaml` edits. Request-time consumers
     must still go through :func:`get_config` for any field that should be
@@ -376,7 +372,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             yield
     """
     from deerflow.persistence.engine import close_engine, get_session_factory, init_engine_from_config
-    from deerflow.runtime import make_store, make_stream_bridge
+    from deerflow.runtime import make_stream_bridge
     from deerflow.runtime.checkpoint_mode import freeze_checkpoint_channel_mode, freeze_checkpoint_snapshot_frequency
     from deerflow.runtime.checkpointer.async_provider import make_checkpointer
     from deerflow.runtime.events.store import make_run_event_store
@@ -432,9 +428,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
         await init_engine_from_config(config.database)
 
         app.state.checkpointer = await stack.enter_async_context(make_checkpointer(config))
-        app.state.store = await stack.enter_async_context(make_store(config))
-
-        # Record the checkpointer/Store backend selected from this startup
+        # Record the checkpointer backend selected from this startup
         # snapshot so GET /health/ready probes what the running process
         # actually uses. These singletons are restart-required by design and
         # are never rebuilt on config.yaml hot reload, so the probe must not
@@ -495,15 +489,13 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
 
         from deerflow.persistence.thread_meta import make_thread_store
 
-        app.state.thread_store = make_thread_store(sf, app.state.store)
+        app.state.thread_store = make_thread_store(sf)
         if sf is not None:
-            from deerflow.persistence.mcp_tasks import McpTaskRepository
             from deerflow.persistence.projects import ProjectRepository
             from deerflow.persistence.scheduled_task_runs import (
                 ScheduledTaskRunRepository,
             )
             from deerflow.persistence.scheduled_tasks import ScheduledTaskRepository
-            from deerflow.persistence.subagent_batches import SubagentBatchRepository
 
             app.state.project_repo = ProjectRepository(sf)
             app.state.scheduled_task_repo = ScheduledTaskRepository(
@@ -514,12 +506,8 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
                 sf,
                 run_repository=app.state.run_store,
             )
-            app.state.mcp_task_repo = McpTaskRepository(sf)
-            app.state.subagent_batch_repo = SubagentBatchRepository(sf)
         else:
-            app.state.mcp_task_repo = None
             app.state.project_repo = None
-            app.state.subagent_batch_repo = None
             app.state.scheduled_task_repo = None
             app.state.scheduled_task_run_repo = None
 
@@ -639,11 +627,6 @@ get_run_store: Callable[[Request], RunStore] = _require("run_store", "Run store"
 get_project_repo = _require("project_repo", "Projects")
 
 
-def get_store(request: Request):
-    """Return the global store (may be ``None`` if not configured)."""
-    return getattr(request.app.state, "store", None)
-
-
 def get_thread_store(request: Request) -> ThreadMetaStore:
     """Return the thread metadata store (SQL or memory-backed)."""
     val = getattr(request.app.state, "thread_store", None)
@@ -673,34 +656,6 @@ def get_scheduled_task_service(request: Request):
     return val
 
 
-def get_mcp_task_repo(request: Request):
-    val = getattr(request.app.state, "mcp_task_repo", None)
-    if val is None:
-        raise HTTPException(status_code=503, detail="MCP task repo not available")
-    return val
-
-
-def get_mcp_task_service(request: Request):
-    val = getattr(request.app.state, "mcp_task_service", None)
-    if val is None:
-        raise HTTPException(status_code=503, detail="MCP task service not available")
-    return val
-
-
-def get_subagent_batch_repo(request: Request):
-    val = getattr(request.app.state, "subagent_batch_repo", None)
-    if val is None:
-        raise HTTPException(status_code=503, detail="Subagent batch repository not available")
-    return val
-
-
-def get_subagent_batch_service(request: Request):
-    val = getattr(request.app.state, "subagent_batch_service", None)
-    if val is None:
-        raise HTTPException(status_code=503, detail="Subagent batch service not available")
-    return val
-
-
 def get_run_context(request: Request) -> RunContext:
     """Build a :class:`RunContext` from ``app.state`` singletons.
 
@@ -713,13 +668,11 @@ def get_run_context(request: Request) -> RunContext:
     """
     return RunContext(
         checkpointer=get_checkpointer(request),
-        store=get_store(request),
         event_store=get_run_event_store(request),
         run_events_config=getattr(request.app.state, "run_events_config", None),
         checkpoint_channel_mode=getattr(request.app.state, "checkpoint_channel_mode", "full"),
         checkpoint_snapshot_frequency=getattr(request.app.state, "checkpoint_snapshot_frequency", None),
         thread_store=get_thread_store(request),
-        mcp_task_repo=getattr(request.app.state, "mcp_task_repo", None),
         app_config=get_config(),
         extensions=getattr(request.app.state, "extensions", None),
         on_run_completed=getattr(request.app.state, "scheduled_task_service", None).handle_run_completion if getattr(request.app.state, "scheduled_task_service", None) is not None else None,
@@ -833,8 +786,7 @@ async def is_admin_user(request: Request) -> bool:
     Centralising this here means a future change to the admin definition (e.g.
     allowing an internal system role, adding audit logging, or switching to a
     permission-based check) lands in one place instead of drifting across the
-    per-router copies that previously existed in ``mcp``, ``channel_connections``
-    and ``channels``.
+    per-router copies that previously existed in the Gateway.
     """
     # PAT credentials never carry admin capability: no scope in the PAT
     # universe grants it, so an admin's automation token must not unlock

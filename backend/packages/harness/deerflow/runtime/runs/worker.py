@@ -588,13 +588,12 @@ def _build_runtime_context(
 class RunContext:
     """Infrastructure dependencies for a single agent run.
 
-    Groups checkpointer, store, and persistence-related singletons so that
-    ``run_agent`` (and any future callers) receive one object instead of a
-    growing list of keyword arguments.
+    Groups checkpointer and persistence-related singletons so that
+        ``run_agent`` (and any future callers) receive one object instead of a
+        growing list of keyword arguments.
     """
 
     checkpointer: Any
-    store: Any | None = field(default=None)
     event_store: Any | None = field(default=None)
     run_events_config: Any | None = field(default=None)
     thread_store: Any | None = field(default=None)
@@ -803,7 +802,6 @@ async def run_agent(
 
     # Unpack infrastructure dependencies from RunContext.
     checkpointer = ctx.checkpointer
-    store = ctx.store
     event_store = ctx.event_store
     run_events_config = ctx.run_events_config
     thread_store = ctx.thread_store
@@ -1136,7 +1134,7 @@ async def run_agent(
         if journal is not None:
             runtime_ctx["__run_journal"] = journal
         _install_runtime_context(config, runtime_ctx)
-        runtime = Runtime(context=cast(Any, runtime_ctx), store=store)
+        runtime = Runtime(context=cast(Any, runtime_ctx))
         config.setdefault("configurable", {})["__pregel_runtime"] = runtime
 
         # Inject RunJournal as a LangChain callback handler.
@@ -1190,7 +1188,6 @@ async def run_agent(
         accessor = CheckpointStateAccessor.bind(
             agent,
             checkpointer,
-            store=store,
             mode=mode,
         )
 
@@ -1250,12 +1247,9 @@ async def run_agent(
                 if effective and effective != record.model_name:
                     await run_manager.update_model_name(record.run_id, effective)
 
-        # 4. Attach checkpointer and store
+        # 4. Attach checkpointer
         if checkpointer is not None:
             agent.checkpointer = checkpointer
-        if store is not None:
-            agent.store = store
-
         # 5. Set interrupt nodes
         if interrupt_before:
             agent.interrupt_before_nodes = interrupt_before

@@ -2,7 +2,6 @@
 
 import {
   BellIcon,
-  CableIcon,
   InfoIcon,
   BrainIcon,
   PaletteIcon,
@@ -46,13 +45,6 @@ const AppearanceSettingsPage = dynamic(
     ),
   { loading: SettingsPageLoading },
 );
-const ChannelsSettingsPage = dynamic(
-  () =>
-    import("./channels-settings-page").then(
-      (module) => module.ChannelsSettingsPage,
-    ),
-  { loading: SettingsPageLoading },
-);
 const MemorySettingsPage = dynamic(
   () =>
     import("./memory-settings-page").then(
@@ -93,7 +85,6 @@ const AboutSettingsPage = dynamic(
 export type SettingsSection =
   | "account"
   | "appearance"
-  | "channels"
   | "memory"
   | "tools"
   | "subagents"
@@ -137,11 +128,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
         icon: BellIcon,
       },
       {
-        id: "channels",
-        label: t.settings.sections.channels,
-        icon: CableIcon,
-      },
-      {
         id: "memory",
         label: t.settings.sections.memory,
         icon: BrainIcon,
@@ -158,7 +144,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
     [
       t.settings.sections.account,
       t.settings.sections.appearance,
-      t.settings.sections.channels,
       t.settings.sections.memory,
       t.settings.sections.tools,
       t.settings.sections.subagents,
@@ -220,7 +205,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 />
               )}
               {activeSection === "notification" && <NotificationSettingsPage />}
-              {activeSection === "channels" && <ChannelsSettingsPage />}
               {activeSection === "about" && <AboutSettingsPage />}
             </div>
           </ScrollArea>

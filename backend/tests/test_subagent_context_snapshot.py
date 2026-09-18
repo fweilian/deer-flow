@@ -224,7 +224,7 @@ def test_hidden_tool_frames_do_not_complete_visible_calls(hidden_part, tool_name
     assert ("TOOL_RESULT" in snapshot.content_json) is (hidden_part == "call")
 
 
-@pytest.mark.parametrize("tool_name", ["task", "batch_task", "write_file", "bash", "custom_lookup"])
+@pytest.mark.parametrize("tool_name", ["task", "write_file", "bash", "custom_lookup"])
 @pytest.mark.parametrize("result_state", ["pending", "success", "error", "hidden"])
 def test_snapshot_keeps_only_result_paired_calls_in_mixed_dispatch(tool_name, result_state):
     messages = [

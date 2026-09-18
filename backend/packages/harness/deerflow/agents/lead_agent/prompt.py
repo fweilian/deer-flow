@@ -345,7 +345,6 @@ def _build_subagent_section(
     *,
     app_config: AppConfig | None = None,
     allowed_subagents: list[str] | None = None,
-    batch_enabled: bool = False,
 ) -> str:
     """Build the subagent system prompt section with dynamic subagent limits.
 
@@ -453,24 +452,6 @@ A single subagent is justified only by material specialist or context-isolation 
 - **Batch 2** may launch the next scopes if it still wins; otherwise continue directly.
 - **Synthesize all retained results** at the end.
 """
-    durable_batch_guidance = ""
-    if batch_enabled:
-        durable_batch_guidance = """
-## Explicit durable batch mode
-
-`batch_task` is a separate execution mode for a large collection of independent,
-idempotent or read-only items. It returns a durable batch id immediately and does
-not consume the ordinary `task` per-run total. Never infer batch mode from item
-count and never emulate it by repeatedly calling `task`.
-
-- Every item must be self-contained and must not depend on another item's output.
-- Give every item a stable unique key; retries reuse that key as idempotency identity.
-- Set total, live-window, and running concurrency separately. A high total never
-  implies that all items become live or run at once.
-- Use `batch_status` for compact progress and `cancel_batch` for cancellation.
-- Do not wait for or paste all item results into this run. The Web UI and results
-  export API own progress and result inspection.
-"""
     return f"""<subagent_system>
 ## Subagent Routing: Delegate Only for Clear Net Benefit
 
@@ -512,7 +493,7 @@ Expected cost = delegation and startup overhead + duplicate context and reposito
 - `context_mode="isolated"` is the default: provide the context needed in the delegated prompt.
 - Use `context_mode="snapshot"` when the task needs requirements, decisions, or failed approaches spread across the conversation.
   It adds retained parent history and summary as background, with extra input-token cost. Still specify the bounded task and side-effect ownership.
-- A snapshot is fixed at dispatch; the child keeps its own role and tool restrictions. Parent tool history is background, never evidence that the child performed an action. Durable `batch_task` items remain self-contained.
+- A snapshot is fixed at dispatch; the child keeps its own role and tool restrictions. Parent tool history is background, never evidence that the child performed an action.
 
 **Act on ordinary `task` acceptance results:**
 - `completed` means execution ended, not that the task was accepted. Read the checklist criterion by criterion and retain useful work.
@@ -534,7 +515,6 @@ Otherwise execute directly using available tools ({direct_tool_examples}):
 ```
 
 The `task` tool waits for the subagent and returns its result directly; no polling is needed.
-{durable_batch_guidance}
 </subagent_system>"""
 
 
@@ -1098,14 +1078,11 @@ def apply_prompt_template(
         total = getattr(subagents_config, "max_total_per_run", DEFAULT_MAX_TOTAL_SUBAGENTS_PER_RUN)
     total = clamp_total_subagents_per_run(total)
     if subagent_enabled:
-        from deerflow.subagents.batch_runtime import is_subagent_batch_runtime_available
-
         subagent_section = _build_subagent_section(
             n,
             total,
             app_config=app_config,
             allowed_subagents=allowed_subagents,
-            batch_enabled=is_subagent_batch_runtime_available(),
         )
     else:
         subagent_section = ""

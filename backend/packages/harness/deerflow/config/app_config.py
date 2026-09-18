@@ -14,16 +14,13 @@ from deerflow.config.agent_storage_config import AgentStorageConfig
 from deerflow.config.agents_api_config import AgentsApiConfig, load_agents_api_config_from_dict
 from deerflow.config.auth_config import AuthAppConfig
 from deerflow.config.authorization_config import AuthorizationConfig, load_authorization_config_from_dict
-from deerflow.config.channel_connections_config import ChannelConnectionsConfig
 from deerflow.config.checkpointer_config import CheckpointerConfig, load_checkpointer_config_from_dict
 from deerflow.config.database_config import DatabaseConfig
-from deerflow.config.dedupe_storage_config import DedupeStorageConfig
 from deerflow.config.extensions_config import ExtensionsConfig
 from deerflow.config.file_signature import ConfigSignature as _ConfigSignature
 from deerflow.config.file_signature import get_config_signature as _get_config_signature
 from deerflow.config.guardrails_config import GuardrailsConfig, load_guardrails_config_from_dict
 from deerflow.config.loop_detection_config import LoopDetectionConfig
-from deerflow.config.mcp_tasks_config import McpTasksConfig
 from deerflow.config.memory_config import MemoryConfig, load_memory_config_from_dict
 from deerflow.config.model_config import ModelConfig
 from deerflow.config.object_storage_config import ObjectStorageConfig
@@ -39,7 +36,6 @@ from deerflow.config.skill_evolution_config import SkillEvolutionConfig
 from deerflow.config.skill_scan_config import SkillScanConfig
 from deerflow.config.skills_config import SkillsConfig
 from deerflow.config.stream_bridge_config import StreamBridgeConfig, load_stream_bridge_config_from_dict
-from deerflow.config.subagent_batches_config import SubagentBatchesConfig
 from deerflow.config.subagent_runtime_config import SubagentRuntimeConfig
 from deerflow.config.subagents_config import SubagentsAppConfig, load_subagents_config_from_dict
 from deerflow.config.summarization_config import SummarizationConfig, load_summarization_config_from_dict
@@ -250,13 +246,6 @@ class AppConfig(BaseModel):
     authorization: AuthorizationConfig = Field(default_factory=AuthorizationConfig, description="Fine-grained resource authorization configuration (RBAC and beyond)")
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig, description="LLM circuit breaker configuration")
     llm_call: LlmCallConfig = Field(default_factory=LlmCallConfig, description="LLM call execution configuration (concurrency / rate shaping)")
-    channel_connections: ChannelConnectionsConfig = Field(
-        default_factory=ChannelConnectionsConfig,
-        description=format_field_description(
-            "channel_connections",
-            field_doc="User-facing IM channel connection configuration.",
-        ),
-    )
     loop_detection: LoopDetectionConfig = Field(default_factory=LoopDetectionConfig, description="Loop detection middleware configuration")
     tool_progress: ToolProgressConfig = Field(default_factory=ToolProgressConfig, description="Tool progress state machine middleware configuration")
     verification: VerificationConfig = Field(default_factory=VerificationConfig, description="Subagent result verification (receipts, checklist, judge)")
@@ -299,25 +288,11 @@ class AppConfig(BaseModel):
             field_doc="Scheduled task runtime configuration (background poller for one-time, cron, and interval agent runs).",
         ),
     )
-    mcp_tasks: McpTasksConfig = Field(
-        default_factory=McpTasksConfig,
-        description=format_field_description(
-            "mcp_tasks",
-            field_doc="Long-running MCP task persistence and background polling runtime.",
-        ),
-    )
     subagent_runtime: SubagentRuntimeConfig = Field(
         default_factory=SubagentRuntimeConfig,
         description=format_field_description(
             "subagent_runtime",
             field_doc="Process-local admission and execution capacity shared by ordinary and batch subagents.",
-        ),
-    )
-    subagent_batches: SubagentBatchesConfig = Field(
-        default_factory=SubagentBatchesConfig,
-        description=format_field_description(
-            "subagent_batches",
-            field_doc="Durable native-subagent batch scheduling, lease, and recovery configuration.",
         ),
     )
     checkpointer: CheckpointerConfig | None = Field(
@@ -339,13 +314,6 @@ class AppConfig(BaseModel):
         description=format_field_description(
             "run_ownership",
             field_doc="Run ownership and lease configuration for multi-worker deployments.",
-        ),
-    )
-    dedupe_storage: DedupeStorageConfig = Field(
-        default_factory=DedupeStorageConfig,
-        description=format_field_description(
-            "dedupe_storage",
-            field_doc="Inbound webhook dedupe storage backend (memory / postgres / auto) for cross-pod redelivery dedup. See issue #4120.",
         ),
     )
 
@@ -488,23 +456,21 @@ class AppConfig(BaseModel):
         load_acp_config_from_dict({name: agent.model_dump() for name, agent in acp_agents.items()})
 
         if previous_checkpointer_config != config.checkpointer:
-            # These runtime singletons derive their backend from checkpointer config.
+            # This runtime singleton derives its backend from checkpointer config.
             # Keep imports local to avoid cycles: both providers import get_app_config.
             #
             # The unified ``database`` section is intentionally NOT handled here.
             # ``database`` is a restart-required field (reload_boundary.STARTUP_ONLY_FIELDS):
             # ``init_engine_from_config()`` builds the ORM engine once at startup and
             # never rebuilds it on a config.yaml edit. Resetting only the sync
-            # checkpointer/store singletons on a live ``database``/``postgres_schema``
-            # change would half-migrate the deployment -- new checkpoint/store tables
-            # would land in the new schema while ORM rows keep landing in the old one,
+            # checkpointer singleton on a live ``database``/``postgres_schema``
+            # change would half-migrate the deployment -- new checkpoint tables would
+            # land in the new schema while ORM rows keep landing in the old one,
             # with no error surfaced. Requiring the documented restart keeps the
             # deployment self-consistent.
             from deerflow.runtime.checkpointer import reset_checkpointer
-            from deerflow.runtime.store import reset_store
 
             reset_checkpointer()
-            reset_store()
 
     @classmethod
     def _apply_database_defaults(cls, config_data: dict[str, Any]) -> None:

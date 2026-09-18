@@ -6,17 +6,10 @@ from langchain.tools import BaseTool
 from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
 from deerflow.constants import CONVERSATION_TOOL_USE
-from deerflow.mcp.tasks.runtime import is_mcp_task_runtime_available
 from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
-from deerflow.subagents.batch_runtime import is_subagent_batch_runtime_available
 from deerflow.tools.builtins import (
     ask_clarification_tool,
-    batch_status,
-    batch_task,
-    cancel_background_task,
-    cancel_batch,
-    list_background_tasks,
     list_uploaded_files,
     present_file_tool,
     review_skill_package,
@@ -92,8 +85,7 @@ def get_available_tools(
         subagent_enabled: Whether to include subagent tools (task, task_status).
         include_upload_tool: Whether to include ``list_uploaded_files`` (default: True).
             Ordinary task subagents enable it only after snapshotting the
-            parent's current-run upload state. Durable batch and non-standard
-            subagent callers without that state keep it disabled.
+            parent's current-run upload state.
         include_conversation_reader: Allow the configured conversation reader
             only when the host provides its authorized runtime capability.
             Defaults to false for embedded callers and subagents.
@@ -129,8 +121,6 @@ def get_available_tools(
 
     # Conditionally add tools based on config
     builtin_tools = BUILTIN_TOOLS.copy()
-    if is_mcp_task_runtime_available():
-        builtin_tools.extend((list_background_tasks, cancel_background_task))
     if include_upload_tool:
         builtin_tools.append(list_uploaded_files)
     skill_evolution_config = getattr(config, "skill_evolution", None)
@@ -142,8 +132,6 @@ def get_available_tools(
     # Add subagent tools only if enabled via runtime parameter
     if subagent_enabled:
         builtin_tools.extend(SUBAGENT_TOOLS)
-        if is_subagent_batch_runtime_available():
-            builtin_tools.extend((batch_task, batch_status, cancel_batch))
         logger.info("Including native subagent tools")
 
     # If no model_name specified, use the first model (default)

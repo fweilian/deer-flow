@@ -27,8 +27,6 @@ import {
   SidecarTrigger,
 } from "@/components/workspace/sidecar";
 import { ThreadArchiveStatus } from "@/components/workspace/thread-archive-status";
-import { ThreadBackgroundTasks } from "@/components/workspace/thread-background-tasks";
-import { ThreadSubagentBatches } from "@/components/workspace/thread-subagent-batches";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { TodoList } from "@/components/workspace/todo-list";
 import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicator";
@@ -290,16 +288,6 @@ export default function AgentChatPage() {
                   )}
               </div>
               <div className="flex shrink-0 items-center sm:mr-4">
-                {!isNewThread &&
-                  !isMock &&
-                  env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" && (
-                    <ThreadBackgroundTasks threadId={threadId} />
-                  )}
-                {!isNewThread &&
-                  !isMock &&
-                  env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" && (
-                    <ThreadSubagentBatches threadId={threadId} />
-                  )}
                 <Tooltip content={t.agents.newChat}>
                   <Button
                     className="px-2 sm:px-3"

@@ -1,7 +1,7 @@
 """Router tests for the projects CRUD API (Phase 1).
 
-Harness mirrors ``test_channel_connections_router.py`` (real SQLAlchemy repo
-on a temp sqlite engine + TestClient) and ``_router_auth_helpers`` (stub auth
+Harness uses a real SQLAlchemy repo on a temp sqlite engine + TestClient and
+``_router_auth_helpers`` (stub auth middleware),
 middleware), extended to also set the request-scoped user ContextVar that
 ``ProjectRepository`` / ``ThreadMetaRepository`` resolve ownership from, and
 to take the user id from a header so cross-user isolation can be exercised.

@@ -71,11 +71,9 @@ def _collect_thread_id_routes():
     from app.gateway.routers import (
         artifacts,
         feedback,
-        mcp_tasks,
         runs,
         scheduled_tasks,
         skills,
-        subagent_batches,
         thread_runs,
         threads,
         uploads,
@@ -84,11 +82,9 @@ def _collect_thread_id_routes():
     routers = [
         artifacts,
         feedback,
-        mcp_tasks,
         runs,
         scheduled_tasks,
         skills,
-        subagent_batches,
         thread_runs,
         threads,
         uploads,
@@ -114,9 +110,10 @@ _THREAD_ID_ROUTES = _collect_thread_id_routes()
 
 def test_sweep_covers_expected_surface():
     """Sanity: the sweep must actually see the known thread_id routes."""
-    assert len(_THREAD_ID_ROUTES) >= 30
-    assert any("mcp_tasks" in name for name, _, _ in _THREAD_ID_ROUTES)
-    assert any("subagent_batches" in name for name, _, _ in _THREAD_ID_ROUTES)
+    assert len(_THREAD_ID_ROUTES) >= 20
+    names = {name for name, _, _ in _THREAD_ID_ROUTES}
+    assert "mcp_tasks" not in names
+    assert "subagent_batches" not in names
 
 
 def test_sweep_covers_every_router_module_with_thread_id_routes():
