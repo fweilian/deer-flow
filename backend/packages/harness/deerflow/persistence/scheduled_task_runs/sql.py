@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, bindparam, exists, func, or_, select, text, update
+from sqlalchemy import and_, bindparam, case, exists, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
@@ -668,43 +668,58 @@ class ScheduledTaskRunRepository:
         protect_terminal: bool = False,
         expected_lease_owner: str | None = None,
     ) -> bool:
+        values: dict[str, Any] = {"status": status, "run_id": run_id, "error": error}
+        if status != "launching":
+            values["lease_owner"] = None
+            values["lease_expires_at"] = None
+        if started_at is not None:
+            values["started_at"] = started_at
+        if finished_at is not None:
+            values["finished_at"] = finished_at
+
+        where = [ScheduledTaskRunRow.id == run_record_id]
+        if protect_terminal:
+            # This predicate is the CAS: MySQL evaluates it when it acquires
+            # the row lock, rather than trusting a status read before a peer's
+            # terminal commit. A delayed launch write can therefore never
+            # resurrect a completed occurrence.
+            where.append(ScheduledTaskRunRow.status.not_in(TERMINAL_RUN_STATUSES))
+        if expected_lease_owner is not None:
+            where.append(ScheduledTaskRunRow.lease_owner == expected_lease_owner)
+
         async with self._sf() as session:
-            row = await session.get(ScheduledTaskRunRow, run_record_id)
-            if row is None:
-                return False
-            if protect_terminal and row.status in TERMINAL_RUN_STATUSES:
-                # The launch-path "running" write lost the race against the
-                # completion hook; keep the terminal status/error and only
-                # backfill bookkeeping the completion write could not know.
-                # Completion clears the short launch lease, so allow that
-                # backfill after an owner mismatch only when the terminal row
-                # already identifies the exact same durable run.  A stale
-                # launcher for another run remains fenced.
-                same_run = run_id is not None and row.run_id == run_id
-                if expected_lease_owner is not None and row.lease_owner != expected_lease_owner and not same_run:
-                    await session.rollback()
-                    return False
-                if row.run_id is None and run_id is not None:
-                    row.run_id = run_id
-                if row.started_at is None and started_at is not None:
-                    row.started_at = started_at
+            result = await session.execute(update(ScheduledTaskRunRow).where(*where).values(**values))
+            if result.rowcount != 0:
                 await session.commit()
                 return True
-            if expected_lease_owner is not None and row.lease_owner != expected_lease_owner:
+
+            if not protect_terminal:
                 await session.rollback()
                 return False
-            row.status = status
-            row.run_id = run_id
-            row.error = error
-            if status != "launching":
-                row.lease_owner = None
-                row.lease_expires_at = None
+
+            # Completion can commit between a launcher's claim and this write.
+            # Backfill only missing data on that same durable terminal run;
+            # this conditional path fences stale launchers too.
+            terminal_where = [
+                ScheduledTaskRunRow.id == run_record_id,
+                ScheduledTaskRunRow.status.in_(TERMINAL_RUN_STATUSES),
+            ]
+            if expected_lease_owner is not None:
+                owner_or_same_run = ScheduledTaskRunRow.lease_owner == expected_lease_owner
+                if run_id is not None:
+                    owner_or_same_run = or_(owner_or_same_run, ScheduledTaskRunRow.run_id == run_id)
+                terminal_where.append(owner_or_same_run)
+            backfill: dict[str, Any] = {}
+            if run_id is not None:
+                backfill["run_id"] = case((ScheduledTaskRunRow.run_id.is_(None), run_id), else_=ScheduledTaskRunRow.run_id)
             if started_at is not None:
-                row.started_at = started_at
-            if finished_at is not None:
-                row.finished_at = finished_at
+                backfill["started_at"] = case((ScheduledTaskRunRow.started_at.is_(None), started_at), else_=ScheduledTaskRunRow.started_at)
+            if not backfill:
+                await session.rollback()
+                return False
+            result = await session.execute(update(ScheduledTaskRunRow).where(*terminal_where).values(**backfill))
             await session.commit()
-            return True
+            return result.rowcount != 0
 
     async def has_active_runs(self, task_id: str) -> bool:
         stmt = (
