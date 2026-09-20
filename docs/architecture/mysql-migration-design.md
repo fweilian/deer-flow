@@ -1865,7 +1865,7 @@ PyMySQL  → 同步路径，唯一用途：SqlAgentStore（graph subprocess 里�
 -- ① uq_runs_thread_active（run/model.py:56-70）
 active_thread_id VARCHAR(64)
   GENERATED ALWAYS AS (IF(status IN ('pending','running'), thread_id, NULL)) STORED,
-UNIQUE KEY uk_runs_thread_active (active_thread_id)
+UNIQUE KEY uq_runs_thread_active (active_thread_id)
 
 -- ② uq_scheduled_task_run_active（scheduled_task_runs/model.py）
 active_task_id VARCHAR(64)
@@ -1889,6 +1889,12 @@ UNIQUE KEY uk_runs_thread_active (
 函数索引无需新增列。**推荐生成列**（可读性更好，且若执行 Compliance Pass 可加 COMMENT）。
 
 > 🔴 **生成列只适用于 ① ② 两处**。**③ OAuth 已从该清单中移除** —— 见 §4.4 的两条证据。
+>
+> 🔴 **① 的唯一键名必须与 ORM 索引名逐字一致（`uq_runs_thread_active`）**：
+> `RunManager` 把 MySQL 的 `Duplicate entry … for key 'runs.uq_runs_thread_active'`
+> 映射为既有的 409 overlap contract（`runtime/runs/manager.py::_is_active_run_conflict`，
+> 按 key 名判别，避免把所有 1062 都当成 run conflict）。**改名必须同时改判别函数**，
+> 否则并发 admission 的败方会从 409 退化为 500。已实测（R2 blocker 2）。
 >
 > ⚠️ **① ② 的生成列写法**：生成列的值必须是"参与唯一性判断的键"，
 > 且 `ELSE NULL` 分支保证"非活跃行不参与约束"。**已实测**：
