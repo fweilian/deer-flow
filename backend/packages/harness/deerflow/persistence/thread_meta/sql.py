@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import case, column, select, table, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -38,6 +39,11 @@ class ThreadMetaRepository(ThreadMetaStore):
                 # legacy naive values so the wire format always carries tz.
                 d[key] = coerce_iso(val)
         return d
+
+    @staticmethod
+    def _is_event_anchor(row: ThreadMetaRow) -> bool:
+        """Whether *row* is the metadata-free anchor created by event writes."""
+        return row.incarnation is None and row.assistant_id is None and row.user_id is None and row.project_id is None and row.display_name is None and row.status == "idle" and (row.metadata_json or {}) == {}
 
     async def create(
         self,
@@ -90,7 +96,28 @@ class ThreadMetaRepository(ThreadMetaStore):
                 updated_at=now,
             )
             session.add(row)
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                # Event persistence can create a deliberately empty
+                # ``threads_meta`` lock anchor before normal metadata setup.
+                # Promote only that exact sentinel row; a real duplicate keeps
+                # the existing create() IntegrityError contract.
+                await session.rollback()
+                anchored = await session.get(ThreadMetaRow, thread_id, with_for_update=True)
+                if anchored is None or not self._is_event_anchor(anchored):
+                    raise
+                anchored.incarnation = row.incarnation
+                anchored.assistant_id = assistant_id
+                anchored.user_id = resolved_user_id
+                anchored.project_id = project_id
+                anchored.display_name = display_name
+                anchored.status = "idle"
+                anchored.metadata_json = metadata or {}
+                anchored.created_at = now
+                anchored.updated_at = now
+                await session.commit()
+                row = anchored
             await session.refresh(row)
             return self._row_to_dict(row)
 
