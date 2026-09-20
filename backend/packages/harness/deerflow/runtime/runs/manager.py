@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 
+from deerflow.persistence.mysql_errors import MYSQL_DUPLICATE_KEY, mysql_duplicate_key_name, mysql_error_code
 from deerflow.runtime.user_context import AUTO, _AutoSentinel, get_current_user, resolve_user_id
 from deerflow.utils.time import is_lease_expired
 from deerflow.utils.time import now_iso as _now_iso
@@ -139,6 +140,21 @@ def _is_unique_violation(exc: BaseException) -> bool:
             if isinstance(inner, BaseException):
                 pending.append(inner)
     return False
+
+
+def _is_active_run_conflict(exc: BaseException) -> bool:
+    """Whether a persistence error is this table's active-run uniqueness guard.
+
+    MySQL's 1062 is shared by every unique key. Only the generated-column
+    guard for an active run represents the admission overlap contract; an
+    idempotency or primary-key collision must retain its own error semantics.
+    PostgreSQL and SQLite keep their pre-existing generic unique classification
+    while those backends remain supported.
+    """
+    if mysql_error_code(exc) == MYSQL_DUPLICATE_KEY:
+        key_name = mysql_duplicate_key_name(exc)
+        return key_name is not None and key_name.rsplit(".", 1)[-1] == "uq_runs_thread_active"
+    return _is_unique_violation(exc)
 
 
 def _is_retryable_persistence_error(exc: BaseException) -> bool:
@@ -1701,7 +1717,7 @@ class RunManager:
                     except ConflictError:
                         raise
                     except Exception as exc:
-                        if _is_unique_violation(exc):
+                        if _is_active_run_conflict(exc):
                             raise ConflictError(f"Thread {thread_id} already has an active run") from exc
                         raise
                 else:
@@ -1737,7 +1753,7 @@ class RunManager:
                         except RunIdempotencyConflict as exc:
                             return reuse_idempotent_run(exc)
                         except Exception as exc:
-                            is_unique = _is_unique_violation(exc)
+                            is_unique = _is_active_run_conflict(exc)
                             if is_unique and attempt + 1 < max_retries:
                                 continue
                             if is_unique:
