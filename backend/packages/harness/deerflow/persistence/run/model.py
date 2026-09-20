@@ -68,8 +68,10 @@ class RunRow(Base):
         Index("uq_runs_idempotency_key", "idempotency_key", unique=True),
         # Cross-process atomicity guarantee: at most one pending/running run per
         # thread. Must live in ORM ``__table_args__`` (not just the migration)
-        # because the empty-DB bootstrap path runs ``create_all`` + ``stamp head``
-        # and never executes the migration that also defines this index.
+        # because the transitional SQLite/PostgreSQL empty-DB bootstrap runs
+        # ``create_all`` + ``stamp head`` and never executes the migration that
+        # also defines this index. MySQL receives its generated key from its
+        # independent DBA-owned baseline.
         Index(
             "uq_runs_thread_active",
             "thread_id",

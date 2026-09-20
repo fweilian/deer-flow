@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -13,7 +15,6 @@ from deerflow.persistence import engine as engine_mod
 from deerflow.persistence.mysql_schema import (
     CHECKPOINT_TABLES,
     SCHEMA_ERROR,
-    required_checkpoint_migration_version,
     verify_application_revision,
     verify_checkpoint_schema,
 )
@@ -70,6 +71,30 @@ def test_mysql_engine_kwargs_harden_the_pool_and_set_read_committed() -> None:
     assert kwargs["connect_args"] == {"connect_timeout": 9}
 
 
+@pytest.mark.anyio
+async def test_mysql_engine_initialization_never_calls_schema_bootstrap(monkeypatch) -> None:
+    await engine_mod.close_engine()
+    monkeypatch.setitem(sys.modules, "asyncmy", object())
+    isolation = MagicMock()
+    isolation.scalar_one.return_value = "READ-COMMITTED"
+    connection = MagicMock()
+    connection.execute = AsyncMock(return_value=isolation)
+    connect_cm = AsyncMock()
+    connect_cm.__aenter__.return_value = connection
+    connect_cm.__aexit__.return_value = False
+    engine = MagicMock()
+    engine.connect.return_value = connect_cm
+    engine.dispose = AsyncMock()
+    bootstrap = AsyncMock()
+    monkeypatch.setattr(engine_mod, "create_async_engine", lambda *_args, **_kwargs: engine)
+    monkeypatch.setattr("deerflow.persistence.bootstrap.bootstrap_schema", bootstrap)
+
+    await engine_mod.init_engine("mysql", url="mysql+asyncmy://user:pass@db/deerflow")
+
+    bootstrap.assert_not_awaited()
+    await engine_mod.close_engine()
+
+
 def test_unified_mysql_config_selects_async_only_checkpointer() -> None:
     config = type("AppConfig", (), {"database": DatabaseConfig(backend="mysql", mysql_url="mysql://user:pass@db/deerflow"), "checkpointer": None})()
 
@@ -90,14 +115,19 @@ async def test_application_revision_verification_requires_one_expected_row() -> 
 
 
 @pytest.mark.anyio
-async def test_checkpoint_schema_verification_is_read_only_and_fail_closed() -> None:
+async def test_checkpoint_schema_verification_is_read_only_and_fail_closed(monkeypatch) -> None:
+    # The default contributor/test install deliberately omits the optional
+    # MySQL Saver dependency. Keep the verifier contract covered without
+    # making the ordinary backend suite depend on the mysql extra; the
+    # artifact test below separately checks the pinned upstream MIGRATIONS.
+    monkeypatch.setattr("deerflow.persistence.mysql_schema.required_checkpoint_migration_version", lambda: 21)
     table_rows = [(name,) for name in CHECKPOINT_TABLES]
-    await verify_checkpoint_schema(_Connection([table_rows, [(required_checkpoint_migration_version(),)]]))
+    await verify_checkpoint_schema(_Connection([table_rows, [(21,)]]))
 
     with pytest.raises(RuntimeError, match=SCHEMA_ERROR):
-        await verify_checkpoint_schema(_Connection([table_rows[:-1], [(required_checkpoint_migration_version(),)]]))
+        await verify_checkpoint_schema(_Connection([table_rows[:-1], [(21,)]]))
     with pytest.raises(RuntimeError, match=SCHEMA_ERROR):
-        await verify_checkpoint_schema(_Connection([table_rows, [(required_checkpoint_migration_version() - 1,)]]))
+        await verify_checkpoint_schema(_Connection([table_rows, [(20,)]]))
 
 
 def test_checkpoint_artifact_is_complete_and_derived_from_pinned_saver() -> None:

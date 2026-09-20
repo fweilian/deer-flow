@@ -710,6 +710,47 @@ class TestThreadMetaRepository:
                     # A carried key is only valid while the project row exists.
                     assert await projects.get(membership, user_id="u1") is not None
 
+    @pytest.mark.anyio
+    async def test_anchor_promotion_revalidates_project_after_insert_rollback(self, repo):
+        """The duplicate-anchor retry must reacquire the project lock.
+
+        A failed INSERT rolls back the transaction that performed the first
+        project check. Delete the project in that exact gap and require create
+        to reject the now-dangling assignment instead of promoting the anchor.
+        """
+        from datetime import UTC, datetime
+
+        from deerflow.persistence.projects import ProjectNotAssignableError, ProjectRepository
+        from deerflow.persistence.thread_meta.model import ThreadMetaRow
+
+        projects = ProjectRepository(repo._sf)
+        project = await projects.create(name="P", user_id="u1")
+        now = datetime.now(UTC)
+        async with repo._sf() as session:
+            session.add(ThreadMetaRow(thread_id="anchored", status="idle", metadata_json={}, created_at=now, updated_at=now))
+            await session.commit()
+
+        class DeleteBeforeRetryRepository(ThreadMetaRepository):
+            def __init__(self, sessions):
+                super().__init__(sessions)
+                self.project_checks = 0
+
+            async def _lock_assignable_project(self, session, project_id, resolved_user_id):
+                self.project_checks += 1
+                if self.project_checks == 2:
+                    assert await projects.delete(project_id, user_id=resolved_user_id) is True
+                return await super()._lock_assignable_project(session, project_id, resolved_user_id)
+
+        racing = DeleteBeforeRetryRepository(repo._sf)
+        with pytest.raises(ProjectNotAssignableError):
+            await racing.create("anchored", user_id="u1", project_id=project["id"])
+
+        assert racing.project_checks == 2
+        anchored = await repo.get("anchored", user_id=None)
+        assert anchored is not None
+        assert anchored["user_id"] is None
+        assert anchored["metadata"].get("deerflow_project_id") is None
+
 
 class TestJsonMatchCompilation:
     """Verify compiled SQL for both SQLite and PostgreSQL dialects."""

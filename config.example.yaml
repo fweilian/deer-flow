@@ -1767,7 +1767,9 @@ skill_evolution:
 #   mysql_url: $MYSQL_DATABASE_URL
 #   # Install with: cd backend && uv sync --all-packages --extra mysql
 #   # Run the DBA-owned application and checkpoint migration artifacts before
-#   # starting Gateway. Runtime validates schema only and never creates it.
+#   # starting Gateway. Runtime never creates MySQL schema. Checkpoint schema
+#   # validation is active now; final Application revision startup/readiness
+#   # binding is completed with the frozen Goal 5 baseline.
 #
 # postgres_schema only takes effect for new tables. On startup DeerFlow runs
 # CREATE SCHEMA IF NOT EXISTS and pins the connection search_path; it never

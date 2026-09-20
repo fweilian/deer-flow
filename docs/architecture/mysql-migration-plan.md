@@ -2132,7 +2132,7 @@ UNIQUE KEY uk_runs_thread_active (active_thread_id)
 -- ② uq_scheduled_task_run_active（scheduled_task_runs/model.py）
 active_task_id VARCHAR(64)
   GENERATED ALWAYS AS (IF(status IN ('queued','launching','running'), task_id, NULL)) STORED,
-UNIQUE KEY uk_scheduled_task_run_active (active_task_id)
+UNIQUE KEY uq_scheduled_task_run_active (active_task_id)
 
 -- ③ idx_users_oauth_identity（user/model.py:88-95）
 -- 🔴 本轮修正：**不需要生成列、不需要 CONCAT、不需要分隔符。**

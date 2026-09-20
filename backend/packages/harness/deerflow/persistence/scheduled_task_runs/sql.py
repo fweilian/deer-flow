@@ -7,6 +7,7 @@ from sqlalchemy import and_, bindparam, case, exists, func, or_, select, text, u
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
+from sqlalchemy.orm.attributes import flag_modified
 
 from deerflow.persistence.datetime_compat import UTCDateTime
 from deerflow.persistence.run import RunRepository
@@ -249,6 +250,11 @@ class ScheduledTaskRunRepository:
                 # UPDATE ... RETURNING support.
                 row.occurrence_seq = task.last_occurrence_seq + 1
                 task.last_occurrence_seq = row.occurrence_seq
+                if not (coordinate_with_task and release_task_lease_status is not None):
+                    # Sequence allocation is internal ordering, not a
+                    # user-visible task edit. Mark the current value explicit
+                    # so the column-level onupdate hook does not bump recency.
+                    flag_modified(task, "updated_at")
             session.add(row)
             if coordinate_with_task and task is not None and release_task_lease_status is not None:
                 task.status = release_task_lease_status

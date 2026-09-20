@@ -94,13 +94,7 @@ async def test_cancelled_caller_does_not_block_others(tmp_path: Path) -> None:
 
 
 async def test_late_caller_after_head_is_noop(monkeypatch, tmp_path: Path) -> None:
-    """When the first caller leaves the DB at head, the second observes
-    'versioned' and skips create_all / stamp -- it only runs upgrade head,
-    which is alembic-no-op.
-
-    We use a monkeypatched ``_upgrade`` counter to assert the second caller's
-    upgrade ran but did no real work (no new revision applied).
-    """
+    """A current schema performs neither DDL nor historical migration replay."""
     engine = create_async_engine(_url(tmp_path))
     try:
         # First caller: empty branch.
@@ -108,37 +102,32 @@ async def test_late_caller_after_head_is_noop(monkeypatch, tmp_path: Path) -> No
         first_version = await _alembic_version(engine)
         assert first_version == HEAD
 
-        upgrade_calls: list[str] = []
-        original_upgrade = bootstrap_mod._upgrade
+        create_calls: list[object] = []
+        stamp_calls: list[str] = []
+        monkeypatch.setattr(bootstrap_mod, "_run_create_all_sync", lambda connection: create_calls.append(connection))
+        monkeypatch.setattr(bootstrap_mod, "_stamp", lambda _cfg, revision: stamp_calls.append(revision))
 
-        def counting_upgrade(cfg, rev: str) -> None:
-            upgrade_calls.append(rev)
-            original_upgrade(cfg, rev)
-
-        monkeypatch.setattr(bootstrap_mod, "_upgrade", counting_upgrade)
-
-        # Second caller: versioned branch -> calls _upgrade('head').
         await bootstrap_schema(engine, backend="sqlite")
-        assert upgrade_calls == ["head"]
+        assert create_calls == []
+        assert stamp_calls == []
         assert await _alembic_version(engine) == HEAD
     finally:
         await engine.dispose()
 
 
-async def test_slow_upgrade_does_not_corrupt_concurrent_state(monkeypatch, tmp_path: Path) -> None:
-    """Inject a delay into the upgrade path; concurrent callers must still
-    converge to head with no exceptions."""
+async def test_slow_initial_stamp_does_not_corrupt_concurrent_state(monkeypatch, tmp_path: Path) -> None:
+    """Concurrent callers wait for the fresh-schema stamp and converge."""
     engine = create_async_engine(_url(tmp_path))
     try:
-        original_upgrade = bootstrap_mod._upgrade
+        original_stamp = bootstrap_mod._stamp
 
-        def slow_upgrade(cfg, rev: str) -> None:
+        def slow_stamp(cfg, revision: str) -> None:
             import time  # noqa: PLC0415
 
             time.sleep(0.2)
-            original_upgrade(cfg, rev)
+            original_stamp(cfg, revision)
 
-        monkeypatch.setattr(bootstrap_mod, "_upgrade", slow_upgrade)
+        monkeypatch.setattr(bootstrap_mod, "_stamp", slow_stamp)
 
         await asyncio.gather(
             bootstrap_schema(engine, backend="sqlite"),

@@ -211,9 +211,27 @@ async def init_engine(
 
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
-    # Schema DDL belongs exclusively to DBA/migration and test fixtures.
-    # Runtime owns connections only; a missing MySQL database fails closed
-    # during startup rather than being silently auto-created.
+    if backend in {"sqlite", "postgres"}:
+        # SQLite remains the default local-development backend and PostgreSQL
+        # remains supported during the migration window. Preserve their
+        # established bootstrap contract so a clean checkout and repository
+        # tests get a usable schema. The production MySQL branch below is
+        # deliberately separate and never reaches this DDL-capable path.
+        if backend == "postgres" and postgres_schema:
+            from sqlalchemy.schema import CreateSchema
+
+            async with _engine.begin() as conn:
+                await conn.execute(CreateSchema(postgres_schema, if_not_exists=True))
+
+        from deerflow.persistence.bootstrap import bootstrap_schema
+
+        await bootstrap_schema(_engine, backend=backend, postgres_schema=postgres_schema)
+        logger.info("Persistence engine initialized with fresh-schema bootstrap: backend=%s", backend)
+        return
+
+    # Production MySQL owns connections only. Schema DDL belongs exclusively
+    # to DBA migration artifacts and DDL-capable test fixtures; a missing
+    # database therefore fails during connection rather than being created.
     if backend == "mysql":
         from sqlalchemy import text
 
@@ -224,7 +242,7 @@ async def init_engine(
             _engine = None
             _session_factory = None
             raise RuntimeError(f"MySQL transaction isolation must be READ-COMMITTED; server reported {isolation!r}")
-    logger.info("Persistence engine initialized without schema bootstrap: backend=%s", backend)
+    logger.info("Persistence engine initialized without schema bootstrap: backend=mysql")
 
 
 async def init_engine_from_config(config) -> None:

@@ -16,7 +16,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import JSON, Column, Computed, Integer, MetaData, String, Table, create_engine, select, text
 from sqlalchemy.dialects import mysql
-from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.schema import CreateTable
@@ -28,6 +27,8 @@ from deerflow.persistence.json_compat import json_match
 from deerflow.persistence.mysql_errors import is_mysql_deadlock, mysql_duplicate_key_name
 from deerflow.persistence.run.model import RunRow
 from deerflow.persistence.scheduled_task_runs.sql import _MYSQL_CLAIM_QUEUED_RUN, ScheduledTaskRunRepository
+from deerflow.persistence.user.model import UserPreferenceRow, UserRow
+from deerflow.persistence.user.preferences import UserPreferencesRepository, _preference_upsert_statement
 
 
 def test_mysql_datetime_columns_keep_microseconds_and_utc_boundary() -> None:
@@ -99,11 +100,80 @@ def test_mysql_generated_column_definitions_preserve_active_row_semantics() -> N
 
 
 def test_mysql_preference_statement_uses_on_duplicate_key_update() -> None:
-    table = Table("user_preferences", MetaData(), Column("user_id", String(36), primary_key=True), Column("key", String(40), primary_key=True), Column("value", JSON))
-    statement = mysql_insert(table).values(user_id="u", key="mode", value="pro")
-    compiled = str(statement.on_duplicate_key_update(value=statement.inserted.value).compile(dialect=mysql.dialect()))
+    statement = _preference_upsert_statement("mysql", user_id="u", key="mode", value="pro")
+    compiled = str(statement.compile(dialect=mysql.dialect()))
     assert "ON DUPLICATE KEY UPDATE" in compiled
     assert "ON CONFLICT" not in compiled
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_mysql_production_repositories_preserve_preference_and_occurrence_contracts() -> None:
+    """Exercise both previously divergent production branches on MySQL 8.0.24."""
+    uri = os.environ.get("TEST_MYSQL_URI")
+    if not uri:
+        pytest.skip("TEST_MYSQL_URI is not set")
+    from sqlalchemy.engine import make_url
+
+    from deerflow.config.database_config import DatabaseConfig
+    from deerflow.persistence.scheduled_task_runs.model import ScheduledTaskRunRow
+    from deerflow.persistence.scheduled_tasks.model import ScheduledTaskRow
+    from deerflow.persistence.scheduled_tasks.sql import ScheduledTaskRepository
+
+    config = DatabaseConfig(backend="mysql", mysql_url=uri)
+    database = f"g3_repositories_{uuid4().hex}"
+    admin_engine = create_async_engine(config.app_sqlalchemy_url, pool_size=1, max_overflow=0)
+    engine = None
+    try:
+        async with admin_engine.begin() as connection:
+            assert str((await connection.execute(text("SELECT VERSION()"))).scalar_one()).startswith("8.0.24")
+            await connection.execute(text(f"CREATE DATABASE `{database}`"))
+
+        engine = create_async_engine(make_url(config.app_sqlalchemy_url).set(database=database), isolation_level="READ COMMITTED", pool_size=2, max_overflow=0)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with engine.begin() as connection:
+            for table in (UserRow.__table__, UserPreferenceRow.__table__, ScheduledTaskRow.__table__, ScheduledTaskRunRow.__table__):
+                await connection.run_sync(lambda sync, table=table: table.create(sync))
+
+        async with sessions.begin() as session:
+            session.add(UserRow(id="user", email="user@example.com"))
+        preferences = UserPreferencesRepository(sessions)
+        await preferences.patch("user", {"mode": "pro", "notification_enabled": False})
+        await preferences.patch("user", {"mode": "flash"})
+        assert await preferences.get("user") == {"mode": "flash", "notification_enabled": False}
+
+        tasks = ScheduledTaskRepository(sessions)
+        occurrences = ScheduledTaskRunRepository(sessions)
+        original = await tasks.create(
+            task_id="task",
+            user_id="user",
+            thread_id=None,
+            context_mode="fresh_thread_per_run",
+            assistant_id=None,
+            title="Goal 3",
+            prompt="p",
+            schedule_type="cron",
+            schedule_spec={"cron": "* * * * *"},
+            timezone="UTC",
+            next_run_at=None,
+        )
+        await occurrences.create(
+            run_record_id="occurrence",
+            task_id="task",
+            thread_id="occurrence-thread",
+            scheduled_for=datetime.now(UTC),
+            trigger="manual",
+            status="success",
+        )
+        current = await tasks.get("task", user_id="user")
+        assert current is not None
+        assert current["updated_at"] == original["updated_at"]
+    finally:
+        if engine is not None:
+            await engine.dispose()
+        async with admin_engine.begin() as connection:
+            await connection.execute(text(f"DROP DATABASE IF EXISTS `{database}`"))
+        await admin_engine.dispose()
 
 
 def test_mysql_auth_error_mapping_uses_error_code_and_key_name() -> None:

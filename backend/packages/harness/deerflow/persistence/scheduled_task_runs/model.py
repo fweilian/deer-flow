@@ -47,9 +47,9 @@ class ScheduledTaskRunRow(Base):
         # default ``fresh_thread_per_run`` context (every dispatch gets a new
         # thread), which is why the scheduled-task run row needs its own guard.
         #
-        # Must live in ORM ``__table_args__`` (not just the migration) because
-        # the empty-DB bootstrap path runs ``create_all`` + ``stamp head`` and
-        # never executes the migration that also defines this index.
+        # Must live in ORM ``__table_args__`` for the transitional
+        # SQLite/PostgreSQL empty-DB bootstrap. MySQL receives the equivalent
+        # generated-column key from its independent DBA-owned baseline.
         Index(
             "uq_scheduled_task_run_active",
             "task_id",

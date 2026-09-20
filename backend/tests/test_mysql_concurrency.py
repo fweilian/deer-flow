@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from deerflow.persistence.models.run_event import RunEventRow
 from deerflow.persistence.mysql_errors import MYSQL_DUPLICATE_KEY, is_mysql_deadlock, mysql_duplicate_key_name, mysql_error_code
+from deerflow.persistence.projects import ProjectNotAssignableError, ProjectRepository
+from deerflow.persistence.projects.model import ProjectRow
 from deerflow.persistence.run.model import RunRow
 from deerflow.persistence.run.sql import RunRepository
 from deerflow.persistence.scheduled_task_runs.model import ScheduledTaskRunRow
@@ -492,7 +494,7 @@ async def test_mysql_scheduler_requeues_an_overlap_conflict_instead_of_failing_t
 async def test_mysql_event_anchor_and_metadata_create_interleavings() -> None:
     """An event-path anchor row must not break, or be clobbered by, metadata create."""
     async with _disposable_database() as (engine, sessions):
-        await _create_tables(engine, ThreadMetaRow.__table__, RunEventRow.__table__)
+        await _create_tables(engine, ProjectRow.__table__, ThreadMetaRow.__table__, RunEventRow.__table__)
         store = DbRunEventStore(sessions)
         repo = ThreadMetaRepository(sessions)
         prefix = f"g4-r2-anchor-{uuid4().hex}-"
@@ -562,3 +564,31 @@ async def test_mysql_event_anchor_and_metadata_create_interleavings() -> None:
 
         with pytest.raises(IntegrityError):
             await repo.create(created_first, assistant_id="other", user_id="owner")
+
+        # (d) The duplicate-anchor INSERT rollback releases an earlier project
+        # lock. If deletion wins that exact gap, the retry must reacquire and
+        # reject the assignment instead of leaving a dangling project_id.
+        projects = ProjectRepository(sessions)
+        project = await projects.create(name="anchor-race", user_id="owner")
+        project_thread = f"{prefix}project-delete"
+        await store.put(thread_id=project_thread, run_id=f"{prefix}run-d", event_type="message", category="message", content="d")
+
+        class DeleteBeforeRetryRepository(ThreadMetaRepository):
+            def __init__(self, session_factory):
+                super().__init__(session_factory)
+                self.project_checks = 0
+
+            async def _lock_assignable_project(self, session, project_id, resolved_user_id):
+                self.project_checks += 1
+                if self.project_checks == 2:
+                    assert await projects.delete(project_id, user_id=resolved_user_id) is True
+                return await super()._lock_assignable_project(session, project_id, resolved_user_id)
+
+        racing_repo = DeleteBeforeRetryRepository(sessions)
+        with pytest.raises(ProjectNotAssignableError):
+            await racing_repo.create(project_thread, assistant_id="assistant", user_id="owner", project_id=project["id"])
+        assert racing_repo.project_checks == 2
+        preserved_anchor = await repo.get(project_thread, user_id=None)
+        assert preserved_anchor is not None
+        assert preserved_anchor["user_id"] is None
+        assert preserved_anchor["metadata"].get("deerflow_project_id") is None

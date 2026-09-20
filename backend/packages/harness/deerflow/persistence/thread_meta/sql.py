@@ -45,6 +45,24 @@ class ThreadMetaRepository(ThreadMetaStore):
         """Whether *row* is the metadata-free anchor created by event writes."""
         return row.incarnation is None and row.assistant_id is None and row.user_id is None and row.project_id is None and row.display_name is None and row.status == "idle" and (row.metadata_json or {}) == {}
 
+    @staticmethod
+    async def _lock_assignable_project(session: AsyncSession, project_id: str, resolved_user_id: str | None) -> None:
+        """Validate and lock a project for assignment in the current transaction."""
+        from deerflow.persistence.projects import ProjectNotAssignableError
+        from deerflow.persistence.projects.model import ProjectRow
+
+        locked = await session.scalar(
+            select(ProjectRow.id)
+            .where(
+                ProjectRow.id == project_id,
+                ProjectRow.user_id == resolved_user_id,
+                ProjectRow.status == "active",
+            )
+            .with_for_update()
+        )
+        if locked is None:
+            raise ProjectNotAssignableError(project_id)
+
     async def create(
         self,
         thread_id: str,
@@ -63,26 +81,13 @@ class ThreadMetaRepository(ThreadMetaStore):
             if session.get_bind().dialect.name == "sqlite":
                 await session.execute(text("BEGIN IMMEDIATE"))
             if project_id is not None:
-                from deerflow.persistence.projects import ProjectNotAssignableError
-                from deerflow.persistence.projects.model import ProjectRow
-
                 # Lock the project row (FOR UPDATE on Postgres; the clause
                 # renders nothing on SQLite) so a concurrent
                 # ProjectRepository.delete — which holds the same lock across
                 # its membership-clear and DELETE — either commits first (this
                 # read then finds no row) or waits for this transaction.
                 # RFC v2 §14.14: no dangling ``threads_meta.project_id``.
-                locked = await session.scalar(
-                    select(ProjectRow.id)
-                    .where(
-                        ProjectRow.id == project_id,
-                        ProjectRow.user_id == resolved_user_id,
-                        ProjectRow.status == "active",
-                    )
-                    .with_for_update()
-                )
-                if locked is None:
-                    raise ProjectNotAssignableError(project_id)
+                await self._lock_assignable_project(session, project_id, resolved_user_id)
             row = ThreadMetaRow(
                 thread_id=thread_id,
                 incarnation=uuid.uuid4().hex,
@@ -104,6 +109,12 @@ class ThreadMetaRepository(ThreadMetaStore):
                 # Promote only that exact sentinel row; a real duplicate keeps
                 # the existing create() IntegrityError contract.
                 await session.rollback()
+                if project_id is not None:
+                    # The failed INSERT rollback released the first project
+                    # lock. Reacquire and revalidate it before locking and
+                    # promoting the anchor, preserving project -> thread lock
+                    # order and closing delete-between-transactions races.
+                    await self._lock_assignable_project(session, project_id, resolved_user_id)
                 anchored = await session.get(ThreadMetaRow, thread_id, with_for_update=True)
                 if anchored is None or not self._is_event_anchor(anchored):
                     raise

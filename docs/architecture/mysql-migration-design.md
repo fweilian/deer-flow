@@ -1870,7 +1870,7 @@ UNIQUE KEY uq_runs_thread_active (active_thread_id)
 -- ② uq_scheduled_task_run_active（scheduled_task_runs/model.py）
 active_task_id VARCHAR(64)
   GENERATED ALWAYS AS (IF(status IN ('queued','launching','running'), task_id, NULL)) STORED,
-UNIQUE KEY uk_scheduled_task_run_active (active_task_id)
+UNIQUE KEY uq_scheduled_task_run_active (active_task_id)
 
 -- ③ idx_users_oauth_identity（user/model.py:88-95）
 -- 🔴 **不需要生成列、不需要 CONCAT、不需要分隔符。**
@@ -3557,5 +3557,4 @@ Goal 5  删除 PostgreSQL
 第三方包 wheel 的源码阅读、ORM 元数据反射、方言编译探针，
 以及**真实 MySQL 8.0.24 上的执行探针**
 （脚本、wheel、渲染出的 SQL 均置于 `/tmp`，不进仓库）。
-
 
