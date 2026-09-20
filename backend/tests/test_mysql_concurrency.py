@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -16,7 +17,7 @@ from sqlalchemy import Column, MetaData, String, Table, delete, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from deerflow.persistence.models.run_event import RunEventRow
-from deerflow.persistence.mysql_errors import is_mysql_deadlock, mysql_duplicate_key_name
+from deerflow.persistence.mysql_errors import MYSQL_DUPLICATE_KEY, is_mysql_deadlock, mysql_duplicate_key_name, mysql_error_code
 from deerflow.persistence.run.model import RunRow
 from deerflow.persistence.run.sql import RunRepository
 from deerflow.persistence.scheduled_task_runs.model import ScheduledTaskRunRow
@@ -24,7 +25,9 @@ from deerflow.persistence.scheduled_task_runs.sql import ScheduledTaskRunReposit
 from deerflow.persistence.scheduled_tasks.model import ScheduledTaskRow
 from deerflow.persistence.scheduled_tasks.sql import ScheduledTaskRepository
 from deerflow.persistence.thread_meta.model import ThreadMetaRow
+from deerflow.persistence.thread_meta.sql import ThreadMetaRepository
 from deerflow.runtime.events.store.db import DbRunEventStore
+from deerflow.runtime.runs.manager import ConflictError, RunManager, _is_active_run_conflict, _is_unique_violation
 
 pytestmark = pytest.mark.integration
 
@@ -205,3 +208,357 @@ async def test_mysql_run_lease_compare_and_set_fences_competing_workers() -> Non
     finally:
         await _delete_prefix(engine, (RunRow.__table__, RunRow.run_id), prefix=prefix)
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# R2 blocker fixes — real MySQL 8.0.24 interleavings
+# ---------------------------------------------------------------------------
+
+# MySQL has no partial unique index, so the ``runs`` single-active-run guard is
+# a stored generated column plus a unique key carrying the ORM index name.
+_MYSQL_ACTIVE_RUN_DDL = """
+    ALTER TABLE runs
+      ADD COLUMN active_thread_id VARCHAR(64) GENERATED ALWAYS AS
+        (IF(status IN ('pending','running'), thread_id, NULL)) STORED,
+      ADD UNIQUE KEY uq_runs_thread_active (active_thread_id)
+"""
+
+# The completion hook's terminal write, reproduced verbatim.
+_MYSQL_COMPLETE_OCCURRENCE = text(
+    """
+    UPDATE scheduled_task_runs
+       SET status = 'success',
+           run_id = 'g4-r2-run',
+           error = NULL,
+           finished_at = UTC_TIMESTAMP(6),
+           lease_owner = NULL,
+           lease_expires_at = NULL
+     WHERE id = :record
+    """
+)
+
+
+@asynccontextmanager
+async def _disposable_database(*, pool_size: int = 4):
+    """Yield a fresh disposable MySQL 8.0.24 database and its READ COMMITTED pool."""
+    from sqlalchemy.engine import make_url
+
+    from deerflow.config.database_config import DatabaseConfig
+
+    config = DatabaseConfig(backend="mysql", mysql_url=_uri())
+    admin = create_async_engine(config.app_sqlalchemy_url, pool_size=1, max_overflow=0)
+    name = f"g4_r2_{uuid4().hex}"
+    engine = None
+    try:
+        async with admin.begin() as connection:
+            assert str((await connection.execute(text("SELECT VERSION()"))).scalar_one()).startswith("8.0.24")
+            await connection.execute(text(f"CREATE DATABASE `{name}`"))
+        engine = create_async_engine(
+            make_url(config.app_sqlalchemy_url).set(database=name),
+            isolation_level="READ COMMITTED",
+            pool_size=pool_size,
+            max_overflow=0,
+        )
+        yield engine, async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        if engine is not None:
+            await engine.dispose()
+        async with admin.begin() as connection:
+            await connection.execute(text(f"DROP DATABASE IF EXISTS `{name}`"))
+        await admin.dispose()
+
+
+class _Rendezvous:
+    """Release every participant together, tolerating extra arrivals."""
+
+    def __init__(self, parties: int) -> None:
+        self._parties = parties
+        self._arrived = 0
+        self._release = asyncio.Event()
+
+    async def wait(self) -> None:
+        self._arrived += 1
+        if self._arrived >= self._parties:
+            self._release.set()
+        await asyncio.wait_for(self._release.wait(), timeout=15)
+
+
+@pytest.mark.anyio
+async def test_mysql_scheduler_terminal_status_survives_a_delayed_running_write() -> None:
+    """The launch-path ``running`` write must not resurrect a finished occurrence.
+
+    Completion holds the occurrence row and has not committed its terminal state
+    yet.  The late launcher's write therefore blocks on that row lock; once the
+    terminal state lands, the conditional update must refuse to overwrite it and
+    only backfill what completion could not know.
+    """
+    async with _disposable_database() as (engine, sessions):
+        await _create_tables(engine, ScheduledTaskRunRow.__table__)
+        now = datetime.now(UTC)
+        record = f"g4-r2-occurrence-{uuid4().hex}"
+        async with sessions.begin() as session:
+            session.add(
+                ScheduledTaskRunRow(
+                    id=record,
+                    task_id=f"g4-r2-task-{record}",
+                    thread_id=f"g4-r2-thread-{record}",
+                    scheduled_for=now,
+                    trigger="scheduled",
+                    status="launching",
+                    lease_owner="worker-a",
+                    lease_expires_at=now + timedelta(seconds=120),
+                    created_at=now,
+                )
+            )
+        repo = ScheduledTaskRunRepository(sessions)
+        started_at = now + timedelta(seconds=1)
+
+        completion = await engine.connect()
+        try:
+            await completion.execute(text("SELECT id FROM scheduled_task_runs WHERE id = :record FOR UPDATE"), {"record": record})
+            late = asyncio.create_task(
+                repo.update_status(
+                    record,
+                    status="running",
+                    run_id="g4-r2-run",
+                    started_at=started_at,
+                    protect_terminal=True,
+                    expected_lease_owner="worker-a",
+                )
+            )
+            await asyncio.sleep(0.5)
+            assert not late.done(), "the delayed launch write must wait for the completion row lock"
+            await completion.execute(_MYSQL_COMPLETE_OCCURRENCE, {"record": record})
+            await completion.commit()
+            assert await asyncio.wait_for(late, timeout=10) is True
+        finally:
+            await completion.close()
+
+        async with sessions() as session:
+            row = await session.get(ScheduledTaskRunRow, record)
+        assert row is not None
+        assert row.status == "success"
+        assert row.run_id == "g4-r2-run"
+        assert row.lease_owner is None
+        assert row.lease_expires_at is None
+        assert row.started_at is not None
+
+
+@pytest.mark.anyio
+async def test_mysql_two_worker_admission_loser_keeps_the_overlap_contract() -> None:
+    """The admission loser must surface the existing 409 overlap contract.
+
+    asyncmy raises ``(1062, "Duplicate entry ... for key 'runs.uq_runs_thread_active'")``
+    without an ``errno`` attribute, so the pre-existing generic unique-violation
+    probe cannot see MySQL's shape.  Only the active-run key may be classified as
+    an overlap; a primary-key collision must keep its own semantics.
+    """
+    async with _disposable_database() as (engine, sessions):
+        await _create_tables(engine, RunRow.__table__)
+        async with engine.begin() as connection:
+            await connection.execute(text(_MYSQL_ACTIVE_RUN_DDL))
+
+        captured: dict[str, BaseException] = {}
+        rendezvous = _Rendezvous(2)
+
+        class RendezvousRunRepository(RunRepository):
+            async def create_thread_operation_atomic(self, *args, **kwargs):
+                await rendezvous.wait()
+                try:
+                    return await super().create_thread_operation_atomic(*args, **kwargs)
+                except BaseException as exc:  # noqa: BLE001 - re-raised unchanged
+                    captured.setdefault("error", exc)
+                    raise
+
+        store = RendezvousRunRepository(sessions)
+        thread_id = f"g4-r2-thread-{uuid4().hex}"
+        outcomes = await asyncio.gather(
+            RunManager(store=store, worker_id="worker-a").create_or_reject(thread_id, user_id="user"),
+            RunManager(store=store, worker_id="worker-b").create_or_reject(thread_id, user_id="user"),
+            return_exceptions=True,
+        )
+        winners = [outcome for outcome in outcomes if not isinstance(outcome, BaseException)]
+        losers = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
+        assert len(winners) == 1 and len(losers) == 1
+        assert isinstance(losers[0], ConflictError)
+        assert "already has an active run" in str(losers[0])
+
+        raw = captured["error"]
+        assert mysql_error_code(raw) == MYSQL_DUPLICATE_KEY
+        assert mysql_duplicate_key_name(raw).rsplit(".", 1)[-1] == "uq_runs_thread_active"
+        # The classifier keys off that literal, so the ORM index name and the
+        # MySQL baseline's unique key must both keep it (design §8.4).
+        assert "uq_runs_thread_active" in {index.name for index in RunRow.__table__.indexes}
+        # The generic probe cannot see MySQL's 1062 shape ...
+        assert _is_unique_violation(raw) is False
+        # ... so the active-run key check is the load-bearing discriminator.
+        assert _is_active_run_conflict(raw) is True
+
+        # The Scheduler keeps its existing overlap handling for this exception.
+        from app.scheduler.service import ScheduledTaskService
+
+        assert ScheduledTaskService._is_overlap_conflict(losers[0]) is True
+
+        # A 1062 on another unique key is not an active-run conflict.
+        plain = RunRepository(sessions)
+        await plain.create_thread_operation_atomic("g4-r2-pk", thread_id=f"{thread_id}-pk", owner_worker_id="worker-a", lease_expires_at=None)
+        with pytest.raises(Exception) as primary:
+            await plain.create_thread_operation_atomic("g4-r2-pk", thread_id=f"{thread_id}-pk", owner_worker_id="worker-a", lease_expires_at=None)
+        assert mysql_error_code(primary.value) == MYSQL_DUPLICATE_KEY
+        assert mysql_duplicate_key_name(primary.value).rsplit(".", 1)[-1] == "PRIMARY"
+        assert _is_active_run_conflict(primary.value) is False
+
+
+@pytest.mark.anyio
+async def test_mysql_scheduler_requeues_an_overlap_conflict_instead_of_failing_the_occurrence() -> None:
+    """A real admission overlap must requeue the occurrence, not fail it."""
+    async with _disposable_database() as (engine, sessions):
+        metadata = MetaData()
+        alembic_version = Table("alembic_version", metadata, Column("version_num", String(64), primary_key=True))
+        await _create_tables(engine, ScheduledTaskRow.__table__, ScheduledTaskRunRow.__table__, RunRow.__table__, alembic_version)
+        async with engine.begin() as connection:
+            await connection.execute(text("INSERT IGNORE INTO alembic_version (version_num) VALUES ('0001_mysql_baseline')"))
+            await connection.execute(text(_MYSQL_ACTIVE_RUN_DDL))
+
+        from app.scheduler.service import ScheduledTaskService
+
+        now = datetime.now(UTC)
+        suffix = uuid4().hex
+        task_id = f"g4-r2-task-{suffix}"
+        thread_id = f"g4-r2-thread-{suffix}"
+        occurrence_id = f"g4-r2-occurrence-{suffix}"
+        tasks = ScheduledTaskRepository(sessions)
+        occurrences = ScheduledTaskRunRepository(sessions)
+        await tasks.create(
+            task_id=task_id,
+            user_id="user",
+            thread_id=thread_id,
+            context_mode="reuse_thread",
+            assistant_id=None,
+            title="r2",
+            prompt="p",
+            schedule_type="cron",
+            schedule_spec={"cron": "0 9 * * *"},
+            timezone="UTC",
+            next_run_at=now,
+        )
+        run_manager = RunManager(store=RunRepository(sessions), worker_id="worker-a")
+        await run_manager.create_or_reject(thread_id, user_id="user")
+        await occurrences.create(
+            run_record_id=occurrence_id,
+            task_id=task_id,
+            thread_id=thread_id,
+            scheduled_for=now,
+            trigger="manual",
+            status="queued",
+        )
+
+        async def launch_run(**kwargs):
+            record = await run_manager.create_or_reject(kwargs["thread_id"], user_id="user")
+            return {"run_id": record.run_id, "thread_id": record.thread_id}
+
+        service = ScheduledTaskService(
+            task_repo=tasks,
+            task_run_repo=occurrences,
+            launch_run=launch_run,
+            poll_interval_seconds=5,
+            lease_seconds=120,
+            max_concurrent_runs=3,
+        )
+        result = await service._launch_queued_occurrence(
+            {
+                "id": task_id,
+                "prompt": "p",
+                "assistant_id": None,
+                "user_id": "user",
+                "schedule_type": "cron",
+                "schedule_spec": {"cron": "0 9 * * *"},
+                "timezone": "UTC",
+                "thread_id": thread_id,
+                "status": "enabled",
+            },
+            {"id": occurrence_id, "task_id": task_id, "thread_id": thread_id, "trigger": "manual"},
+            now=now,
+        )
+
+        assert result["outcome"] == "queued"
+        row = (await occurrences.list_by_task(task_id))[0]
+        assert row["status"] == "queued"
+        assert row["finished_at"] is None
+        assert "already has an active run" in (row["error"] or "")
+
+
+@pytest.mark.anyio
+async def test_mysql_event_anchor_and_metadata_create_interleavings() -> None:
+    """An event-path anchor row must not break, or be clobbered by, metadata create."""
+    async with _disposable_database() as (engine, sessions):
+        await _create_tables(engine, ThreadMetaRow.__table__, RunEventRow.__table__)
+        store = DbRunEventStore(sessions)
+        repo = ThreadMetaRepository(sessions)
+        prefix = f"g4-r2-anchor-{uuid4().hex}-"
+
+        # (a) The event path creates the empty anchor first; the normal metadata
+        # create must promote it instead of failing on the primary key.
+        anchored_first = f"{prefix}anchored-first"
+        await store.put(thread_id=anchored_first, run_id=f"{prefix}run-a", event_type="message", category="message", content="a")
+        created = await repo.create(anchored_first, assistant_id="assistant", user_id="owner", display_name="name", metadata={"pinned": True})
+        assert created["thread_id"] == anchored_first
+        assert created["assistant_id"] == "assistant"
+        assert created["metadata"] == {"pinned": True}
+        fetched = await repo.get(anchored_first, user_id="owner")
+        assert fetched is not None and fetched["display_name"] == "name"
+        await store.put(thread_id=anchored_first, run_id=f"{prefix}run-a", event_type="message", category="message", content="b")
+        async with sessions() as session:
+            seqs = list((await session.execute(select(RunEventRow.seq).where(RunEventRow.thread_id == anchored_first).order_by(RunEventRow.seq))).scalars())
+        assert seqs == [1, 2]
+
+        # (b) Metadata create wins first; the anchor upsert must be a no-op.
+        created_first = f"{prefix}created-first"
+        await repo.create(created_first, assistant_id="assistant", user_id="owner", metadata={"pinned": True})
+        await store.put(thread_id=created_first, run_id=f"{prefix}run-b", event_type="message", category="message", content="a")
+        preserved = await repo.get(created_first, user_id="owner")
+        assert preserved is not None
+        assert preserved["assistant_id"] == "assistant"
+        assert preserved["metadata"] == {"pinned": True}
+
+        # (c) Both paths reach their insert together for a brand-new thread.
+        concurrent_threads = [f"{prefix}concurrent-{index}" for index in range(4)]
+        rendezvous = _Rendezvous(2 * len(concurrent_threads))
+
+        class RendezvousThreadMetaRepository(ThreadMetaRepository):
+            async def create(self, thread_id, **kwargs):
+                await rendezvous.wait()
+                return await super().create(thread_id, **kwargs)
+
+        class RendezvousRunEventStore(DbRunEventStore):
+            async def _max_seq_for_thread(self, session, thread_id):  # type: ignore[override]
+                await rendezvous.wait()
+                return await super()._max_seq_for_thread(session, thread_id)
+
+        concurrent_repo = RendezvousThreadMetaRepository(sessions)
+        concurrent_store = RendezvousRunEventStore(sessions)
+        results = await asyncio.gather(
+            *[
+                call
+                for index, thread_id in enumerate(concurrent_threads)
+                for call in (
+                    concurrent_repo.create(thread_id, assistant_id="assistant", user_id="owner", metadata={"index": index}),
+                    concurrent_store.put(thread_id=thread_id, run_id=f"{prefix}run-c{index}", event_type="message", category="message", content=str(index)),
+                )
+            ]
+        )
+        assert len(results) == 2 * len(concurrent_threads)
+        for index, thread_id in enumerate(concurrent_threads):
+            stored = await concurrent_repo.get(thread_id, user_id="owner")
+            assert stored is not None
+            assert stored["assistant_id"] == "assistant"
+            assert stored["metadata"] == {"index": index}
+        async with sessions() as session:
+            seq_rows = list((await session.execute(select(RunEventRow.thread_id, RunEventRow.seq).where(RunEventRow.thread_id.in_(concurrent_threads)))).all())
+        assert sorted(seq_rows, key=lambda row: (row[0], row[1])) == [(thread_id, 1) for thread_id in sorted(concurrent_threads)]
+
+        # A duplicate create against a real metadata row keeps its contract.
+        from sqlalchemy.exc import IntegrityError
+
+        with pytest.raises(IntegrityError):
+            await repo.create(created_first, assistant_id="other", user_id="owner")
