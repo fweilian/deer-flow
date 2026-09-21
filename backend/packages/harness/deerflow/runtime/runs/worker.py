@@ -673,7 +673,7 @@ class _SubagentEventBuffer:
     additionally writes them so the subtask card's step history survives a reload.
 
     ``RunEventStore.put`` is documented as a low-frequency path — on MySQL each
-    call opens its own transaction and takes a per-thread advisory lock. A deep
+    call opens its own transaction and locks the per-thread metadata row. A deep
     subagent (``general-purpose`` runs up to ``max_turns=150``) emits hundreds of
     ``task_running`` steps on the hot stream loop, so persisting each with
     ``put()`` would serialize against the run's own message-batch writer. This

@@ -418,7 +418,7 @@ make detect-blocking-io  # 统计可能阻塞后端事件循环的阻塞式 IO
 
 ### 数据库结构迁移
 
-生产持久化使用外部托管的 MySQL 8.0.24+；PostgreSQL 不再是受支持的应用持久化后端。请先通过 DBA 管理的 MySQL 迁移制品应用已冻结的 `0001_mysql_baseline`，并记录预期 revision，再启动 Gateway。Gateway 运行时只验证 MySQL revision，绝不执行 DDL；不匹配会使启动失败。
+生产持久化使用外部托管的 MySQL 8.0.24+；PostgreSQL 不再是受支持的应用持久化后端。启动 Gateway 前，请通过 DBA 管理的迁移制品同时应用已冻结的应用迁移 `0001_mysql_baseline` 和 `database/mysql/checkpoint/` 中独立的 checkpoint 迁移，并记录预期 revision。Gateway 运行时只验证这些 MySQL schema，绝不执行 DDL；不匹配会使启动失败。
 
 SQLite 仅用于本地开发和测试。它在本地数据库中创建当前 SQLAlchemy metadata，不使用 Alembic。旧部署没有受支持的原地迁移路径；生产切换必须使用全新的 MySQL 部署。
 

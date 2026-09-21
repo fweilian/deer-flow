@@ -460,10 +460,11 @@ restart the Gateway during an active run.
 
 Production persistence uses an externally managed MySQL 8.0.24+ database.
 PostgreSQL is no longer supported as an application persistence backend.
-Apply the frozen `0001_mysql_baseline` with the DBA-controlled MySQL migration
-artifact before starting the Gateway, then record its expected revision. The
-Gateway only verifies the MySQL revision and performs no DDL at runtime; a
-mismatch fails startup.
+Before starting the Gateway, use the DBA-controlled migration artifacts to
+apply both the frozen application `0001_mysql_baseline` and the independent
+checkpoint migrations in `database/mysql/checkpoint/`, then record their
+expected revisions. The Gateway only verifies those MySQL schemas and performs
+no DDL at runtime; a mismatch fails startup.
 
 SQLite is a local development/test backend. It creates the current SQLAlchemy
 metadata on its local database and does not use Alembic. There is no supported

@@ -67,6 +67,11 @@ config.yaml.bak
 .gstack/
 .worktrees
 
+# Local service state and developer-only compose overrides
+/data/
+/docker-compose.dev-services.yml
+/docker/docker-compose.yml
+
 # Monocle agent-observability trace output (local file exporter)
 .monocle/
 # Workbuddy local state

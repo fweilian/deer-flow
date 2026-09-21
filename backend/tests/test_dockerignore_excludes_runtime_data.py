@@ -44,6 +44,8 @@ HOST_LOCAL_PATHS = [
     "backend/.deer-flow/.jwt_secret",
     "backend/.deer-flow/users/some-user/agents/my-agent/config.yaml",
     "backend/sandbox/some-thread/scratch.py",
+    "data/mysql/server-key.pem",
+    "data/mysql/dev_db/runs.ibd",
 ]
 
 # Paths the build genuinely needs; the exclusions must not swallow them.

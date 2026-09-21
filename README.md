@@ -346,10 +346,15 @@ exits non-zero and prints the container status plus recent Gateway logs. The
 production image starts from its already-built environment and never resolves
 or installs Python dependencies at container startup.
 
-For persistent deployments, configure `database.backend` as `sqlite` or
-`mysql`. The selected backend is shared by the LangGraph checkpointer,
-LangGraph Store, and DeerFlow application data. The deprecated `checkpointer`
-section, when present, overrides the first two for backward compatibility.
+Production relational persistence requires an externally managed MySQL 8.0.24+
+database; PostgreSQL is not supported. Before starting the Gateway, a DBA or
+migration job must apply both the frozen application `0001_mysql_baseline` and
+the independent checkpoint artifact in `database/mysql/checkpoint/`. Runtime
+only verifies those schemas and never executes production DDL. SQLite remains
+available for local development and single-user evaluation. The selected
+backend is shared by the LangGraph checkpointer, LangGraph Store, and DeerFlow
+application data. The deprecated `checkpointer` section, when present,
+overrides the first two for backward compatibility.
 
 For lightweight single-process event persistence, `run_events.backend: jsonl`
 keeps Unicode message content intact, including line and paragraph separators.

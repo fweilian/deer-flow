@@ -140,6 +140,11 @@ run_events:
   backend: db
 ```
 
+启动 Gateway 前，DBA 或迁移任务必须同时应用冻结的应用迁移
+`0001_mysql_baseline` 和 `database/mysql/checkpoint/` 中独立的 checkpoint
+迁移。生产 Runtime 只校验这些 schema，绝不执行 DDL；不支持 PostgreSQL
+持久化后端。
+
 SQLite 部署应限制在本地、单节点或短期评估场景。
 
 ### K8s Provisioner 配置

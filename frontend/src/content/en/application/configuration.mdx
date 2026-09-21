@@ -209,6 +209,11 @@ run_events:
 
 Set `MYSQL_DATABASE_URL` in your environment, for example `mysql+asyncmy://user:password@localhost:3306/deerflow`.
 
+Before the Gateway starts, a DBA or migration job must apply both the frozen
+application `0001_mysql_baseline` and the independent checkpoint migrations in
+`database/mysql/checkpoint/`. Production Runtime only verifies those schemas and
+never executes DDL. PostgreSQL is not a supported persistence backend.
+
 Install MySQL support for local runs:
 
 ```bash

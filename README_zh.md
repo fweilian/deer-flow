@@ -274,6 +274,12 @@ make down   # 停止并移除容器
 
 访问地址：http://localhost:2026
 
+生产关系型持久化必须使用外部托管的 MySQL 8.0.24+；不支持 PostgreSQL。启动
+Gateway 前，DBA 或迁移任务必须同时应用冻结的应用迁移
+`0001_mysql_baseline` 和 `database/mysql/checkpoint/` 中独立的 checkpoint
+迁移制品。Runtime 只校验这些 schema，绝不执行生产 DDL。SQLite 仅用于本地开发
+和单用户评估。
+
 更完整的 Docker 开发说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 #### 方式二：本地开发

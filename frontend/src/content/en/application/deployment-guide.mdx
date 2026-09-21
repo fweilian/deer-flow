@@ -143,6 +143,11 @@ run_events:
   backend: db
 ```
 
+Before starting the Gateway, a DBA or migration job must apply both the frozen
+application `0001_mysql_baseline` and the independent checkpoint migrations in
+`database/mysql/checkpoint/`. The production Runtime only verifies those schemas
+and never executes DDL. PostgreSQL is not a supported persistence backend.
+
 Keep SQLite deployments to local, single-node, or short-lived evaluation environments.
 
 ### K8s Provisioner setup

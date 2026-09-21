@@ -165,6 +165,27 @@ def test_default_ci_workflow_does_not_opt_in_to_live_tests() -> None:
     assert LIVE_OPT_IN not in workflow
 
 
+def test_ci_and_release_workflows_use_mysql_only() -> None:
+    unit_workflow = (REPO_ROOT / ".github" / "workflows" / "backend-unit-tests.yml").read_text(encoding="utf-8")
+    container_workflow = (REPO_ROOT / ".github" / "workflows" / "container.yaml").read_text(encoding="utf-8")
+    nightly_workflow = (REPO_ROOT / ".github" / "workflows" / "nightly.yaml").read_text(encoding="utf-8")
+
+    assert "mysql:8.0.24" in unit_workflow
+    assert "TEST_MYSQL_URI" in unit_workflow
+    assert "uv sync --group dev --extra mysql" in unit_workflow
+    assert "postgres" not in unit_workflow.lower()
+    for workflow in (container_workflow, nightly_workflow):
+        assert "UV_EXTRAS=mysql" in workflow
+        assert "UV_EXTRAS=postgres" not in workflow
+
+
+def test_environment_example_uses_mysql_production_dsn() -> None:
+    example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+
+    assert "MYSQL_DATABASE_URL=mysql+asyncmy://" in example
+    assert "postgres" not in example.lower()
+
+
 def test_ci_unit_test_workflow_runs_duration_aware_shards() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "backend-unit-tests.yml").read_text(encoding="utf-8")
 

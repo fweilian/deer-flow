@@ -30,8 +30,8 @@ class DbRunEventStore(RunEventStore):
         self._sf = session_factory
         self._max_trace_content = max_trace_content
         # Per-thread asyncio locks serialize seq assignment for concurrent
-        # in-process writers on the same thread. The DB-level FOR UPDATE /
-        # advisory lock guards cross-process races; this guards the common
+        # in-process writers on the same thread. The DB-level metadata-row
+        # FOR UPDATE lock guards cross-process races; this guards the common
         # single-process case where two coroutines interleave between the
         # max(seq) read and the INSERT and would otherwise collide on seq.
         self._write_locks: dict[str, asyncio.Lock] = {}

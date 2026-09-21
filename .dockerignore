@@ -73,6 +73,7 @@ backend/.coverage
 # root that the build client cannot read.
 **/.deer-flow/
 backend/sandbox/
+data/
 *.md
 !README.md
 !frontend/README.md

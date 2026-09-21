@@ -113,9 +113,8 @@ jobs:
           - component: backend
             context: .
             file: backend/Dockerfile
-            # Bake the `postgres` extra so multi-replica (K8s/Helm) deployments
-            # can use shared Postgres. Matches container.yaml's release image.
-            build-args: "UV_EXTRAS=postgres"
+            # Match the release image: production relational persistence is MySQL-only.
+            build-args: "UV_EXTRAS=mysql"
           - component: frontend
             context: .
             file: frontend/Dockerfile
