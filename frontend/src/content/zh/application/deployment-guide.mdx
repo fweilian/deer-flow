@@ -122,19 +122,19 @@ SQLite 适合本地开发和单用户部署，但不适合作为多用户生产�
 
 在 SQLite 模式下，DeerFlow 会把 LangGraph 检查点数据和应用数据写入同一个 `deerflow.db` 文件。WAL 模式可以支持并发读取，但 SQLite 同一时间仍然只有一个写入者。多个用户同时运行 Agent 时，检查点写入和应用写入会竞争同一个文件锁，可能触发 `sqlite3.OperationalError: database is locked`。
 
-生产环境或任何多用户部署请使用 Postgres：
+生产环境或任何多用户部署请使用 MySQL：
 
 ```bash
 # .env
-DATABASE_URL=postgresql://user:password@postgres:5432/deerflow
-UV_EXTRAS=postgres
+MYSQL_DATABASE_URL=mysql+asyncmy://user:password@mysql:3306/deerflow
+UV_EXTRAS=mysql
 ```
 
 ```yaml
 # config.yaml
 database:
-  backend: postgres
-  postgres_url: $DATABASE_URL
+  backend: mysql
+  mysql_url: $MYSQL_DATABASE_URL
 
 run_events:
   backend: db

@@ -394,7 +394,7 @@ bash "$REPO_ROOT/scripts/config-upgrade.sh"
 # present on PATH but not executable from Bash.
 DETECT_PYTHON="$(_pick_python || true)"
 
-# Resolve uv extras (postgres, etc.) from UV_EXTRAS or config.yaml so that
+# Resolve uv extras (mysql, etc.) from UV_EXTRAS or config.yaml so that
 # `uv sync` does not wipe out optional dependencies on every restart. See
 # scripts/detect_uv_extras.py and Issue #2754 for context. The detector
 # whitelists extra names against `^[A-Za-z][A-Za-z0-9_-]*$`, so the unquoted
@@ -416,7 +416,7 @@ if ! $SKIP_INSTALL; then
         echo "  • uv extras: $UV_EXTRAS_FLAGS"
     fi
     # `--all-packages` propagates extras into workspace members (deerflow-harness
-    # in particular). Required for postgres extras — see PR #2584.
+    # in particular). Required for mysql extras in production mode.
     # Intentionally unquoted to splat multiple `--extra X` pairs.
     (cd backend && uv sync --locked --quiet --all-packages $UV_EXTRAS_FLAGS) || { echo "✗ Backend dependency install failed"; exit 1; }
     (cd frontend && "$DEERFLOW_PNPM_PYTHON" "$DEERFLOW_PNPM_RUNNER" install --silent) || { echo "✗ Frontend dependency install failed"; exit 1; }

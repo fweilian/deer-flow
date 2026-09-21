@@ -12,14 +12,12 @@ relies on:
 - non-Delta raw writers (goal / run-duration metadata / interrupted-title
   helper) preserving Delta ancestry and the downgrade markers.
 
-Every contract runs against InMemorySaver, AsyncSqliteSaver, and - when
-``TEST_POSTGRES_URI`` is set - AsyncPostgresSaver, because each backend
-implements blob/version handling slightly differently.
+Every contract runs against InMemorySaver and AsyncSqliteSaver, the supported
+development checkpointers.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, TypedDict
@@ -91,7 +89,7 @@ class _SaverEnv:
     """One saver instance with a reopen() that simulates a process restart.
 
     Reopening swaps in a brand-new saver over the same bytes (SQLite file or
-    Postgres schema) so replay-after-reopen contracts prove persistence, not
+    MySQL schema) so replay-after-reopen contracts prove persistence, not
     in-process caching. InMemorySaver keeps no external bytes, so reopen is a
     no-op stand-in there.
     """
@@ -131,15 +129,7 @@ async def _open_sqlite(db_path: Any) -> AsyncIterator[Any]:
         yield saver
 
 
-@asynccontextmanager
-async def _open_postgres(uri: str) -> AsyncIterator[Any]:
-    aio = pytest.importorskip("langgraph.checkpoint.postgres.aio", reason="postgres extra not installed")
-    async with aio.AsyncPostgresSaver.from_conn_string(uri) as saver:
-        await saver.setup()
-        yield saver
-
-
-@pytest.fixture(params=["memory", "sqlite", "postgres"])
+@pytest.fixture(params=["memory", "sqlite"])
 async def saver_env(request: pytest.FixtureRequest, tmp_path: Any) -> AsyncIterator[_SaverEnv]:
     kind = request.param
     if kind == "memory":
@@ -157,16 +147,6 @@ async def saver_env(request: pytest.FixtureRequest, tmp_path: Any) -> AsyncItera
             return _open_sqlite(db_path)
 
         open_saver = open_sqlite
-    else:
-        uri = os.environ.get("TEST_POSTGRES_URI")
-        if not uri:
-            pytest.skip("TEST_POSTGRES_URI is not set")
-
-        def open_postgres() -> Any:
-            return _open_postgres(uri)
-
-        open_saver = open_postgres
-
     async with _SaverEnv(kind, open_saver) as env:
         yield env
 

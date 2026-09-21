@@ -63,8 +63,8 @@ def ensure_inmemory_delta_history_patch() -> None:
     are silently dropped: the first message appended after migration vanishes
     from materialized state.
 
-    Both the base implementation (used by the SQLite savers) and the Postgres
-    override collect the terminating checkpoint's writes *before* treating its
+    Both the base implementation (used by the SQLite savers) and the MySQL
+    saver collect the terminating checkpoint's writes *before* treating its
     blob as the seed, which is the correct order. This patch delegates
     InMemorySaver to the base implementation - one ``get_tuple`` per ancestor
     instead of a single fused walk, which is fine for dict-backed storage.

@@ -35,17 +35,17 @@
       },
       "description": "Official OpenViking tools for explicit memory and resource operations"
     },
-    "postgres": {
+    "mysql": {
       "enabled": false,
       "type": "stdio",
       "command": "npx",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-postgres",
-        "postgresql://localhost/mydb"
+        "@modelcontextprotocol/server-mysql",
+        "mysql://localhost/mydb"
       ],
       "env": {},
-      "description": "PostgreSQL database access",
+      "description": "MySQL database access",
       "routing": {
         "mode": "prefer",
         "priority": 50,

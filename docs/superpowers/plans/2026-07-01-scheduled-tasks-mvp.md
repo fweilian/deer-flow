@@ -1,5 +1,10 @@
 # Scheduled Tasks MVP Implementation Plan
 
+> **Historical implementation archive**: This July 2026 plan records its original
+> implementation baseline. Path and migration references are not statements about
+> the current persistence runtime; use the current architecture documentation for
+> supported backends and migration ownership.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a first-class scheduled-task MVP for DeerFlow with durable backend scheduling, a workspace management page, run history, and real-path validation, limited to thread-attached agent runs with `once` and `cron` schedules.

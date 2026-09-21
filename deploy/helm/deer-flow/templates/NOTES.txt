@@ -72,24 +72,11 @@ Generated secrets (persisted across upgrades):
   • BETTER_AUTH_SECRET and DEER_FLOW_INTERNAL_AUTH_TOKEN are stored in the
     Secret `{{ include "deer-flow.appSecret" . }}`.
 
-Database ({{ if .Values.postgresql.enabled }}bundled postgres{{ else }}external postgres{{ end }}):
+Database (external MySQL):
 
-{{- if .Values.postgresql.enabled }}
-  • A postgres StatefulSet (`{{ include "deer-flow.postgresFullname" . }}`)
-    is deployed in this namespace. The gateway connects via the in-cluster
-    Service `{{ include "deer-flow.postgresFullname" . }}:5432`.
-  • DATABASE_URL is in Secret `{{ include "deer-flow.databaseUrlSecret" . }}`
-    (key `database-url`); the auto-generated password is in key
-    `postgres-password`. Both persist across upgrades.
-  • Schema is bootstrapped automatically on gateway startup (alembic
-    create_all + stamp head). No manual migration step needed.
-  • To run real HA, disable this (`postgresql.enabled: false`) and point at a
-    managed DB via `postgresql.external`.
-{{- else }}
-  • The gateway reads DATABASE_URL from Secret
-    `{{ include "deer-flow.databaseUrlSecret" . }}` (key `database-url`).
-    Ensure that Secret exists and contains your managed-postgres DSN.
-{{- end }}
+  • Put MYSQL_DATABASE_URL in `secrets` or the configured `existingSecret`.
+  • Apply the frozen MySQL application baseline and checkpoint artifact before
+    starting Gateway. Runtime verifies both schemas and performs no DDL.
 
 Redis stream bridge ({{ if .Values.redis.enabled }}bundled redis{{ else if (include "deer-flow.redisConfigured" .) }}external redis{{ else }}none{{ end }}):
 
@@ -132,8 +119,8 @@ tools under `config` -> `tools:` (see config.example.yaml); the web tools need
 outbound internet from the gateway pod.
 
 Pod security:
-  • All pods run non-root: gateway/frontend/provisioner uid 1000, nginx uid 101,
-    postgres uid 999. All Linux capabilities are dropped and privilege escalation
+  • All pods run non-root: gateway/frontend/provisioner uid 1000, nginx uid 101.
+    All Linux capabilities are dropped and privilege escalation
     is disabled on every container.
   • ConfigMap changes roll pods automatically (checksum annotations on the
     gateway and nginx pod templates).

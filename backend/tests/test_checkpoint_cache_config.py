@@ -15,8 +15,8 @@ def test_checkpoint_cache_defaults():
 def test_checkpoint_cache_from_dict_redis():
     cfg = DatabaseConfig.model_validate(
         {
-            "backend": "postgres",
-            "postgres_url": "postgresql://u:p@h/db",
+            "backend": "mysql",
+            "mysql_url": "mysql://u:p@h/db",
             "checkpoint_cache": {
                 "type": "redis",
                 "max_entries": 256,

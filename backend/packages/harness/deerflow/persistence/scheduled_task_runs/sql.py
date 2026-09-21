@@ -24,8 +24,6 @@ from deerflow.scheduler.schedules import next_run_at as compute_next_run_at
 from deerflow.utils.time import coerce_iso
 
 EXECUTING_RUN_STATUSES: tuple[str, ...] = ("launching", "running")
-_SCHEDULER_BUDGET_LOCK_KEY = 4694001
-
 # MySQL rejects an UPDATE whose WHERE clause reads the target table through a
 # correlated subquery (error 1093).  Its supported multi-table UPDATE form
 # keeps the FIFO predicate in the same atomic statement without changing the
@@ -60,12 +58,7 @@ async def _lock_scheduler_budget(session: AsyncSession) -> None:
     scheduler-visible fake task, or a new distributed-lock abstraction.
     """
     dialect = session.get_bind().dialect.name
-    if dialect == "postgresql":
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(:lock_key)"),
-            {"lock_key": _SCHEDULER_BUDGET_LOCK_KEY},
-        )
-    elif dialect == "mysql":
+    if dialect == "mysql":
         result = await session.execute(text("SELECT version_num FROM alembic_version FOR UPDATE"))
         result.scalar_one()
 
@@ -129,7 +122,7 @@ class ScheduledTaskRunRepository:
     async def _lock_task(session: AsyncSession, task_id: str) -> ScheduledTaskRow | None:
         # SQLite ignores SELECT ... FOR UPDATE. Touch the parent first so its
         # single-writer lock provides the same serialization point used by
-        # Postgres row locking for admission, mutation, pause, and delete.
+        # MySQL row locking for admission, mutation, pause, and delete.
         if session.get_bind().dialect.name == "sqlite":
             await session.execute(update(ScheduledTaskRow).where(ScheduledTaskRow.id == task_id).values(updated_at=ScheduledTaskRow.updated_at))
         return await session.get(ScheduledTaskRow, task_id, with_for_update=True)
@@ -821,8 +814,8 @@ class ScheduledTaskRunRepository:
             for row_id, task_id in row_keys:
                 # Keep the same task -> scheduled-run lock order used by
                 # pause/delete. Reversing these two locks lets a user action
-                # and a peer reconciliation deadlock each other on Postgres.
-                # Multi-instance reconciliation is Postgres-only. Keep this a
+                # and a peer reconciliation deadlock each other on MySQL.
+                # Multi-instance reconciliation is MySQL-only. Keep this a
                 # row lock without SQLite's writer-lock emulation because the
                 # SQLite regression path performs durable-run takeover in a
                 # nested short transaction below.

@@ -26,7 +26,7 @@ from deerflow.persistence.user.model import OAUTH_IDENTITY_INDEX_NAME, UserRow
 
 # ``email`` is ``mapped_column(unique=True, index=True)``, which SQLAlchemy
 # (and 0001_baseline) realise as a single UNIQUE INDEX -- not a named UNIQUE
-# constraint -- so a Postgres duplicate reports the index name here.
+# constraint -- so a MySQL duplicate reports the index name here.
 _EMAIL_UNIQUE_INDEX_NAME = "ix_users_email"
 
 
@@ -34,20 +34,14 @@ def _driver_constraint_name(exc: IntegrityError) -> str | None:
     """The violated constraint's name from the driver exception, or ``None``
     when the driver does not expose one.
 
-    ``exc.orig`` is NOT the raw driver error. SQLAlchemy's asyncpg dialect
-    re-raises a plain ``AsyncAdapt_asyncpg_dbapi.IntegrityError`` built from a
-    rendered string and carrying only ``pgcode``/``sqlstate``
-    (``sqlalchemy/dialects/postgresql/asyncpg.py::_handle_exception``); the
-    real ``asyncpg.UniqueViolationError`` — the one with ``constraint_name`` —
-    survives as ``exc.orig.__cause__`` (``raise translated_error from error``).
-    aiosqlite exposes no constraint name at all. Check the wrapper, then its
-    cause.
+    SQLite exposes no constraint name. Check the wrapper and its cause before
+    falling back to the MySQL duplicate-key payload.
     """
     for obj in (exc.orig, getattr(exc.orig, "__cause__", None)):
         name = getattr(obj, "constraint_name", None)
         if name:
             return str(name)
-    # asyncmy/PyMySQL's duplicate-key errors expose neither PostgreSQL's
+    # asyncmy/PyMySQL duplicate-key errors expose neither a structured
     # ``constraint_name`` nor SQLite's column-list message. They do include
     # the violated key name, which is the stable application contract here.
     mysql_key = mysql_duplicate_key_name(exc.orig)
@@ -68,9 +62,9 @@ def _is_oauth_identity_violation(exc: IntegrityError) -> bool:
     (reproduced on SQLite: a duplicate ``id`` raised "OAuth account already
     linked: None/None").
 
-    Postgres: match :data:`OAUTH_IDENTITY_INDEX_NAME` against the driver
-    constraint name (see :func:`_driver_constraint_name`). SQLite: no
-    structured name, only a message naming the columns (``"UNIQUE constraint
+    MySQL: match :data:`OAUTH_IDENTITY_INDEX_NAME` against the driver key name
+    (see :func:`_driver_constraint_name`). SQLite: no structured name, only a
+    message naming the columns (``"UNIQUE constraint
     failed: users.oauth_provider, users.oauth_id"``) — require BOTH oauth
     column names, not a bare "oauth" substring.
     """
@@ -96,9 +90,6 @@ def _is_uniqueness_violation(exc: IntegrityError) -> bool:
     """True for a unique-index / primary-key violation specifically, as
     opposed to a NOT NULL / CHECK / foreign-key ``IntegrityError`` on the same
     INSERT -- only the former means "a user like this already exists"."""
-    sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
-    if sqlstate is not None:
-        return sqlstate == "23505"  # unique_violation
     if mysql_error_code(exc.orig) == MYSQL_DUPLICATE_KEY:
         return True
     message = str(exc.orig).lower()

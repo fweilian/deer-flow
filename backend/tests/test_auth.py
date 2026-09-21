@@ -1,6 +1,7 @@
 """Tests for authentication module: JWT, password hashing, AuthContext, and authz decorators."""
 
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -19,6 +20,11 @@ from app.gateway.authz import (
     require_auth,
     require_permission,
 )
+
+
+def _mysql_duplicate_error(key_name: str) -> SimpleNamespace:
+    return SimpleNamespace(orig=Exception(1062, f"Duplicate entry 'x' for key '{key_name}'"))
+
 
 # ── Password Hashing ────────────────────────────────────────────────────────
 
@@ -559,55 +565,6 @@ def test_create_user_real_oauth_conflict_still_reported_correctly(tmp_path):
     asyncio.run(_run())
 
 
-# The IntegrityError classification helpers are pure functions of the driver
-# exception -- the end-to-end tests above cover the SQLite branch (real engine,
-# real IntegrityError). The Postgres/asyncpg branch needs a real Postgres and
-# its only e2e guard, test_oauth_identity_uniqueness_enforced_end_to_end, is
-# skipped in CI (no workflow sets DEERFLOW_TEST_POSTGRES_URL). The stubs below
-# pin it with no DB of either kind.
-#
-# The shape matters: SQLAlchemy's asyncpg dialect does NOT hand us the asyncpg
-# error as `exc.orig`. It re-raises its own AsyncAdapt_asyncpg_dbapi
-# .IntegrityError (pgcode/sqlstate only) `from` the real asyncpg error, so
-# `constraint_name` lives on `exc.orig.__cause__`, not `exc.orig`.
-def _pg_integrity_error(constraint_name: str, sqlstate: str = "23505"):
-    """A stub in the shape SQLAlchemy's asyncpg dialect actually produces:
-    the `orig` wrapper carries `pgcode`/`sqlstate` but no constraint_name;
-    the real driver error (which does) is its `__cause__`. Default sqlstate
-    23505 = unique_violation."""
-    from types import SimpleNamespace
-
-    wrapper = SimpleNamespace(pgcode=sqlstate, sqlstate=sqlstate)
-    wrapper.__cause__ = SimpleNamespace(constraint_name=constraint_name)
-    return SimpleNamespace(orig=wrapper)
-
-
-def test_driver_constraint_name_reads_from_asyncpg_cause_chain():
-    from types import SimpleNamespace
-
-    from app.gateway.auth.repositories.sqlite import _driver_constraint_name
-
-    assert _driver_constraint_name(_pg_integrity_error("users_pkey")) == "users_pkey"
-    # No cause, no constraint_name anywhere -> None (SQLite path).
-    assert _driver_constraint_name(SimpleNamespace(orig=SimpleNamespace())) is None
-
-
-def test_is_oauth_identity_violation_matches_postgres_constraint_name():
-    from app.gateway.auth.repositories.sqlite import _is_oauth_identity_violation
-    from deerflow.persistence.user.model import OAUTH_IDENTITY_INDEX_NAME
-
-    assert _is_oauth_identity_violation(_pg_integrity_error(OAUTH_IDENTITY_INDEX_NAME)) is True
-
-
-def test_is_oauth_identity_violation_rejects_other_postgres_constraints():
-    """A primary-key (or any other) constraint name on the SAME table must
-    not be misclassified as the OAuth index -- the Postgres-side equivalent
-    of the SQLite primary-key-violation regression test above."""
-    from app.gateway.auth.repositories.sqlite import _is_oauth_identity_violation
-
-    assert _is_oauth_identity_violation(_pg_integrity_error("users_pkey")) is False
-
-
 def test_is_oauth_identity_violation_matches_sqlite_message():
     import sqlite3
     from types import SimpleNamespace
@@ -638,10 +595,10 @@ def test_is_email_violation_matches_both_backends():
 
     from app.gateway.auth.repositories.sqlite import _EMAIL_UNIQUE_INDEX_NAME, _is_email_violation
 
-    # email is unique=True + index=True -> a single UNIQUE INDEX, so Postgres
-    # reports the index name (ix_users_email), not a users_email_key constraint.
+    # email is unique=True + index=True -> a single UNIQUE INDEX, and MySQL
+    # reports that index name rather than a users_email_key constraint.
     assert _EMAIL_UNIQUE_INDEX_NAME == "ix_users_email"
-    assert _is_email_violation(_pg_integrity_error(_EMAIL_UNIQUE_INDEX_NAME)) is True
+    assert _is_email_violation(_mysql_duplicate_error(_EMAIL_UNIQUE_INDEX_NAME)) is True
     sqlite = SimpleNamespace(orig=sqlite3.IntegrityError("UNIQUE constraint failed: users.email"))
     assert _is_email_violation(sqlite) is True
 
@@ -652,7 +609,7 @@ def test_is_email_violation_rejects_primary_key_and_oauth():
 
     from app.gateway.auth.repositories.sqlite import _is_email_violation
 
-    assert _is_email_violation(_pg_integrity_error("users_pkey")) is False
+    assert _is_email_violation(_mysql_duplicate_error("users_pkey")) is False
     assert _is_email_violation(SimpleNamespace(orig=sqlite3.IntegrityError("UNIQUE constraint failed: users.id"))) is False
 
 
@@ -662,9 +619,9 @@ def test_is_uniqueness_violation_distinguishes_unique_from_not_null_and_check():
 
     from app.gateway.auth.repositories.sqlite import _is_uniqueness_violation
 
-    # Postgres: 23505 unique_violation vs 23502 not_null_violation.
-    assert _is_uniqueness_violation(_pg_integrity_error("ix_users_email", sqlstate="23505")) is True
-    assert _is_uniqueness_violation(_pg_integrity_error("x", sqlstate="23502")) is False
+    # MySQL: 1062 is duplicate key; a non-duplicate code must not match.
+    assert _is_uniqueness_violation(_mysql_duplicate_error("ix_users_email")) is True
+    assert _is_uniqueness_violation(SimpleNamespace(orig=Exception(1048, "Column cannot be null"))) is False
     # SQLite message forms.
     assert _is_uniqueness_violation(SimpleNamespace(orig=sqlite3.IntegrityError("UNIQUE constraint failed: users.id"))) is True
     assert _is_uniqueness_violation(SimpleNamespace(orig=sqlite3.IntegrityError("PRIMARY KEY constraint failed"))) is True
@@ -677,7 +634,7 @@ def test_violated_constraint_extracts_name_from_both_backends():
 
     from app.gateway.auth.repositories.sqlite import _violated_constraint
 
-    assert _violated_constraint(_pg_integrity_error("users_pkey")) == "users_pkey"
+    assert _violated_constraint(_mysql_duplicate_error("users_pkey")) == "users_pkey"
     assert _violated_constraint(SimpleNamespace(orig=sqlite3.IntegrityError("UNIQUE constraint failed: users.id"))) == "users.id"
     assert _violated_constraint(SimpleNamespace(orig=RuntimeError("opaque driver error"))) is None
 

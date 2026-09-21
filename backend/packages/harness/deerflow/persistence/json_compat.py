@@ -1,4 +1,4 @@
-"""Dialect-aware JSON value matching for SQLAlchemy (SQLite + PostgreSQL)."""
+"""Dialect-aware JSON value matching for SQLAlchemy (SQLite + MySQL)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ _KEY_CHARSET_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 ALLOWED_FILTER_VALUE_TYPES: tuple[type, ...] = (type(None), bool, int, float, str)
 
 # SQLite raises an overflow when binding values outside signed 64-bit range;
-# PostgreSQL overflows during BIGINT cast. Reject at validation time instead.
+# MySQL and SQLite comparisons use signed 64-bit integers. Reject outside that range.
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
@@ -48,7 +48,7 @@ def validate_metadata_filter_value(value: object) -> bool:
 
     Integer values are additionally restricted to the signed 64-bit range
     ``[-2**63, 2**63 - 1]``: SQLite overflows when binding larger values
-    and PostgreSQL overflows during the ``BIGINT`` cast.
+    and MySQL cannot represent larger signed integer values consistently.
     """
     if not isinstance(value, ALLOWED_FILTER_VALUE_TYPES):
         return False
@@ -92,7 +92,7 @@ class JsonMatch(ColumnElement):
     """Dialect-portable ``column[key] == value`` for JSON columns.
 
     Compiles to ``json_type``/``json_extract`` on SQLite and
-    ``json_typeof``/``->>`` on PostgreSQL, with type-safe comparison
+    ``JSON_TYPE``/``JSON_EXTRACT`` on MySQL, with type-safe comparison
     that distinguishes bool vs int and NULL vs missing key.
 
     *key* must be a single literal key matching ``[A-Za-z0-9_-]+``.
@@ -137,8 +137,7 @@ class _Dialect:
     int_types: tuple[str, ...]
     int_cast: str
     # None for SQLite where json_type already returns 'integer'/'real';
-    # regex literal for PostgreSQL where json_typeof returns 'number' for
-    # both ints and floats, so an extra guard prevents CAST errors on floats.
+    # Kept as a generic escape hatch for dialects with shared number types.
     int_guard: str | None
     string_type: str
     bool_type: str | None
@@ -153,17 +152,6 @@ _SQLITE = _Dialect(
     int_guard=None,
     string_type="text",
     bool_type=None,
-)
-
-_PG = _Dialect(
-    null_type="null",
-    num_types=("number",),
-    num_cast="DOUBLE PRECISION",
-    int_types=("number",),
-    int_cast="BIGINT",
-    int_guard="'^-?[0-9]+$'",
-    string_type="string",
-    bool_type="boolean",
 )
 
 _MYSQL = _Dialect(
@@ -225,16 +213,6 @@ def _compile_sqlite(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str
     return _build_clause(compiler, typeof, extract, element.value, _SQLITE, **kw)
 
 
-@compiles(JsonMatch, "postgresql")
-def _compile_pg(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
-    if not validate_metadata_filter_key(element.key):
-        raise ValueError(f"Key escaped validation: {element.key!r}")
-    col = compiler.process(element.column, **kw)
-    typeof = f"json_typeof({col} -> '{element.key}')"
-    extract = f"({col} ->> '{element.key}')"
-    return _build_clause(compiler, typeof, extract, element.value, _PG, **kw)
-
-
 @compiles(JsonMatch, "mysql")
 def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
     if not validate_metadata_filter_key(element.key):
@@ -251,7 +229,7 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
 
 @compiles(JsonMatch)
 def _compile_default(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
-    raise NotImplementedError(f"JsonMatch supports only sqlite, postgresql, and mysql; got dialect: {compiler.dialect.name}")
+    raise NotImplementedError(f"JsonMatch supports only sqlite and mysql; got dialect: {compiler.dialect.name}")
 
 
 def json_match(column: ColumnElement, key: str, value: object) -> JsonMatch:

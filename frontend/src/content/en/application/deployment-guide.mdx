@@ -125,19 +125,19 @@ SQLite is convenient for local development and single-user deployments, but it i
 
 In SQLite mode, DeerFlow stores LangGraph checkpoint data and application data in one `deerflow.db` file. WAL mode allows concurrent reads, but SQLite still permits only one writer at a time. When several users run agents at once, checkpoint writes and application writes can contend for the same file and raise `sqlite3.OperationalError: database is locked`.
 
-For production or any multi-user deployment, use Postgres:
+For production or any multi-user deployment, use MySQL:
 
 ```bash
 # .env
-DATABASE_URL=postgresql://user:password@postgres:5432/deerflow
-UV_EXTRAS=postgres
+MYSQL_DATABASE_URL=mysql+asyncmy://user:password@mysql:3306/deerflow
+UV_EXTRAS=mysql
 ```
 
 ```yaml
 # config.yaml
 database:
-  backend: postgres
-  postgres_url: $DATABASE_URL
+  backend: mysql
+  mysql_url: $MYSQL_DATABASE_URL
 
 run_events:
   backend: db

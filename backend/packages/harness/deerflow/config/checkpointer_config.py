@@ -2,40 +2,24 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
-from deerflow.config.postgres_schema import POSTGRES_SCHEMA_PATTERN, validate_postgres_schema
-
-CheckpointerType = Literal["memory", "sqlite", "postgres", "mysql"]
+CheckpointerType = Literal["memory", "sqlite", "mysql"]
 
 
 class CheckpointerConfig(BaseModel):
     """Configuration for LangGraph state persistence checkpointer."""
 
     type: CheckpointerType = Field(
-        description="Checkpointer backend type. "
-        "'memory' is in-process only (lost on restart). "
-        "'sqlite' persists to a local file (requires langgraph-checkpoint-sqlite). "
-        "'postgres' persists to PostgreSQL (install with deerflow-harness[postgres]). "
-        "'mysql' persists to MySQL (install with deerflow-harness[mysql])."
+        description="Checkpointer backend type. 'memory' is in-process only (lost on restart). 'sqlite' persists to a local file (requires langgraph-checkpoint-sqlite). 'mysql' persists to MySQL (install with deerflow-harness[mysql])."
     )
     connection_string: str | None = Field(
         default=None,
-        description="Connection string for sqlite (file path), postgres, or mysql (DSN). "
+        description="Connection string for sqlite (file path) or mysql (DSN). "
         "Optional for sqlite and defaults to 'store.db' when omitted. "
-        "Required for postgres. "
         "For sqlite, use a file path like '.deer-flow/checkpoints.db' or ':memory:' for in-memory. "
-        "For postgres, use a DSN like 'postgresql://user:pass@localhost:5432/db'.",
+        "For mysql, use a DSN like 'mysql://user:pass@localhost:3306/db'.",
     )
-    postgres_schema: str = Field(
-        default="",
-        description=(f"PostgreSQL schema for legacy checkpointer/store tables (postgres only). Empty string keeps the server default search_path (usually 'public'). Only plain identifiers are allowed: {POSTGRES_SCHEMA_PATTERN}."),
-    )
-
-    @field_validator("postgres_schema")
-    @classmethod
-    def _validate_postgres_schema(cls, value: str) -> str:
-        return validate_postgres_schema(value)
 
 
 # Global configuration instance — None means no checkpointer is configured.

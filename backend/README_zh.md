@@ -324,12 +324,12 @@ backend/
         "client_secret": "$MCP_OAUTH_CLIENT_SECRET"
       }
     },
-    "postgres": {
+    "mysql": {
       "enabled": false,
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"],
-      "description": "PostgreSQL database access",
+      "args": ["-y", "@modelcontextprotocol/server-mysql", "mysql://localhost/mydb"],
+      "description": "MySQL 数据库访问",
       "routing": {
         "mode": "prefer",
         "priority": 50,
@@ -414,20 +414,13 @@ make gateway    # 运行不带热重载的 Gateway API（端口 8001）
 make lint       # 运行代码检查器（ruff）
 make format     # 格式化代码（ruff）
 make detect-blocking-io  # 统计可能阻塞后端事件循环的阻塞式 IO
-make migrate-rev MSG="..."  # 根据当前 ORM 模型自动生成新的 Alembic 修订
 ```
 
 ### 数据库结构迁移
 
-DeerFlow 的应用程序表（`runs`、`threads_meta`、`feedback`、`users`、`run_events` 和 `channel_*` 表）由 Alembic 管理。Gateway 启动时会通过 `bootstrap_schema(engine, backend=...)` 自动运行 `alembic upgrade head`，因此运维人员不需要在生产环境中手动运行 `alembic`。初始化过程支持并发安全（跨进程使用 PostgreSQL advisory lock；单个 SQLite 进程内按引擎使用 `asyncio.Lock`），并能针对已有数据库结构（空数据库、旧版数据库或已带版本的数据库）保持幂等。
+生产持久化使用外部托管的 MySQL 8.0.24+；PostgreSQL 不再是受支持的应用持久化后端。请先通过 DBA 管理的 MySQL 迁移制品应用已冻结的 `0001_mysql_baseline`，并记录预期 revision，再启动 Gateway。Gateway 运行时只验证 MySQL revision，绝不执行 DDL；不匹配会使启动失败。
 
-添加或修改 ORM 模型时，请在 `packages/harness/deerflow/persistence/migrations/versions/` 下提交新的迁移版本：
-
-```bash
-make migrate-rev MSG="add foo column to runs"
-```
-
-该目标会调用 `scripts/_autogen_revision.py`。脚本先在一个新的临时 SQLite 数据库上迁移到 `head`，然后将当前模型与其进行比较，因此全新检出的代码不需要预先存在的 `./data/deerflow.db`。提交前请检查生成的文件，并将原始的 `op.add_column` / `op.drop_column` 调用替换为 `migrations/_helpers.py` 中的幂等辅助函数。项目有意不提供 `make migrate` / `make migrate-stamp` 目标——Gateway 启动是唯一的迁移执行路径，从而避免运维误操作。完整设计请参阅 `backend/CLAUDE.md` 中的“Schema Migrations”部分。
+SQLite 仅用于本地开发和测试。它在本地数据库中创建当前 SQLAlchemy metadata，不使用 Alembic。旧部署没有受支持的原地迁移路径；生产切换必须使用全新的 MySQL 部署。
 
 ### 代码风格
 

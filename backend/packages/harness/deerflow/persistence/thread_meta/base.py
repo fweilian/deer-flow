@@ -1,7 +1,7 @@
 """Abstract interface for thread metadata storage.
 
 Implementations:
-- ThreadMetaRepository: SQL-backed (sqlite / postgres via SQLAlchemy)
+- ThreadMetaRepository: SQL-backed (sqlite / mysql via SQLAlchemy)
 - MemoryThreadMetaStore: process-local dict backend (memory mode)
 
 All mutating and querying methods accept a ``user_id`` parameter with

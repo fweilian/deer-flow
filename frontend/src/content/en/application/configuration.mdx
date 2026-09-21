@@ -196,26 +196,26 @@ database:
 
 SQLite mode stores everything in one `deerflow.db` file. This is fine for development or single-user deployments, but concurrent production traffic can hit SQLite's single-writer limit and raise `sqlite3.OperationalError: database is locked`.
 
-For production or multi-user deployments, use Postgres:
+For production or multi-user deployments, use MySQL:
 
 ```yaml
 database:
-  backend: postgres
-  postgres_url: $DATABASE_URL
+  backend: mysql
+  mysql_url: $MYSQL_DATABASE_URL
 
 run_events:
   backend: db
 ```
 
-Set `DATABASE_URL` in your environment, for example `postgresql://user:password@localhost:5432/deerflow`.
+Set `MYSQL_DATABASE_URL` in your environment, for example `mysql+asyncmy://user:password@localhost:3306/deerflow`.
 
-Install PostgreSQL support for local runs:
+Install MySQL support for local runs:
 
 ```bash
-cd backend && uv sync --all-packages --extra postgres
+cd backend && uv sync --all-packages --extra mysql
 ```
 
-For Docker or scripted starts, set `UV_EXTRAS=postgres` before installing or building. The legacy standalone `checkpointer` section is still accepted for compatibility, but prefer `database` for new deployments.
+For Docker or scripted starts, set `UV_EXTRAS=mysql` before installing or building. The legacy standalone `checkpointer` section is still accepted for compatibility, but prefer `database` for new deployments.
 
 ### Memory
 

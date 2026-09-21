@@ -1162,7 +1162,7 @@ async def search_threads(body: ThreadSearchRequest, request: Request) -> list[Th
     """Search and list threads.
 
     Delegates to the configured ThreadMetaStore implementation
-    (SQL-backed for sqlite/postgres, Store-backed for memory mode).
+    (SQL-backed for sqlite/mysql, Store-backed for memory mode).
     """
     from app.gateway.deps import get_thread_store
     from deerflow.persistence.thread_meta import InvalidMetadataFilterError

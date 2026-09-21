@@ -134,23 +134,13 @@ class DbRunEventStore(RunEventStore):
     async def _max_seq_for_thread(session: AsyncSession, thread_id: str) -> int | None:
         """Return the current max seq while serializing writers per thread.
 
-        PostgreSQL rejects ``SELECT max(...) FOR UPDATE`` because aggregate
-        results are not lockable rows. As a release-safe workaround, take a
-        transaction-level advisory lock keyed by thread_id before reading the
-        aggregate. MySQL locks the thread's durable metadata row instead:
+        MySQL locks the thread's durable metadata row instead of the aggregate:
         aggregates (and an empty event stream) do not provide a lockable row.
         Other dialects keep the existing row-locking statement.
         """
         stmt = select(func.max(RunEventRow.seq)).where(RunEventRow.thread_id == thread_id)
         bind = session.get_bind()
         dialect_name = bind.dialect.name if bind is not None else ""
-
-        if dialect_name == "postgresql":
-            await session.execute(
-                text("SELECT pg_advisory_xact_lock(hashtext(CAST(:thread_id AS text))::bigint)"),
-                {"thread_id": thread_id},
-            )
-            return await session.scalar(stmt)
 
         if dialect_name == "mysql":
             # Metadata admission is deliberately non-fatal, so event writers
@@ -249,8 +239,8 @@ class DbRunEventStore(RunEventStore):
     ):
         """Idempotently insert a run-scoped singleton event.
 
-        ``_max_seq_for_thread`` takes the same PostgreSQL advisory lock used by
-        every normal writer (and the in-process lock covers SQLite), so the
+        ``_max_seq_for_thread`` locks the same MySQL metadata row used by every
+        normal writer (and the in-process lock covers SQLite), so the
         existence check cannot race another ``put_if_absent`` or journal write.
         Terminal delivery receipts use this method on both the worker and
         recovery paths; ordinary event types remain append-only.
@@ -343,7 +333,7 @@ class DbRunEventStore(RunEventStore):
             # pagination over a single subagent task stays correct (#3779). The
             # query is already scoped to (thread_id, run_id), so the JSON probe
             # only runs over this run's small candidate set; ``.as_string()``
-            # renders to json_extract (SQLite) / ->> (Postgres).
+            # renders to json_extract (SQLite) / JSON_EXTRACT (MySQL).
             stmt = stmt.where(RunEventRow.event_metadata["task_id"].as_string() == task_id)
         if after_seq is not None:
             stmt = stmt.where(RunEventRow.seq > after_seq)

@@ -134,7 +134,7 @@ class TestClassifyCommand:
             # --- new: sudo/su (no-op under Docker root) ---
             "sudo apt-get update",
             "sudo rm /tmp/file",
-            "su - postgres",
+            "su - serviceuser",
             # --- new: PATH modification ---
             "PATH=/usr/local/bin:$PATH python3 script.py",
             "PATH=$PATH:/custom/bin ls",
@@ -952,7 +952,7 @@ class TestBenchmarkSummary:
         "apt install curl",
         # new: sudo/su
         "sudo apt-get update",
-        "su - postgres",
+        "su - serviceuser",
         # new: PATH modification
         "PATH=/usr/local/bin:$PATH python3 script.py",
     ]

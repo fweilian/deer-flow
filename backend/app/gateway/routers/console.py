@@ -7,7 +7,7 @@ operations dashboard or any external monitoring consumer.
 This is a reporting layer, not a runtime path: it issues short-lived read-only
 queries against the harness-owned ``runs`` / ``threads_meta`` tables instead of
 widening the runtime ``RunStore`` surface. Requires a SQL database backend
-(``database.backend: sqlite | postgres``); returns 503 on the memory backend,
+(``database.backend: sqlite | mysql``); returns 503 on the memory backend,
 which persists no run history to report on.
 """
 
@@ -123,13 +123,13 @@ def _session_factory_or_503():
     if sf is None:
         raise HTTPException(
             status_code=503,
-            detail="Console requires a SQL database backend; set database.backend to sqlite or postgres in config.yaml.",
+            detail="Console requires a SQL database backend; set database.backend to sqlite or mysql in config.yaml.",
         )
     return sf
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
-    """Normalize DB timestamps: SQLite round-trips them naive, Postgres aware."""
+    """Normalize DB timestamps: SQLite may round-trip them naive; MySQL is UTC-aware."""
     if dt is None:
         return None
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt

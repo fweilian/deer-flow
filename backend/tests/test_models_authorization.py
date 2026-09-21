@@ -718,7 +718,7 @@ def _bare_client(app_config):
     client._middlewares = []
     client._agent = None
     client._agent_config_key = None
-    # Non-None so ``_ensure_agent`` skips the real (postgres/sqlite) checkpointer
+    # Non-None so ``_ensure_agent`` skips the real (mysql/sqlite) checkpointer
     # resolution — the value is never used because ``create_agent`` is stubbed.
     client._checkpointer = object()
     return client

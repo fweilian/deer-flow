@@ -21,8 +21,7 @@ Each test pins one side of that boundary:
   branch path) can be deleted without affecting the main line — the one
   proven-safe deletion shape so far.
 
-All contracts run against InMemorySaver, AsyncSqliteSaver, and — when
-``TEST_POSTGRES_URI`` is set — AsyncPostgresSaver, mirroring
+All contracts run against InMemorySaver and AsyncSqliteSaver, mirroring
 ``test_delta_channel_checkpointers.py``.
 """
 
@@ -113,15 +112,7 @@ async def _open_sqlite(db_path: Any) -> AsyncIterator[Any]:
         yield saver
 
 
-@asynccontextmanager
-async def _open_postgres(uri: str) -> AsyncIterator[Any]:
-    aio = pytest.importorskip("langgraph.checkpoint.postgres.aio", reason="postgres extra not installed")
-    async with aio.AsyncPostgresSaver.from_conn_string(uri) as saver:
-        await saver.setup()
-        yield saver
-
-
-@pytest.fixture(params=["memory", "sqlite", "postgres"])
+@pytest.fixture(params=["memory", "sqlite"])
 async def saver_env(request: pytest.FixtureRequest, tmp_path: Any) -> AsyncIterator[_SaverEnv]:
     kind = request.param
     if kind == "memory":
@@ -139,16 +130,6 @@ async def saver_env(request: pytest.FixtureRequest, tmp_path: Any) -> AsyncItera
             return _open_sqlite(db_path)
 
         open_saver = open_sqlite
-    else:
-        uri = os.environ.get("TEST_POSTGRES_URI")
-        if not uri:
-            pytest.skip("TEST_POSTGRES_URI is not set")
-
-        def open_postgres() -> Any:
-            return _open_postgres(uri)
-
-        open_saver = open_postgres
-
     async with _SaverEnv(kind, open_saver) as env:
         yield env
 
@@ -170,12 +151,6 @@ class _SaverAccessor:
 _SQLITE_TABLES = (
     ("checkpoint_rows", "checkpoint_bytes", "SELECT COUNT(*), COALESCE(SUM(LENGTH(checkpoint) + LENGTH(metadata)), 0) FROM checkpoints WHERE thread_id = ?"),
     ("write_rows", "write_bytes", "SELECT COUNT(*), COALESCE(SUM(LENGTH(value)), 0) FROM writes WHERE thread_id = ?"),
-)
-
-_POSTGRES_TABLES = (
-    ("checkpoint_rows", "checkpoint_bytes", "SELECT COUNT(*) AS rows, COALESCE(SUM(pg_column_size(checkpoint) + pg_column_size(metadata)), 0) AS bytes FROM checkpoints WHERE thread_id = %s"),
-    ("blob_rows", "blob_bytes", "SELECT COUNT(*) AS rows, COALESCE(SUM(octet_length(blob)), 0) AS bytes FROM checkpoint_blobs WHERE thread_id = %s"),
-    ("write_rows", "write_bytes", "SELECT COUNT(*) AS rows, COALESCE(SUM(octet_length(blob)), 0) AS bytes FROM checkpoint_writes WHERE thread_id = %s"),
 )
 
 
@@ -247,16 +222,7 @@ async def _stats(env: _SaverEnv, thread_id: str) -> dict[str, int]:
         stats["logical_checkpoint_bytes"] = stats["checkpoint_bytes"]
         stats["logical_write_bytes"] = stats["write_bytes"]
         return stats
-    stats = {}
-    for row_key, bytes_key, sql in _POSTGRES_TABLES:
-        async with saver._cursor() as cursor:
-            await cursor.execute(sql, (thread_id,))
-            row = await cursor.fetchone()
-        stats[row_key] = int(row["rows"])
-        stats[bytes_key] = int(row["bytes"] or 0)
-    stats["logical_checkpoint_bytes"] = stats["checkpoint_bytes"] + stats["blob_bytes"]
-    stats["logical_write_bytes"] = stats["write_bytes"]
-    return stats
+    raise AssertionError(f"unsupported checkpoint test backend: {env.kind}")
 
 
 async def _surviving_channel_versions(saver: Any, thread_id: str, deleted_id: str) -> set[Any]:

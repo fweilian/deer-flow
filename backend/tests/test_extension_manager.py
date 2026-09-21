@@ -2698,11 +2698,11 @@ def test_dependency_sync_uses_the_same_configured_optional_extras_as_startup(
     repository_root = Path(__file__).resolve().parents[2]
     config_path = tmp_path / "deployment.yaml"
     config_path.write_text(
-        "database:\n  backend: postgres\n",
+        "database:\n  backend: mysql\n",
         encoding="utf-8",
     )
     monkeypatch.delenv("UV_EXTRAS", raising=False)
     monkeypatch.delenv("DEER_FLOW_STREAM_BRIDGE_REDIS_URL", raising=False)
     monkeypatch.delenv("DEER_FLOW_SANDBOX_OWNERSHIP_REDIS_URL", raising=False)
 
-    assert _detect_extra_flags(repository_root, config_path) == ["--extra", "postgres"]
+    assert _detect_extra_flags(repository_root, config_path) == ["--extra", "mysql"]

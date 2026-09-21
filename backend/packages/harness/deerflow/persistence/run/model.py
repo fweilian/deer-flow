@@ -44,7 +44,7 @@ class RunRow(Base):
     subagent_tokens: Mapped[int] = mapped_column(default=0)
     middleware_tokens: Mapped[int] = mapped_column(default=0)
     # MySQL 8.0.13+ requires JSON defaults to be expression defaults.  The
-    # parenthesized literal is also accepted by SQLite and PostgreSQL, so this
+    # parenthesized literal is also accepted by SQLite and MySQL, so this
     # keeps the one existing server-default contract portable.
     token_usage_by_model: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("('{}')"))
 
@@ -68,15 +68,13 @@ class RunRow(Base):
         Index("uq_runs_idempotency_key", "idempotency_key", unique=True),
         # Cross-process atomicity guarantee: at most one pending/running run per
         # thread. Must live in ORM ``__table_args__`` (not just the migration)
-        # because the transitional SQLite/PostgreSQL empty-DB bootstrap runs
-        # ``create_all`` + ``stamp head`` and never executes the migration that
-        # also defines this index. MySQL receives its generated key from its
+        # because SQLite development initializes directly from ORM metadata.
+        # MySQL receives its generated key from its
         # independent DBA-owned baseline.
         Index(
             "uq_runs_thread_active",
             "thread_id",
             unique=True,
             sqlite_where=text("status IN ('pending', 'running')"),
-            postgresql_where=text("status IN ('pending', 'running')"),
-        ).ddl_if(dialect=("sqlite", "postgresql")),
+        ).ddl_if(dialect="sqlite"),
     )

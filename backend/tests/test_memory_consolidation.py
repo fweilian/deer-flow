@@ -352,7 +352,7 @@ class TestApplyUpdatesConsolidation:
             [
                 _make_fact("fact_a", "User uses React", "knowledge", 0.9),
                 _make_fact("fact_b", "User uses Python", "knowledge", 0.85),
-                _make_fact("fact_c", "User uses PostgreSQL", "knowledge", 0.8),
+                _make_fact("fact_c", "User uses MySQL", "knowledge", 0.8),
                 _make_fact("fact_keep", "User likes music", "preference", 0.7),
             ]
         )
@@ -367,7 +367,7 @@ class TestApplyUpdatesConsolidation:
                     "sourceIds": ["fact_a", "fact_b", "fact_c"],
                     "consolidated": {
                         **_DURABLE_USER_CLASSIFICATION,
-                        "content": "Full-stack: React frontend, Python backend, PostgreSQL",
+                        "content": "Full-stack: React frontend, Python backend, MySQL",
                         "category": "knowledge",
                         "confidence": 0.9,
                     },

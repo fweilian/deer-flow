@@ -3,7 +3,7 @@
 Provides a **sync singleton** and a **sync context manager** for LangGraph
 graph compilation and CLI tools.
 
-Supported backends: memory, sqlite, postgres. MySQL is intentionally async-only.
+Supported backends: memory and sqlite. MySQL is intentionally async-only.
 
 Usage::
 
@@ -28,7 +28,6 @@ from langgraph.types import Checkpointer
 
 from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.config.checkpointer_config import CheckpointerConfig, ensure_config_loaded, get_checkpointer_config
-from deerflow.persistence.postgres_schema import dsn_with_search_path, ensure_postgres_schema
 from deerflow.runtime.checkpoint_mode import frozen_checkpoint_channel_mode
 from deerflow.runtime.sqlite_utils import ensure_sqlite_parent_dir, resolve_sqlite_conn_str
 
@@ -39,17 +38,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 SQLITE_INSTALL = "langgraph-checkpoint-sqlite is required for the SQLite checkpointer. Install it with: uv add langgraph-checkpoint-sqlite"
-POSTGRES_INSTALL = (
-    "langgraph-checkpoint-postgres is required for the PostgreSQL checkpointer. Install the package extra with: pip install 'deerflow-harness[postgres]' (or use: uv sync --all-packages --extra postgres when developing locally)"
-)
-POSTGRES_CONN_REQUIRED = "checkpointer.connection_string is required for the postgres backend"
-
-
-def _ensure_postgres_schema(conn_string: str, schema: str) -> None:
-    """Create the configured schema before LangGraph creates its tables."""
-    ensure_postgres_schema(conn_string, schema, install_hint=POSTGRES_INSTALL)
-
-
 # ---------------------------------------------------------------------------
 # Config resolution
 # ---------------------------------------------------------------------------
@@ -70,10 +58,6 @@ def _resolve_checkpointer_config(app_config: AppConfig) -> CheckpointerConfig:
         return CheckpointerConfig(type="memory")
     if database.backend == "sqlite":
         return CheckpointerConfig(type="sqlite", connection_string=database.checkpointer_sqlite_path)
-    if database.backend == "postgres":
-        if not database.postgres_url:
-            raise ValueError("database.postgres_url is required for the postgres backend")
-        return CheckpointerConfig(type="postgres", connection_string=database.postgres_url, postgres_schema=database.postgres_schema)
     if database.backend == "mysql":
         if not database.mysql_url:
             raise ValueError("database.mysql_url is required for the mysql backend")
@@ -128,23 +112,6 @@ def _sync_checkpointer_cm(config: CheckpointerConfig) -> Iterator[Checkpointer]:
         with SqliteSaver.from_conn_string(conn_str) as saver:
             saver.setup()
             logger.info("Checkpointer: using SqliteSaver (%s)", conn_str)
-            yield saver
-        return
-
-    if config.type == "postgres":
-        try:
-            from langgraph.checkpoint.postgres import PostgresSaver
-        except ImportError as exc:
-            raise ImportError(POSTGRES_INSTALL) from exc
-
-        if not config.connection_string:
-            raise ValueError(POSTGRES_CONN_REQUIRED)
-
-        _ensure_postgres_schema(config.connection_string, config.postgres_schema)
-        conn_string = dsn_with_search_path(config.connection_string, config.postgres_schema)
-        with PostgresSaver.from_conn_string(conn_string) as saver:
-            saver.setup()
-            logger.info("Checkpointer: using PostgresSaver")
             yield saver
         return
 

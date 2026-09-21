@@ -3,13 +3,13 @@
 
 Order of resolution:
 1. `UV_EXTRAS` env var. Comma- or whitespace-separated names so multiple
-   extras can be layered (e.g. ``UV_EXTRAS=postgres,ollama``). The same
+   extras can be layered (e.g. ``UV_EXTRAS=mysql,ollama``). The same
    parsing semantics apply in the Docker dev container via
    ``docker/dev-entrypoint.sh`` and in the production Docker image build via
    ``backend/Dockerfile``.
 2. Auto-detection from config.yaml — currently maps:
-   - database.backend == postgres        -> postgres
-   - checkpointer.type == postgres       -> postgres
+   - database.backend == mysql           -> mysql
+   - checkpointer.type == mysql          -> mysql
    - stream_bridge.type == redis         -> redis
    - sandbox.ownership.type == redis     -> redis
    - models[].use == langchain_ollama:*  -> ollama
@@ -23,7 +23,7 @@ is dropped with a stderr warning so a stray shell metacharacter in `.env`
 cannot reach the `uv sync` invocation downstream.
 
 Output: space-separated `--extra <name>` flags ready for splat into
-`uv sync`, e.g. `--extra postgres`. Empty output means "no extras".
+`uv sync`, e.g. `--extra mysql`. Empty output means "no extras".
 
 Intentionally implemented with the standard library only: this script must run
 *before* `uv sync` has populated the venv, so it cannot depend on PyYAML.
@@ -125,7 +125,7 @@ def section_value(lines: list[str], section: str, key: str) -> str | None:
 
     Only handles the shallow shape DeerFlow uses for these settings:
         database:
-          backend: postgres
+          backend: mysql
     Nested mappings deeper than the immediate child level are ignored on
     purpose — that keeps this parser predictable without a full YAML stack.
     """
@@ -301,10 +301,10 @@ def detect_from_config(path: Path) -> list[str]:
         return []
     lines = text.splitlines()
     extras: set[str] = set()
-    if (section_value(lines, "database", "backend") or "").lower() == "postgres":
-        extras.add("postgres")
-    if (section_value(lines, "checkpointer", "type") or "").lower() == "postgres":
-        extras.add("postgres")
+    if (section_value(lines, "database", "backend") or "").lower() == "mysql":
+        extras.add("mysql")
+    if (section_value(lines, "checkpointer", "type") or "").lower() == "mysql":
+        extras.add("mysql")
     if (section_value(lines, "stream_bridge", "type") or "").lower() == "redis":
         extras.add("redis")
     if (

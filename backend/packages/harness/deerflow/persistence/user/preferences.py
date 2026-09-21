@@ -2,7 +2,6 @@
 
 from sqlalchemy import select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from deerflow.persistence.user.model import UserPreferenceRow
@@ -10,9 +9,7 @@ from deerflow.persistence.user.model import UserPreferenceRow
 
 def _preference_upsert_statement(dialect: str, *, user_id: str, key: str, value: object):
     """Build the dialect-specific statement used by the production repository."""
-    if dialect == "postgresql":
-        statement = pg_insert(UserPreferenceRow).values(user_id=user_id, key=key, value=value)
-    elif dialect == "mysql":
+    if dialect == "mysql":
         statement = mysql_insert(UserPreferenceRow).values(user_id=user_id, key=key, value=value)
         return statement.on_duplicate_key_update(value=statement.inserted.value)
     else:

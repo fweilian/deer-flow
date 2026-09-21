@@ -1,5 +1,10 @@
 # DeerFlow Scheduled Tasks MVP Design
 
+> **Historical design archive**: This July 2026 proposal describes its original
+> implementation baseline. Path and migration references are not statements about
+> the current persistence runtime; use the current architecture documentation for
+> supported backends and migration ownership.
+
 **Date**: 2026-07-01
 **Status**: Approved for implementation
 **Scope**: First-class scheduled-task management for DeerFlow web workspace

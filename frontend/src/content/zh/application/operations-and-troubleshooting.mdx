@@ -100,12 +100,12 @@ ls -la backend/.deer-flow/threads/
 
 **原因**：SQLite 支持并发读取，但同一时间只有一个写入者。DeerFlow 的检查点写入和应用写入会共享同一个 SQLite 数据库文件，多用户并发时可能竞争文件锁。
 
-**解决**：生产环境或多用户部署切换到 Postgres：
+**解决**：生产环境或多用户部署切换到 MySQL：
 
 ```yaml
 database:
-  backend: postgres
-  postgres_url: $DATABASE_URL
+  backend: mysql
+  mysql_url: $MYSQL_DATABASE_URL
 
 run_events:
   backend: db
@@ -168,7 +168,7 @@ grep -i "mcp\|timeout" logs/gateway.log | tail -20
 - `backend/.deer-flow/threads/`：线程工作目录、上传文件和产出物。
 - `backend/.deer-flow/memory.json` 和 `backend/.deer-flow/agents/`：全局和 Agent 记忆。
 - `${database.sqlite_dir}/deerflow.db`：当使用 `database.backend: sqlite` 时备份，默认路径为 `.deer-flow/data/deerflow.db`。
-- Postgres 数据库备份：当使用 `database.backend: postgres` 时定期导出。
+- MySQL 数据库备份：当使用 `database.backend: mysql` 时定期导出。
 - 旧的 `checkpointer.connection_string` 文件：如果你的部署仍配置独立 `checkpointer`。
 - `backend/agents/*/config.yaml`：自定义 Agent 配置。
 

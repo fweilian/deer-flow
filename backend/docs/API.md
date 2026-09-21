@@ -30,7 +30,7 @@ Content-Type: application/json
 {}
 ```
 
-PATs require a configured database backend (SQLite/PostgreSQL) — on the
+PATs require a configured database backend (SQLite/MySQL) — on the
 memory-only backend, Bearer credentials are rejected and PAT management routes
 return `503`.
 
@@ -57,7 +57,7 @@ All four fields accept `null` to restore the default. `mode` accepts `flash`,
 `medium`, or `high`; model names are at most 200 characters. Unknown fields and
 invalid values return `422`. Missing preferences read as `null`. Separate-field
 patches preserve each other's changes, and same-field writes are last-commit-wins.
-Storage requires SQLite or PostgreSQL (`503` when unavailable). Browser
+Storage requires SQLite or MySQL (`503` when unavailable). Browser
 notification permission remains device-local and is not changed by this API.
 
 ### Personal Access Tokens

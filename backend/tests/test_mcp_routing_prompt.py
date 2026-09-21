@@ -68,7 +68,7 @@ def test_mcp_routing_hint_escapes_tag_breakout_in_tool_name():
 def test_off_mode_and_empty_keywords_are_excluded():
     section = get_mcp_routing_hints_prompt_section(
         [
-            _routed_tool("postgres_query", priority=100, keywords=["订单"], mode="off"),
+            _routed_tool("warehouse_query", priority=100, keywords=["订单"], mode="off"),
             _routed_tool("metrics_query", priority=90, keywords=[]),
         ]
     )
@@ -96,20 +96,20 @@ def test_routing_hints_are_ordered_by_priority_then_name():
 
 
 def test_deferred_routing_hints_use_tool_search_promotion():
-    routed = _routed_tool("postgres_query", priority=100, keywords=["订单"])
+    routed = _routed_tool("warehouse_query", priority=100, keywords=["订单"])
     _, deferred_setup = assemble_deferred_tools([routed], enabled=True)
 
     section = get_mcp_routing_hints_prompt_section([routed], deferred_names=deferred_setup.deferred_names)
 
     assert "When the user's request involves 订单:" in section
-    assert "use `tool_search` to fetch `postgres_query`, then prefer that MCP tool." in section
-    assert "prefer the `postgres_query` tool." not in section
+    assert "use `tool_search` to fetch `warehouse_query`, then prefer that MCP tool." in section
+    assert "prefer the `warehouse_query` tool." not in section
 
 
 def test_apply_prompt_template_places_routing_hints_after_deferred_tools(monkeypatch):
     section = get_mcp_routing_hints_prompt_section(
         [
-            _routed_tool("postgres_query", priority=100, keywords=["订单"]),
+            _routed_tool("warehouse_query", priority=100, keywords=["订单"]),
         ]
     )
     empty_storage = SimpleNamespace(load_skills=lambda *, enabled_only: [])
@@ -119,7 +119,7 @@ def test_apply_prompt_template_places_routing_hints_after_deferred_tools(monkeyp
 
     prompt = apply_prompt_template(
         app_config=_minimal_prompt_app_config(),
-        deferred_names=frozenset({"postgres_query"}),
+        deferred_names=frozenset({"warehouse_query"}),
         mcp_routing_hints_section=section,
     )
 
@@ -129,7 +129,7 @@ def test_apply_prompt_template_places_routing_hints_after_deferred_tools(monkeyp
 
 
 def test_routing_metadata_does_not_change_openai_function_schema():
-    tool = tag_mcp_tool(_tool("postgres_query"))
+    tool = tag_mcp_tool(_tool("warehouse_query"))
     before = convert_to_openai_function(tool)
 
     tag_mcp_routing(

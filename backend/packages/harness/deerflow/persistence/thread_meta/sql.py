@@ -81,7 +81,7 @@ class ThreadMetaRepository(ThreadMetaStore):
             if session.get_bind().dialect.name == "sqlite":
                 await session.execute(text("BEGIN IMMEDIATE"))
             if project_id is not None:
-                # Lock the project row (FOR UPDATE on Postgres; the clause
+                # Lock the project row (FOR UPDATE on MySQL; the clause
                 # renders nothing on SQLite) so a concurrent
                 # ProjectRepository.delete — which holds the same lock across
                 # its membership-clear and DELETE — either commits first (this
@@ -167,7 +167,7 @@ class ThreadMetaRepository(ThreadMetaStore):
                 # interleave between the project check and the UPDATE.
                 await session.execute(text("BEGIN IMMEDIATE"))
             if project_id is not None:
-                # Lock the project row (FOR UPDATE on Postgres; the clause
+                # Lock the project row (FOR UPDATE on MySQL; the clause
                 # renders nothing on SQLite) so a concurrent
                 # ProjectRepository.delete — which holds the same lock across
                 # its membership-clear and DELETE — either commits first (this
@@ -295,7 +295,7 @@ class ThreadMetaRepository(ThreadMetaStore):
 
         if archived is not None:
             # CASE handles missing/JSON-null keys and non-boolean legacy values
-            # identically on SQLite and Postgres, including for the active view.
+            # identically on SQLite and MySQL, including for the active view.
             archive_flag = case((json_match(ThreadMetaRow.metadata_json, THREAD_ARCHIVED_METADATA_KEY, True), 1), else_=0)
             stmt = stmt.where(archive_flag == int(archived))
         if not isinstance(project_id, _ProjectFilterUnset):

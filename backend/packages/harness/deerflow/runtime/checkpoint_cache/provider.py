@@ -22,7 +22,7 @@ def _resolve_redis_url(config: Any) -> str:
     return config.redis_url or os.getenv(_ENV_REDIS_URL) or os.getenv("REDIS_URL") or "redis://localhost:6379/0"
 
 
-def _stable_postgres_identity(postgres_url: str) -> str:
+def _stable_mysql_identity(mysql_url: str) -> str:
     """Credential-free database identity: host/port/database.
 
     Hashing the raw URL would change the cache namespace on every credential
@@ -30,22 +30,22 @@ def _stable_postgres_identity(postgres_url: str) -> str:
     — and thus every cached checkpoint history — is unchanged. Unparseable
     URLs fall back to the raw string (still stable per deployment).
     """
-    if not postgres_url:
+    if not mysql_url:
         return ""
     try:
         from sqlalchemy.engine.url import make_url
 
-        parsed = make_url(postgres_url)
+        parsed = make_url(mysql_url)
     except Exception:  # noqa: BLE001 - identity must never fail config load
-        return postgres_url
-    return f"{parsed.host or 'localhost'}:{parsed.port or 5432}/{parsed.database or ''}"
+        return mysql_url
+    return f"{parsed.host or 'localhost'}:{parsed.port or 3306}/{parsed.database or ''}"
 
 
 def checkpoint_cache_db_hash(db_config: Any) -> str:
     """Deployment-identity hash so two deployments sharing one Redis never collide."""
     backend = getattr(db_config, "backend", "memory")
-    if backend == "postgres":
-        identity = f"postgres:{_stable_postgres_identity(getattr(db_config, 'postgres_url', ''))}:{getattr(db_config, 'postgres_schema', '')}"
+    if backend == "mysql":
+        identity = f"mysql:{_stable_mysql_identity(getattr(db_config, 'mysql_url', ''))}"
     elif backend == "sqlite":
         identity = f"sqlite:{getattr(db_config, 'checkpointer_sqlite_path', '')}"
     else:

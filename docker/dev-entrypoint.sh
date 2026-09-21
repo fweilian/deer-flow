@@ -11,7 +11,7 @@
 #      metacharacter in `.env` cannot reach `uv sync`.
 #   3. `uv sync --locked --all-packages` so the declared extension group and
 #      workspace member extras (deerflow-harness's
-#      postgres extra in particular) are installed — see PR #2584.
+#      mysql extra in particular) are installed for production-like development.
 #   4. Self-heal: if the first sync fails, recreate .venv and retry once. The
 #      retry stays `--locked`, so it repairs a broken .venv but not a stale
 #      lock; a second failure aborts with recovery instructions rather than

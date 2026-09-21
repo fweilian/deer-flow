@@ -38,16 +38,15 @@ _file_store_singleton: AgentStore | None = None
 def make_agent_store(config: AppConfig) -> AgentStore:
     """Build (or reuse) the store selected by ``config.agent_storage.backend``.
 
-    ``db`` requires ``database.backend`` to be ``sqlite``, ``postgres``, or
-    ``mysql``; a
+    ``db`` requires ``database.backend`` to be ``sqlite`` or ``mysql``; a
     ``memory`` database has no durable URL and is rejected here (the gateway
     also fails fast at startup, but this guard covers the graph-process path).
     """
     if config.agent_storage.backend == "db":
         db_backend = config.database.backend
-        if db_backend not in ("sqlite", "postgres", "mysql"):
+        if db_backend not in ("sqlite", "mysql"):
             raise ValueError(
-                f"agent_storage.backend='db' requires database.backend to be 'sqlite', 'postgres', or 'mysql', "
+                f"agent_storage.backend='db' requires database.backend to be 'sqlite' or 'mysql', "
                 f"but database.backend is '{db_backend}'. A 'memory' database is per-process and cannot "
                 "share agent definitions across nodes; set database.backend accordingly or use "
                 "agent_storage.backend='file'."

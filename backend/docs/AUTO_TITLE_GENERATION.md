@@ -32,7 +32,7 @@ class ThreadState(AgentState):
 |---------|--------|------|
 | **LangGraph Studio (本地)** | ❌ 否 | 仅内存存储，重启后丢失 |
 | **LangGraph Platform** | ✅ 是 | 自动持久化到数据库 |
-| **自定义 + Checkpointer** | ✅ 是 | 需配置 PostgreSQL/SQLite checkpointer |
+| **自定义 + Checkpointer** | ✅ 是 | 需配置 MySQL/SQLite checkpointer |
 
 ### 如何启用持久化
 
@@ -40,11 +40,9 @@ class ThreadState(AgentState):
 
 ```python
 # 在 langgraph.json 同级目录创建 checkpointer.py
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 
-checkpointer = PostgresSaver.from_conn_string(
-    "postgresql://user:pass@localhost/dbname"
-)
+checkpointer = SqliteSaver.from_conn_string("checkpoints.sqlite")
 ```
 
 然后在 `langgraph.json` 中引用：

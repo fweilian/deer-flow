@@ -70,7 +70,7 @@ def test_redact_data_masks_url_credentials_and_cli_flag_secrets():
             {"name": "n", "endpoint": "https://host/v1?access_token=AKIA1234567890ABCD"},
             {"name": "h", "default_headers": {"X-My-Auth": "rawsecrettoken123"}},
         ],
-        "database_url": "postgres://dfuser:dfpass@db:5432/deer",
+        "database_url": "mysql://dfuser:dfpass@db:3306/deer",
         "mcpServers": {
             "svc": {"command": "npx", "args": ["-y", "server", "--api-key", "LIVE-MCP-SECRET-XYZ"]},
         },
@@ -83,7 +83,7 @@ def test_redact_data_masks_url_credentials_and_cli_flag_secrets():
     assert redacted["models"][1]["endpoint"].endswith("access_token=<redacted>")
     assert redacted["models"][2]["default_headers"]["X-My-Auth"] == "<redacted>"
     assert "dfpass" not in redacted["database_url"]
-    assert redacted["database_url"] == "postgres://<redacted>@db:5432/deer"
+    assert redacted["database_url"] == "mysql://<redacted>@db:3306/deer"
     args = redacted["mcpServers"]["svc"]["args"]
     assert args[:3] == ["-y", "server", "--api-key"]
     assert args[3] == "<redacted>"
@@ -109,7 +109,7 @@ def test_redact_text_masks_url_userinfo_and_query_secrets():
     text = "\n".join(
         [
             "base_url: https://admin:S3cr3tPass@proxy.internal/v1",
-            "postgres://dfuser:dfpass@db:5432/deer",
+            "mysql://dfuser:dfpass@db:3306/deer",
             "endpoint: https://host/v1?api_key=LIVE-QUERY-SECRET&model=gpt-4o",
         ]
     )

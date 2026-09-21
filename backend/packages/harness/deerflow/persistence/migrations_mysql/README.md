@@ -1,8 +1,7 @@
 # MySQL application migration chain
 
 This is an independent Alembic `script_location` for the MySQL fresh-cutover
-chain. It never reads or replays the immutable PostgreSQL history under
-`persistence/migrations/`.
+chain. It is the sole active application migration tree.
 
 The DBA/migrator invokes it outside Gateway, for example:
 

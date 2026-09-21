@@ -800,11 +800,11 @@ async def test_update_mcp_configuration_preserves_omitted_routing_and_tools(monk
         json.dumps(
             {
                 "mcpServers": {
-                    "postgres": {
+                    "mysql": {
                         "enabled": True,
                         "type": "stdio",
                         "command": "npx",
-                        "args": ["-y", "@modelcontextprotocol/server-postgres"],
+                        "args": ["-y", "@modelcontextprotocol/server-mysql"],
                         "routing": {
                             "mode": "prefer",
                             "priority": 50,
@@ -840,22 +840,22 @@ async def test_update_mcp_configuration_preserves_omitted_routing_and_tools(monk
         _request_with_role("admin"),
         McpConfigUpdateRequest(
             mcp_servers={
-                "postgres": McpServerConfigResponse(
+                "mysql": McpServerConfigResponse(
                     enabled=False,
                     type="stdio",
                     command="npx",
-                    args=["-y", "@modelcontextprotocol/server-postgres"],
+                    args=["-y", "@modelcontextprotocol/server-mysql"],
                 )
             }
         ),
     )
 
     persisted = json.loads(config_path.read_text(encoding="utf-8"))
-    postgres = persisted["mcpServers"]["postgres"]
-    assert postgres["enabled"] is False
-    assert postgres["routing"]["keywords"] == ["订单", "SQL"]
-    assert postgres["tools"]["query"]["routing"]["priority"] == 100
-    assert response.mcp_servers["postgres"].routing.keywords == ["订单", "SQL"]
+    mysql = persisted["mcpServers"]["mysql"]
+    assert mysql["enabled"] is False
+    assert mysql["routing"]["keywords"] == ["订单", "SQL"]
+    assert mysql["tools"]["query"]["routing"]["priority"] == 100
+    assert response.mcp_servers["mysql"].routing.keywords == ["订单", "SQL"]
 
 
 @pytest.mark.asyncio

@@ -257,7 +257,7 @@ class AppConfig(BaseModel):
         default_factory=DatabaseConfig,
         description=format_field_description(
             "database",
-            field_doc="Unified database backend for run/feedback metadata (memory, sqlite, or postgres).",
+            field_doc="Unified database backend for run/feedback metadata (memory, sqlite, or mysql).",
         ),
     )
     object_storage: ObjectStorageConfig = Field(
@@ -463,7 +463,7 @@ class AppConfig(BaseModel):
             # ``database`` is a restart-required field (reload_boundary.STARTUP_ONLY_FIELDS):
             # ``init_engine_from_config()`` builds the ORM engine once at startup and
             # never rebuilds it on a config.yaml edit. Resetting only the sync
-            # checkpointer singleton on a live ``database``/``postgres_schema``
+            # checkpointer singleton on a live ``database``/``mysql_url``
             # change would half-migrate the deployment -- new checkpoint tables would
             # land in the new schema while ORM rows keep landing in the old one,
             # with no error surfaced. Requiring the documented restart keeps the

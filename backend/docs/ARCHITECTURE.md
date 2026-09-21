@@ -201,7 +201,7 @@ class ThreadState(AgentState):
 ├─────────────────────┤  ├─────────────────────┤  ├─────────────────────┤
 │ - present_files     │  │ - web_search        │  │ - github            │
 │ - ask_clarification │  │ - web_fetch         │  │ - filesystem        │
-│ - view_image        │  │ - bash              │  │ - postgres          │
+│ - view_image        │  │ - bash              │  │ - mysql             │
 │                     │  │ - read_file         │  │ - brave-search      │
 │                     │  │ - write_file        │  │ - puppeteer         │
 │                     │  │ - str_replace       │  │ - ...               │

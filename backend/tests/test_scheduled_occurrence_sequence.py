@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import deerflow.persistence.models  # noqa: F401
 from deerflow.persistence.base import Base
-from deerflow.persistence.postgres_schema import build_asyncpg_connect_args
 from deerflow.persistence.scheduled_task_runs import ActiveScheduledRunConflict, ScheduledTaskRunRepository
 from deerflow.persistence.scheduled_task_runs.model import ScheduledTaskRunRow
 from deerflow.persistence.scheduled_tasks import ScheduledTaskRepository
@@ -26,36 +22,17 @@ from deerflow.persistence.scheduled_tasks.model import ACTIVE_RUN_STATUSES, ONCE
 pytestmark = pytest.mark.asyncio
 
 
-@pytest_asyncio.fixture(params=["sqlite", "postgres"])
+@pytest_asyncio.fixture()
 async def occurrence_factories(request, tmp_path):
     """Two pools guarantee competing admissions use independent DB connections."""
-    schema = None
-    if request.param == "postgres":
-        uri = os.environ.get("TEST_POSTGRES_URI")
-        if not uri:
-            pytest.skip("requires TEST_POSTGRES_URI (real Postgres for occurrence ordering)")
-        parts = urlsplit(uri)
-        # CI passes a sync ``postgresql://...?sslmode=disable`` URL; the async
-        # engine needs the asyncpg driver and rejects libpq-only query keys.
-        scheme = "postgresql+asyncpg" if parts.scheme in {"postgres", "postgresql"} else parts.scheme
-        query = urlencode([(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key not in {"sslmode", "channel_binding"}])
-        uri = urlunsplit(parts._replace(scheme=scheme, query=query))
-        schema = f"occurrence_{uuid.uuid4().hex}"
-        options = {"connect_args": build_asyncpg_connect_args(schema)}
-    else:
-        uri = f"sqlite+aiosqlite:///{tmp_path / 'occurrences.db'}"
-        options = {"connect_args": {"timeout": 30}}
+    uri = f"sqlite+aiosqlite:///{tmp_path / 'occurrences.db'}"
+    options = {"connect_args": {"timeout": 30}}
     engines = [create_async_engine(uri, **options) for _ in range(2)]
     try:
         async with engines[0].begin() as connection:
-            if schema:
-                await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
             await connection.run_sync(Base.metadata.create_all)
         yield tuple(async_sessionmaker(engine, expire_on_commit=False) for engine in engines)
     finally:
-        if schema:
-            async with engines[0].begin() as connection:
-                await connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         for engine in engines:
             await engine.dispose()
 

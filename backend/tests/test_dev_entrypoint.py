@@ -130,58 +130,58 @@ def test_no_uv_extras_yields_empty_flags():
 def test_no_explicit_extras_uses_the_runtime_selected_config(tmp_path: Path):
     config_path = tmp_path / "deployment.yaml"
     config_path.write_text(
-        "database:\n  backend: postgres\n",
+        "database:\n  backend: mysql\n",
         encoding="utf-8",
     )
 
     proc = _run(None, config_path=config_path)
 
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "--extra postgres"
+    assert proc.stdout.strip() == "--extra mysql"
 
 
 def test_single_extra():
-    proc = _run("postgres")
+    proc = _run("mysql")
     assert proc.returncode == 0
-    assert proc.stdout.strip() == "--extra postgres"
+    assert proc.stdout.strip() == "--extra mysql"
 
 
 def test_multi_extra_comma_separated():
-    proc = _run("postgres,ollama")
+    proc = _run("mysql,ollama")
     assert proc.returncode == 0
-    assert proc.stdout.strip() == "--extra postgres --extra ollama"
+    assert proc.stdout.strip() == "--extra mysql --extra ollama"
 
 
 def test_multi_extra_whitespace_separated():
-    proc = _run("postgres ollama")
+    proc = _run("mysql ollama")
     assert proc.returncode == 0
-    assert proc.stdout.strip() == "--extra postgres --extra ollama"
+    assert proc.stdout.strip() == "--extra mysql --extra ollama"
 
 
 def test_multi_extra_mixed_separators():
-    proc = _run(" postgres ,  ollama ,")
+    proc = _run(" mysql ,  ollama ,")
     assert proc.returncode == 0
-    assert proc.stdout.strip() == "--extra postgres --extra ollama"
+    assert proc.stdout.strip() == "--extra mysql --extra ollama"
 
 
 def test_explicit_extras_override_config_and_are_deduplicated(tmp_path: Path):
     config_path = tmp_path / "deployment.yaml"
-    config_path.write_text("database:\n  backend: postgres\n", encoding="utf-8")
+    config_path.write_text("database:\n  backend: mysql\n", encoding="utf-8")
 
-    proc = _run("redis,redis postgres redis", config_path=config_path)
+    proc = _run("redis,redis mysql redis", config_path=config_path)
 
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "--extra redis --extra postgres"
+    assert proc.stdout.strip() == "--extra redis --extra mysql"
 
 
 def test_explicit_extras_keep_runtime_required_redis_without_duplicates():
     proc = _run(
-        "postgres,postgres",
+        "mysql,mysql",
         stream_bridge_redis_url="redis://redis:6379/0",
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "--extra postgres --extra redis"
+    assert proc.stdout.strip() == "--extra mysql --extra redis"
 
 
 def test_empty_string_yields_empty_flags():
@@ -196,9 +196,9 @@ def test_empty_string_yields_empty_flags():
         "; rm -rf /",  # the canonical injection attempt
         "$(whoami)",  # command substitution
         "`echo bad`",  # backticks
-        "postgres;evil",  # mixed legal+illegal in a single token
-        "1postgres",  # leading digit
-        "-postgres",  # leading hyphen
+        "mysql;evil",  # mixed legal+illegal in a single token
+        "1mysql",  # leading digit
+        "-mysql",  # leading hyphen
         "post gres extra/path",  # contains slash
     ],
 )

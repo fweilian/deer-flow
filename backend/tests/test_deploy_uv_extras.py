@@ -53,7 +53,7 @@ def test_backend_dockerfile_expands_multiple_uv_extras(tmp_path):
     env = os.environ.copy()
     env["CAPTURE_UV_ARGS"] = str(capture)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    env["UV_EXTRAS"] = "ollama,postgres"
+    env["UV_EXTRAS"] = "ollama,mysql"
 
     subprocess.run(
         [BASH, "-c", _backend_dockerfile_uv_sync_script()],
@@ -70,7 +70,7 @@ def test_backend_dockerfile_expands_multiple_uv_extras(tmp_path):
         "--extra",
         "ollama",
         "--extra",
-        "postgres",
+        "mysql",
     ]
 
 
@@ -93,7 +93,7 @@ def test_backend_dockerfile_rejects_glob_uv_extra(tmp_path):
     env = os.environ.copy()
     env["CAPTURE_UV_ARGS"] = str(capture)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    env["UV_EXTRAS"] = "postgres,*"
+    env["UV_EXTRAS"] = "mysql,*"
 
     result = subprocess.run(
         [BASH, "-c", _backend_dockerfile_uv_sync_script()],
@@ -108,14 +108,14 @@ def test_backend_dockerfile_rejects_glob_uv_extra(tmp_path):
     assert not capture.exists()
 
 
-def test_deploy_build_auto_detects_postgres_extra_when_other_extras_are_enabled(tmp_path):
+def test_deploy_build_auto_detects_mysql_extra_when_other_extras_are_enabled(tmp_path):
     """Production image builds preserve every detected extra as Docker build tokens."""
     worktree = tmp_path / "repo"
     shutil.copytree(REPO_ROOT / "scripts", worktree / "scripts")
     shutil.copytree(REPO_ROOT / "docker", worktree / "docker")
     (worktree / "backend").mkdir()
     (worktree / "config.yaml").write_text(
-        "database:\n  backend: postgres\n",
+        "database:\n  backend: mysql\n",
         encoding="utf-8",
     )
     (worktree / "extensions_config.json").write_text('{"mcpServers":{},"skills":{}}\n', encoding="utf-8")
@@ -144,7 +144,7 @@ def test_deploy_build_auto_detects_postgres_extra_when_other_extras_are_enabled(
         capture_output=True,
     )
 
-    assert capture.read_text(encoding="utf-8") == "postgres"
+    assert capture.read_text(encoding="utf-8") == "mysql"
 
 
 def test_deploy_uses_dotenv_without_sourcing_shell_syntax(tmp_path):
@@ -154,13 +154,13 @@ def test_deploy_uses_dotenv_without_sourcing_shell_syntax(tmp_path):
     shutil.copytree(REPO_ROOT / "docker", worktree / "docker")
     (worktree / "backend").mkdir()
     (worktree / "config.yaml").write_text(
-        "database:\n  backend: postgres\n",
+        "database:\n  backend: mysql\n",
         encoding="utf-8",
     )
     (worktree / "extensions_config.json").write_text('{"mcpServers":{},"skills":{}}\n', encoding="utf-8")
     marker = tmp_path / "sourced-marker"
     (worktree / ".env").write_text(
-        f"DATABASE_URL=postgresql://user:pass@localhost/db?sslmode=require&application_name=deer\nUNSAFE=$(touch {shlex.quote(str(marker))})\nUV_EXTRAS=ollama\n",
+        f"MYSQL_DATABASE_URL=mysql://user:pass@localhost/db?sslmode=require&application_name=deer\nUNSAFE=$(touch {shlex.quote(str(marker))})\nUV_EXTRAS=ollama\n",
         encoding="utf-8",
     )
 
@@ -208,14 +208,14 @@ def test_deploy_uses_dotenv_without_sourcing_shell_syntax(tmp_path):
     assert probe.returncode == 0, f"--env-file target {env_file_arg!r} is not the worktree .env"
 
 
-def test_deploy_build_auto_detects_postgres_extra_with_python_fallback(tmp_path):
+def test_deploy_build_auto_detects_mysql_extra_with_python_fallback(tmp_path):
     """Production deploy hosts may have python but no runnable python3."""
     worktree = tmp_path / "repo"
     shutil.copytree(REPO_ROOT / "scripts", worktree / "scripts")
     shutil.copytree(REPO_ROOT / "docker", worktree / "docker")
     (worktree / "backend").mkdir()
     (worktree / "config.yaml").write_text(
-        "database:\n  backend: postgres\n",
+        "database:\n  backend: mysql\n",
         encoding="utf-8",
     )
     (worktree / "extensions_config.json").write_text('{"mcpServers":{},"skills":{}}\n', encoding="utf-8")
@@ -253,4 +253,4 @@ def test_deploy_build_auto_detects_postgres_extra_with_python_fallback(tmp_path)
         capture_output=True,
     )
 
-    assert capture.read_text(encoding="utf-8") == "postgres"
+    assert capture.read_text(encoding="utf-8") == "mysql"

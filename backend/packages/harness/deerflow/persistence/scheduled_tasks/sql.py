@@ -677,7 +677,7 @@ class ScheduledTaskRepository:
             reconciled = 0
             for task_id in task_ids:
                 # Row lock (no SQLite writer emulation, so the race regressions
-                # can still commit concurrently): on Postgres this serialises
+                # can still commit concurrently): on MySQL this serialises
                 # against admission, which locks the parent before inserting a
                 # queued occurrence, so no live row can appear between the
                 # probe below and this commit.

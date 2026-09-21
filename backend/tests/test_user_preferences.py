@@ -123,28 +123,3 @@ async def test_preferences_read_discards_only_malformed_fields(api, preference_r
     client, _ = api
     await preference_repo.patch("alice", {"notification_enabled": False, "mode": "invalid", "unknown": "ignored"})
     assert (await client.get("/api/v1/auth/preferences")).json() == {"notification_enabled": False, "model_name": None, "mode": None, "reasoning_effort": None}
-
-
-def test_preferences_migration_preserves_existing_users_and_downgrades(tmp_path):
-    import importlib
-
-    from alembic.migration import MigrationContext
-    from alembic.operations import Operations
-    from sqlalchemy import create_engine, inspect, text
-
-    revision = importlib.import_module("deerflow.persistence.migrations.versions.0023_user_preferences")
-    engine = create_engine(f"sqlite:///{tmp_path}/migration.db")
-    with engine.begin() as connection:
-        UserRow.__table__.create(connection)
-        connection.execute(UserRow.__table__.insert().values(id="alice", email="alice@example.com"))
-        with Operations.context(MigrationContext.configure(connection)):
-            revision.upgrade()
-            assert "user_preferences" in inspect(connection).get_table_names()
-            connection.execute(text("INSERT INTO user_preferences (user_id, key, value) VALUES ('alice', 'mode', '\"pro\"')"))
-            revision.upgrade()
-            assert connection.execute(text("SELECT value FROM user_preferences WHERE user_id = 'alice'")).scalar() == '"pro"'
-            revision.downgrade()
-            revision.downgrade()
-        assert "user_preferences" not in inspect(connection).get_table_names()
-        assert connection.execute(text("SELECT email FROM users WHERE id = 'alice'")).scalar() == "alice@example.com"
-    engine.dispose()

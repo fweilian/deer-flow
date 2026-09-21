@@ -60,11 +60,11 @@ def test_validation_allows_file_and_db_on_sql(tmp_path):
     _validate_agent_storage(_cfg("db", "sqlite", str(tmp_path)))  # no raise
 
 
-def test_validation_warns_on_file_under_multiworker_postgres(monkeypatch, caplog):
+def test_validation_warns_on_file_under_multiworker_mysql(monkeypatch, caplog):
     monkeypatch.setenv("GATEWAY_WORKERS", "4")
     cfg = SimpleNamespace(
         agent_storage=AgentStorageConfig(backend="file"),
-        database=DatabaseConfig(backend="postgres", postgres_url="postgresql://u:p@h/db"),
+        database=DatabaseConfig(backend="mysql", mysql_url="mysql://u:p@h/db"),
     )
     with caplog.at_level("WARNING"):
         _validate_agent_storage(cfg)

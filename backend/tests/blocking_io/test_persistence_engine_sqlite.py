@@ -12,11 +12,8 @@ actually runs. The async engine/session machinery is mocked out so the only host
 filesystem operation under test is the directory creation; if it regresses to run
 directly on the event loop, Blockbuster raises `BlockingError` and this fails.
 
-We also stub ``bootstrap_schema`` so the alembic stamp/upgrade path -- which has
-its own ``asyncio.to_thread`` regression anchor in
-``test_persistence_bootstrap.py`` -- does not turn this test into a
-double-coverage one. Keeping concerns separated means a regression in either
-offload (makedirs vs alembic) points at the right place.
+We also stub ``bootstrap_sqlite_schema`` so local table creation does not turn
+this test into double coverage for SQLite schema initialization.
 """
 
 from __future__ import annotations
@@ -63,7 +60,7 @@ async def test_init_engine_sqlite_dir_setup_does_not_block_event_loop(tmp_path: 
         patch.object(engine_mod, "async_sessionmaker", return_value=MagicMock()),
         patch("sqlalchemy.event.listens_for", _noop_listens_for),
         patch(
-            "deerflow.persistence.bootstrap.bootstrap_schema",
+            "deerflow.persistence.bootstrap.bootstrap_sqlite_schema",
             new=_noop_bootstrap,
         ),
     ):

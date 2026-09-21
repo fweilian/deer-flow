@@ -109,12 +109,12 @@ If file tools (`read_file`, `ls`, `bash`) fail with permission or path errors:
 
 This usually means SQLite is handling concurrent writes from multiple users or long-running agent runs. SQLite supports concurrent reads, but only one writer can hold the database lock at a time. In DeerFlow, checkpoint writes and application writes share the same SQLite database file.
 
-For production or multi-user deployments, switch to Postgres:
+For production or multi-user deployments, switch to MySQL:
 
 ```yaml
 database:
-  backend: postgres
-  postgres_url: $DATABASE_URL
+  backend: mysql
+  mysql_url: $MYSQL_DATABASE_URL
 
 run_events:
   backend: db
@@ -160,7 +160,7 @@ Back up the storage backends you use:
 - `backend/.deer-flow/threads/` for thread working directories, uploads, and artifacts.
 - `backend/.deer-flow/memory.json` and `backend/.deer-flow/agents/` for learned memory.
 - `${database.sqlite_dir}/deerflow.db` when using `database.backend: sqlite` (default: `.deer-flow/data/deerflow.db`).
-- Regular database dumps when using `database.backend: postgres`.
+- Regular database dumps when using `database.backend: mysql`.
 - The legacy `checkpointer.connection_string` file if your deployment still configures a standalone `checkpointer`.
 
 In Docker deployments, back up the bind-mounted host paths rather than the container filesystem.

@@ -9,7 +9,7 @@ backends can be configured independently:
 * the ORM engine behind ``database:`` (application repositories), and
 * the effective LangGraph checkpointer backend - the legacy
   ``checkpointer:`` section when present, otherwise derived from ``database:``
-  (memory/sqlite/postgres).
+  (memory/sqlite/mysql).
 
 Both probes run concurrently beneath a single endpoint-wide deadline
 (:data:`_READINESS_DEADLINE_SECONDS`), so a healthy response completes within
@@ -21,7 +21,7 @@ config instead could check a backend the running process is not using. A
 ready; a startup config that cannot be resolved fails closed as unreachable.
 Connection-opening probes are serialized behind a strict per-process gate: the
 route is public through the ``/health`` auth prefix, so unlimited concurrent
-requests must never translate into unlimited new PostgreSQL connections.
+requests must never translate into unlimited new database connections.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Upper bound for a single probe attempt. The endpoint must never hang behind
-# a dead database (for example a TCP connect timeout to Postgres).
+# a dead database (for example a TCP connect timeout to MySQL).
 _PROBE_TIMEOUT_SECONDS = 2.0
 
 # Whole-endpoint deadline covering both probes. They run concurrently, so a
@@ -191,30 +191,6 @@ async def _probe_sqlite_backend(conn_string: str | None) -> str:
     return DATABASE_OK
 
 
-async def _probe_postgres_backend(conn_string: str, schema: str) -> str:
-    """Probe a PostgreSQL checkpointer database with a bounded SELECT 1."""
-    try:
-        from psycopg import AsyncConnection
-    except ImportError:
-        logger.error("Readiness probe: psycopg is not installed for the postgres checkpointer backend")
-        return DATABASE_UNREACHABLE
-    try:
-        from deerflow.persistence.postgres_schema import dsn_with_search_path, normalize_libpq_dsn
-
-        dsn = dsn_with_search_path(normalize_libpq_dsn(conn_string), schema)
-        async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
-            connection = await AsyncConnection.connect(dsn, connect_timeout=int(_PROBE_TIMEOUT_SECONDS))
-            try:
-                async with connection.cursor() as cursor:
-                    await cursor.execute("SELECT 1")
-            finally:
-                await connection.close()
-    except Exception:
-        logger.warning("Readiness postgres checkpointer probe failed", exc_info=True)
-        return DATABASE_UNREACHABLE
-    return DATABASE_OK
-
-
 async def _probe_mysql_backend(conn_string: str) -> str:
     """Probe a MySQL checkpointer database with a bounded SELECT 1."""
     try:
@@ -243,13 +219,13 @@ async def _probe_checkpointer_backend(config: CheckpointerConfig) -> str:
 
     *config* is the startup-bound snapshot (see :func:`resolve_checkpointer_config`);
     an in-process memory backend has nothing external to probe. Probes that
-    open a connection (sqlite file, postgres, mysql) are serialized so concurrent
+    open a connection (sqlite file or mysql) are serialized so concurrent
     unauthenticated requests cannot exhaust the database's connections.
     """
     if config.type == "memory":
         # In-process backend: there is nothing external to probe.
         return DATABASE_NOT_CONFIGURED
-    if config.type not in ("sqlite", "postgres", "mysql"):
+    if config.type not in ("sqlite", "mysql"):
         logger.warning("Readiness probe: unknown checkpointer backend %r", config.type)
         return DATABASE_UNREACHABLE
     async with _probe_gate():
@@ -259,7 +235,6 @@ async def _probe_checkpointer_backend(config: CheckpointerConfig) -> str:
             return DATABASE_UNREACHABLE
         if config.type == "mysql":
             return await _probe_mysql_backend(config.connection_string)
-        return await _probe_postgres_backend(config.connection_string, config.postgres_schema)
 
 
 async def readiness_payload(checkpointer_config: CheckpointerConfig | None = None) -> tuple[int, dict[str, str]]:

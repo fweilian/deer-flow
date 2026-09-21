@@ -1,5 +1,9 @@
 # Phase 5 Storage / Filesystem Scope Re-scan
 
+> **Historical archive (pre-MySQL cutover):** the facts and recommendations in
+> this investigation describe the recorded revision only, not current runtime
+> database support.
+
 **Scope:** read-only re-scan of local filesystem dependencies at HEAD `cfd41bf6` (`chore: remove browser automation`).
 **Method:** static search + call-chain inspection + config inspection. No code, config, or test was modified.
 **Status:** investigation only. Phase 5 implementation not started.

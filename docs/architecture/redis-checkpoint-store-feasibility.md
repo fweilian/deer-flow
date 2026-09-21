@@ -1,5 +1,9 @@
 # Redis 作为 Checkpoint / Store 后端的可行性分析
 
+> **历史归档（MySQL cutover 前）**：本文记录 2026-09-16 的只读可行性调查，
+> 不描述当前运行时或支持的数据库后端。当前生产关系型后端为 MySQL；请以
+> `mysql-migration-design.md` 和 `mysql-goals.md` 为准。
+
 > 审计口径：只读。所有结论基于 **本机实际安装的包** 与 **从 PyPI 解包到 `/tmp` 阅读的源码**，
 > 不采信 README 与文档声明。证据一律给 `文件:行号`。
 >

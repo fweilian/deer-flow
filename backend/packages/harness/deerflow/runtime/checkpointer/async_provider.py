@@ -3,7 +3,7 @@
 Provides an **async context manager** for long-running async servers that need
 proper resource cleanup.
 
-Supported backends: memory, sqlite, postgres, mysql.
+Supported backends: memory, sqlite, mysql.
 
 Usage (e.g. FastAPI lifespan)::
 
@@ -25,10 +25,7 @@ from collections.abc import AsyncIterator
 from langgraph.types import Checkpointer
 
 from deerflow.config.app_config import AppConfig, get_app_config
-from deerflow.persistence.postgres_schema import dsn_with_search_path, normalize_libpq_dsn
 from deerflow.runtime.checkpointer.provider import (
-    POSTGRES_CONN_REQUIRED,
-    POSTGRES_INSTALL,
     SQLITE_INSTALL,
 )
 from deerflow.runtime.sqlite_utils import ensure_sqlite_parent_dir, resolve_sqlite_conn_str
@@ -46,49 +43,6 @@ def _prepare_database_sqlite_checkpointer_path(db_config) -> str:
     conn_str = db_config.checkpointer_sqlite_path
     ensure_sqlite_parent_dir(conn_str)
     return conn_str
-
-
-def _build_postgres_pool(conn_string: str, schema: str = ""):
-    """Build an AsyncConnectionPool with TCP keepalive and connection checking."""
-    from psycopg.rows import dict_row
-    from psycopg_pool import AsyncConnectionPool
-
-    kwargs = {
-        "autocommit": True,
-        "prepare_threshold": 0,
-        "row_factory": dict_row,
-        "keepalives": 1,
-        "keepalives_idle": 60,
-        "keepalives_interval": 10,
-        "keepalives_count": 6,
-    }
-    # Inject search_path into the DSN (merging with any libpq options already in
-    # the conn string) rather than via kwargs["options"], which psycopg applies
-    # *on top of* the conninfo and would silently drop a DSN-supplied option
-    # such as statement_timeout. This also strips a SQLAlchemy ``+driver``
-    # suffix so libpq can parse the DSN. Matches the sync/DSN paths.
-    dsn = dsn_with_search_path(normalize_libpq_dsn(conn_string), schema)
-
-    return AsyncConnectionPool(
-        dsn,
-        kwargs=kwargs,
-        check=AsyncConnectionPool.check_connection,
-    )
-
-
-def _ensure_postgres_imports():
-    """Import and return (AsyncPostgresSaver, AsyncConnectionPool), raising ImportError on failure."""
-    try:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    except ImportError as exc:
-        raise ImportError(POSTGRES_INSTALL) from exc
-
-    try:
-        from psycopg_pool import AsyncConnectionPool
-    except ImportError as exc:
-        raise ImportError(POSTGRES_INSTALL) from exc
-
-    return AsyncPostgresSaver, AsyncConnectionPool
 
 
 @contextlib.asynccontextmanager
@@ -157,17 +111,6 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
             yield saver
         return
 
-    if config.type == "postgres":
-        if not config.connection_string:
-            raise ValueError(POSTGRES_CONN_REQUIRED)
-
-        AsyncPostgresSaver, _ = _ensure_postgres_imports()
-        pool = _build_postgres_pool(config.connection_string, config.postgres_schema)
-        async with pool:
-            saver = AsyncPostgresSaver(conn=pool)
-            yield saver
-        return
-
     if config.type == "mysql":
         async with _mysql_saver(config.connection_string or "", pool_size=5, pool_recycle=300, connect_timeout=30) as saver:
             yield saver
@@ -198,17 +141,6 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
 
         conn_str = await asyncio.to_thread(_prepare_database_sqlite_checkpointer_path, db_config)
         async with AsyncSqliteSaver.from_conn_string(conn_str) as saver:
-            yield saver
-        return
-
-    if db_config.backend == "postgres":
-        if not db_config.postgres_url:
-            raise ValueError("database.postgres_url is required for the postgres backend")
-
-        AsyncPostgresSaver, _ = _ensure_postgres_imports()
-        pool = _build_postgres_pool(db_config.postgres_url, db_config.postgres_schema)
-        async with pool:
-            saver = AsyncPostgresSaver(conn=pool)
             yield saver
         return
 

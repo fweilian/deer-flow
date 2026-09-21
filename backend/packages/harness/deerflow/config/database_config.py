@@ -11,18 +11,18 @@ blocking, making a unified file safe for both workloads.  Writers
 that contend for the lock wait via the default 5-second sqlite3
 busy timeout rather than failing immediately.
 
-Postgres/MySQL mode: both use the same database URL but maintain independent
-connection pools with different lifecycles.
+MySQL mode uses one database URL with independent application and checkpoint
+connection pools.
 
 Memory mode: checkpointer uses MemorySaver, app uses in-memory stores.
 No database is initialized.
 
-Sensitive values (postgres_url/mysql_url) should use $VAR syntax in config.yaml
+Sensitive values (mysql_url) should use $VAR syntax in config.yaml
 to reference environment variables from .env:
 
     database:
-      backend: postgres
-      postgres_url: $DATABASE_URL
+      backend: mysql
+      mysql_url: $MYSQL_DATABASE_URL
 
 The $VAR resolution is handled by AppConfig.resolve_env_variables()
 before this config is instantiated -- DatabaseConfig itself does not
@@ -35,9 +35,7 @@ import logging
 import os
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
-
-from deerflow.config.postgres_schema import POSTGRES_SCHEMA_PATTERN, validate_postgres_schema
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +138,9 @@ class CheckpointCacheConfig(BaseModel):
 
 
 class DatabaseConfig(BaseModel):
-    backend: Literal["memory", "sqlite", "postgres", "mysql"] = Field(
+    backend: Literal["memory", "sqlite", "mysql"] = Field(
         default="memory",
-        description=("Storage backend for both checkpointer and application data. 'memory' for development (no persistence across restarts), 'sqlite' for single-node deployment, 'postgres' for production multi-node deployment."),
+        description=("Storage backend for both checkpointer and application data. 'memory' for development (no persistence across restarts), 'sqlite' for single-node development, and 'mysql' for production."),
     )
     checkpoint_channel_mode: CheckpointChannelMode = Field(
         default="full",
@@ -169,15 +167,6 @@ class DatabaseConfig(BaseModel):
         default=".deer-flow/data",
         description=("Directory for the SQLite database file. Both checkpointer and application data share {sqlite_dir}/deerflow.db."),
     )
-    postgres_url: str = Field(
-        default="",
-        description=(
-            "PostgreSQL connection URL, shared by checkpointer and app. "
-            "Use $DATABASE_URL in config.yaml to reference .env. "
-            "Example: postgresql://user:pass@host:5432/deerflow "
-            "(the +asyncpg driver suffix is added automatically where needed)."
-        ),
-    )
     mysql_url: str = Field(
         default="",
         description=(
@@ -190,34 +179,18 @@ class DatabaseConfig(BaseModel):
     )
     pool_size: int = Field(
         default=5,
-        description="Connection pool size for the app ORM engine (postgres only).",
+        description="Connection pool size for the app ORM MySQL engine.",
     )
     pool_recycle: int = Field(
         default=300,
         gt=0,
-        description="Seconds before app ORM PostgreSQL connections are recycled.",
+        description="Seconds before app ORM MySQL connections are recycled.",
     )
     command_timeout: float | None = Field(
         default=30,
         gt=0,
-        description="Timeout in seconds for app ORM PostgreSQL commands. Set to null to disable the command timeout.",
+        description="Timeout in seconds for app ORM MySQL commands. Set to null to disable the command timeout.",
     )
-    postgres_schema: str = Field(
-        default="",
-        description=(
-            "PostgreSQL schema for both app ORM tables and LangGraph "
-            "checkpointer/store tables (postgres only). Empty string keeps "
-            "the server default search_path (usually 'public'). When set, "
-            "the schema is created automatically at startup and applied via "
-            "connection-level search_path. Only plain identifiers are "
-            f"allowed: {POSTGRES_SCHEMA_PATTERN}."
-        ),
-    )
-
-    @field_validator("postgres_schema")
-    @classmethod
-    def _validate_postgres_schema(cls, value: str) -> str:
-        return validate_postgres_schema(value)
 
     # -- Legacy key migration (not user-configured) --
 
@@ -289,14 +262,6 @@ class DatabaseConfig(BaseModel):
         """SQLAlchemy async URL for the application ORM engine."""
         if self.backend == "sqlite":
             return f"sqlite+aiosqlite:///{self.sqlite_path}"
-        if self.backend == "postgres":
-            url = self.postgres_url
-            if url.startswith("postgresql://"):
-                url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-            elif url.startswith("postgres://"):
-                # libpq's short alias: accepted by the psycopg checkpointer, but not a SQLAlchemy dialect.
-                url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-            return url
         if self.backend == "mysql":
             url = self.mysql_url
             if url.startswith("mysql://"):
@@ -314,21 +279,10 @@ class DatabaseConfig(BaseModel):
         LangGraph graph factory, the setup/update tools) are synchronous and may
         run on the event loop or in a separate process from the gateway, where an
         async engine cannot be driven. Points at the same database file/server as
-        :meth:`app_sqlalchemy_url`; only the driver differs (both drivers —
-        stdlib sqlite3 and psycopg — ship with the app, so this adds no
-        dependency).
+        :meth:`app_sqlalchemy_url`; only the driver differs.
         """
         if self.backend == "sqlite":
             return f"sqlite:///{self.sqlite_path}"
-        if self.backend == "postgres":
-            url = self.postgres_url
-            if url.startswith("postgresql+asyncpg://"):
-                url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
-            elif url.startswith("postgresql://"):
-                url = url.replace("postgresql://", "postgresql+psycopg://", 1)
-            elif url.startswith("postgres://"):
-                url = url.replace("postgres://", "postgresql+psycopg://", 1)
-            return url
         if self.backend == "mysql":
             url = self.mysql_url
             if url.startswith("mysql+asyncmy://"):

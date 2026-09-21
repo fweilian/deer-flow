@@ -12,7 +12,7 @@ def test_format_memory_includes_facts_section() -> None:
         "user": {},
         "history": {},
         "facts": [
-            {"content": "User uses PostgreSQL", "category": "knowledge", "confidence": 0.9},
+            {"content": "User uses MySQL", "category": "knowledge", "confidence": 0.9},
             {"content": "User prefers SQLAlchemy", "category": "preference", "confidence": 0.8},
         ],
     }
@@ -20,7 +20,7 @@ def test_format_memory_includes_facts_section() -> None:
     result = format_memory_for_injection(memory_data, max_tokens=2000)
 
     assert "Facts:" in result
-    assert "User uses PostgreSQL" in result
+    assert "User uses MySQL" in result
     assert "User prefers SQLAlchemy" in result
 
 

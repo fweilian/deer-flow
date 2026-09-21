@@ -1727,12 +1727,12 @@ class TestEnsureAgent:
         from deerflow.tools.mcp_metadata import tag_mcp_routing, tag_mcp_tool
 
         @as_tool
-        def postgres_query(sql: str) -> str:
-            "Query Postgres."
+        def warehouse_query(sql: str) -> str:
+            "Query the data warehouse."
             return sql
 
-        tag_mcp_tool(postgres_query)
-        tag_mcp_routing(postgres_query, {"mode": "prefer", "priority": 100, "keywords": ["orders"]})
+        tag_mcp_tool(warehouse_query)
+        tag_mcp_routing(warehouse_query, {"mode": "prefer", "priority": 100, "keywords": ["orders"]})
 
         mock_app_config.tool_search.enabled = True
         mock_app_config.tool_search.auto_promote_top_k = 3
@@ -1745,7 +1745,7 @@ class TestEnsureAgent:
             patch("deerflow.client.create_agent", return_value=MagicMock()),
             patch("deerflow.client.build_middlewares", return_value=[]) as mock_build_middlewares,
             patch("deerflow.client.apply_prompt_template", return_value="prompt"),
-            patch.object(client, "_get_tools", return_value=[postgres_query]),
+            patch.object(client, "_get_tools", return_value=[warehouse_query]),
             patch("deerflow.runtime.checkpointer.get_checkpointer", return_value=None),
             patch("deerflow.client.get_enabled_skills_for_config", return_value=[]),
         ):
@@ -1753,7 +1753,7 @@ class TestEnsureAgent:
 
         routing_arg = mock_build_middlewares.call_args.kwargs.get("mcp_routing_middleware")
         assert isinstance(routing_arg, McpRoutingMiddleware)
-        assert routing_arg._matched_names({"messages": [HumanMessage(content="show orders")]}) == ["postgres_query"]
+        assert routing_arg._matched_names({"messages": [HumanMessage(content="show orders")]}) == ["warehouse_query"]
 
     def test_mcp_routing_middleware_absent_when_tool_search_disabled(self, client, mock_app_config):
         """No routing middleware is built on the embedded path when tool_search is off."""

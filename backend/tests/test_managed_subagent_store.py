@@ -144,5 +144,5 @@ def test_store_factory_rejects_memory_database():
         agent_storage=SimpleNamespace(backend="db"),
         database=SimpleNamespace(backend="memory"),
     )
-    with pytest.raises(ValueError, match="sqlite.*postgres.*mysql"):
+    with pytest.raises(ValueError, match="sqlite.*mysql"):
         make_managed_subagent_store(config)

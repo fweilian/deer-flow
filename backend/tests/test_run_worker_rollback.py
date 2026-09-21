@@ -3436,7 +3436,7 @@ async def test_ensure_interrupted_title_reloads_latest_checkpoint_before_write()
 
 @pytest.mark.anyio
 async def test_ensure_interrupted_title_bumps_channel_version_and_declares_it_in_new_versions(monkeypatch):
-    """Regression for #3859 review: DB-backed savers (Sqlite/Postgres) strip inline
+    """Regression for #3859 review: DB-backed savers (SQLite/MySQL) strip inline
     ``channel_values`` from ``put`` and only persist blobs for channels listed in
     ``new_versions``. The helper must therefore bump ``channel_versions["title"]``
     and pass ``{"title": next_version}`` so the fallback title actually survives

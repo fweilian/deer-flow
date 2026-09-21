@@ -87,7 +87,7 @@ def test_appconfig_descriptions_retain_original_field_documentation():
     descriptions = {
         "log_level": "debug/info/warning/error",
         "logging": "Structured logging settings: whether request trace ids appear in log records, and in which format.",
-        "database": "memory, sqlite, or postgres",
+        "database": "memory, sqlite, or mysql",
         "sandbox": "Sandbox provider",
         "run_events": "memory for dev",
         "checkpointer": "state-persistence checkpointer",

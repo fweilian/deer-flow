@@ -56,23 +56,15 @@ def _write_mysql_tree(path: Path) -> None:
     (path / "versions" / "0001_mysql_baseline.py").write_text(_BASELINE, encoding="utf-8")
 
 
-def test_mysql_chain_is_isolated_from_immutable_postgres_history(monkeypatch, tmp_path: Path) -> None:
+def test_mysql_chain_is_the_only_active_application_migration_tree(monkeypatch, tmp_path: Path) -> None:
     mysql_tree = tmp_path / "migrations_mysql"
     _write_mysql_tree(mysql_tree)
     monkeypatch.setattr(bootstrap, "_MYSQL_MIGRATIONS_DIR", mysql_tree)
 
-    # Selection is backend-explicit: the MySQL chain cannot discover or replay
-    # the immutable PostgreSQL history.
-    assert bootstrap._migration_script_location("postgres") == bootstrap._MIGRATIONS_DIR
+    # MySQL is the sole active migration artifact.
     assert bootstrap._migration_script_location("mysql") == mysql_tree
-    assert mysql_tree != bootstrap._MIGRATIONS_DIR
-
-    pg_revisions = {path.stem for path in (bootstrap._MIGRATIONS_DIR / "versions").glob("*.py")}
     mysql_revisions = {path.stem for path in (mysql_tree / "versions").glob("*.py")}
-    assert "0001_baseline" in pg_revisions
-    assert "0023_user_preferences" in pg_revisions
     assert mysql_revisions == {"0001_mysql_baseline"}
-    assert pg_revisions.isdisjoint(mysql_revisions)
 
     mysql_scripts = ScriptDirectory(str(mysql_tree))
     assert mysql_scripts.get_heads() == ["0001_mysql_baseline"]

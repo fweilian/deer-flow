@@ -26,11 +26,11 @@ from protected rows and pins the verification method.
 | Backend   | State rows              | Writes rows        |
 | --------- | ----------------------- | ------------------ |
 | SQLite    | `checkpoints`           | `writes`           |
-| Postgres  | `checkpoints`, `checkpoint_blobs` | `checkpoint_writes` |
+| MySQL     | `checkpoints`, `checkpoint_blobs` | `checkpoint_writes` |
 | Memory    | `saver.storage`, `saver.blobs` | `saver.writes`     |
 
 (Note: SQLite has no separate blob table; channel values live inside the
-serialized checkpoint payload. Postgres splits blobs out.)
+serialized checkpoint payload. MySQL splits blobs out.)
 
 Measurement shape: per-thread rows + bytes per table, normalized by
 `bench_channels._normalized_storage_stats`.
@@ -80,7 +80,7 @@ resume, (c) branch from an older visible turn, and (d) orphan row counts.
   references it. The shared-version case is not hypothetical — the real
   duration-only checkpoint is a copy of the head checkpoint dict
   (`persist_run_history_metadata` replaces only id/ts), so it inherits the
-  parent's `channel_versions` verbatim, and on Postgres the blob rows
+  parent's `channel_versions` verbatim, and on MySQL the blob rows
   reachable from the deleted duration row are the same rows backing its
   parent. An implementation that deletes blobs keyed by the removed
   checkpoint's own `channel_versions` would corrupt the thread's newest
@@ -93,9 +93,8 @@ resume, (c) branch from an older visible turn, and (d) orphan row counts.
   protected set, it must not ship. Partial deletion that leaves a dangling
   `parent_config` converts a cleanup into a thread-level outage (branch and
   regenerate fail loudly for every later turn).
-- Measurement first: proposals must include before/after numbers from
-  `scripts/benchmark/checkpoint/bench_channels.py` (per-thread rows/bytes,
-  SQLite and Postgres) plus the contract test suite passing.
+- Measurement first: proposals must include before/after per-thread row and
+  byte counts for the active backend plus the contract test suite passing.
 
 ## Item 4 note (large tool results)
 

@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 _RUN_DRAIN_TIMEOUT_SECONDS = 5.0
 
 
-def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
+def _enforce_mysql_for_multi_worker(config: AppConfig) -> None:
     """Refuse unsafe multi-process configurations before persistence starts.
 
     Multi-instance scheduler recovery also needs the durable run ownership
@@ -50,7 +50,7 @@ def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
 
     1. The background scheduler must be disabled for ordinary multi-worker
        mode. ``scheduler.multi_instance`` opts into the lease-aware path.
-    2. The DB backend must be Postgres — SQLite write-locks cannot support
+    2. The DB backend must be MySQL — SQLite write-locks cannot support
        concurrent multi-process access.
     3. ``run_events.backend`` must be ``db``. Memory and JSONL stores are
        process-local, so workers cannot enforce a shared singleton receipt.
@@ -76,8 +76,8 @@ def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
     run_events_backend = getattr(getattr(config, "run_events", None), "backend", None)
     run_ownership = getattr(config, "run_ownership", None)
 
-    if multi_instance_requested and backend != "postgres":
-        raise SystemExit(f"scheduler.multi_instance=true requires database.backend='postgres'. database.backend is '{backend}'. Set scheduler.multi_instance=false or configure Postgres.")
+    if multi_instance_requested and backend != "mysql":
+        raise SystemExit(f"scheduler.multi_instance=true requires database.backend='mysql'. database.backend is '{backend}'. Set scheduler.multi_instance=false or configure MySQL.")
     if multi_instance_requested and run_events_backend != "db":
         raise SystemExit(f"scheduler.multi_instance=true requires run_events.backend='db'. run_events.backend is '{run_events_backend}'. Set scheduler.multi_instance=false or configure run_events.backend: db.")
     if multi_instance_requested and (run_ownership is None or not run_ownership.heartbeat_enabled):
@@ -89,8 +89,8 @@ def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
     if config.scheduler.enabled and not multi_instance_scheduler:
         raise SystemExit(f"GATEWAY_WORKERS={workers} cannot run with scheduler.enabled=true because each worker starts its own scheduler. Set GATEWAY_WORKERS=1, scheduler.multi_instance=true, or scheduler.enabled=false.")
 
-    if backend != "postgres":
-        raise SystemExit(f"GATEWAY_WORKERS={workers} requires database.backend='postgres', but database.backend is '{backend}'. SQLite cannot support concurrent multi-process access. Set GATEWAY_WORKERS=1 or switch to Postgres.")
+    if backend != "mysql":
+        raise SystemExit(f"GATEWAY_WORKERS={workers} requires database.backend='mysql', but database.backend is '{backend}'. SQLite cannot support concurrent multi-process access. Set GATEWAY_WORKERS=1 or switch to MySQL.")
 
     if run_events_backend != "db":
         raise SystemExit(
@@ -118,16 +118,16 @@ def _validate_agent_storage(config: AppConfig) -> None:
     to open). Mirrors deermem's create_storage fail-fast and the multi-worker
     gate above.
 
-    Also warns when a multi-worker Postgres deployment leaves agent storage on
+    Also warns when a multi-worker MySQL deployment leaves agent storage on
     ``file``: custom agents created on one node's local disk are invisible to
     the others, exactly the divergence the db backend exists to fix.
     """
     agent_storage = getattr(config, "agent_storage", None)
     backend = getattr(agent_storage, "backend", "file")
     db_backend = getattr(getattr(config, "database", None), "backend", None)
-    if backend == "db" and db_backend not in ("sqlite", "postgres", "mysql"):
+    if backend == "db" and db_backend not in ("sqlite", "mysql"):
         raise SystemExit(
-            f"agent_storage.backend='db' requires database.backend to be 'sqlite', 'postgres', or 'mysql', "
+            f"agent_storage.backend='db' requires database.backend to be 'sqlite' or 'mysql', "
             f"but database.backend is '{db_backend}'. A 'memory' database is per-process and cannot "
             "share agent definitions across nodes. Set database.backend, or use agent_storage.backend='file'."
         )
@@ -135,9 +135,9 @@ def _validate_agent_storage(config: AppConfig) -> None:
         workers = int(os.environ.get("GATEWAY_WORKERS", "1"))
     except (TypeError, ValueError):
         workers = 1
-    if workers > 1 and db_backend == "postgres" and backend == "file":
+    if workers > 1 and db_backend == "mysql" and backend == "file":
         logger.warning(
-            "GATEWAY_WORKERS=%s with database.backend='postgres' but agent_storage.backend='file': "
+            "GATEWAY_WORKERS=%s with database.backend='mysql' but agent_storage.backend='file': "
             "custom agents and managed subagents are stored per-node on local disk and are not visible "
             "across workers/nodes. Set agent_storage.backend='db' to share them.",
             workers,
@@ -381,9 +381,9 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
     # Multi-worker safety gate: reject SQLite when GATEWAY_WORKERS > 1.
     # SQLite write-locks cannot support concurrent multi-process access.
     # ------------------------------------------------------------------
-    _enforce_postgres_for_multi_worker(startup_config)
+    _enforce_mysql_for_multi_worker(startup_config)
     # Reject agent_storage.backend='db' on a non-durable database, and warn on
-    # node-divergent file storage under multi-worker Postgres.
+    # node-divergent file storage under multi-worker MySQL.
     _validate_agent_storage(startup_config)
 
     async with AsyncExitStack() as stack:
@@ -549,7 +549,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
         # Startup recovery: mark inflight runs whose lease has expired as error.
         # In single-worker mode (SQLite / backend=memory), no run has a lease, so
         # all inflight rows are reclaimed (unchanged behaviour). In multi-worker
-        # mode (Postgres), only runs with an expired lease are reclaimed; runs
+        # mode (MySQL), only runs with an expired lease are reclaimed; runs
         # owned by another live worker are skipped.
         from deerflow.utils.time import now_iso
 

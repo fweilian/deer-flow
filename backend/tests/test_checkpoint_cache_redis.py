@@ -211,21 +211,21 @@ def test_db_hash_distinguishes_backends_and_targets():
     from deerflow.config.database_config import DatabaseConfig
 
     sqlite_cfg = DatabaseConfig.model_validate({"backend": "sqlite", "sqlite_dir": "/tmp/a"})
-    pg_cfg = DatabaseConfig.model_validate({"backend": "postgres", "postgres_url": "postgresql://u:p@h/db"})
-    pg_cfg2 = DatabaseConfig.model_validate({"backend": "postgres", "postgres_url": "postgresql://u:p@h/other"})
-    assert checkpoint_cache_db_hash(sqlite_cfg) != checkpoint_cache_db_hash(pg_cfg)
-    assert checkpoint_cache_db_hash(pg_cfg) != checkpoint_cache_db_hash(pg_cfg2)
-    assert len(checkpoint_cache_db_hash(pg_cfg)) == 12
+    mysql_cfg = DatabaseConfig.model_validate({"backend": "mysql", "mysql_url": "mysql://u:p@h/db"})
+    mysql_cfg2 = DatabaseConfig.model_validate({"backend": "mysql", "mysql_url": "mysql://u:p@h/other"})
+    assert checkpoint_cache_db_hash(sqlite_cfg) != checkpoint_cache_db_hash(mysql_cfg)
+    assert checkpoint_cache_db_hash(mysql_cfg) != checkpoint_cache_db_hash(mysql_cfg2)
+    assert len(checkpoint_cache_db_hash(mysql_cfg)) == 12
 
 
 def test_db_hash_stable_across_credential_rotation():
     """Same database, rotated user/password -> same cache namespace."""
     from deerflow.config.database_config import DatabaseConfig
 
-    before = DatabaseConfig.model_validate({"backend": "postgres", "postgres_url": "postgresql://alice:secret1@pg.internal:5432/deerflow"})
-    rotated = DatabaseConfig.model_validate({"backend": "postgres", "postgres_url": "postgresql://bob:secret2@pg.internal:5432/deerflow"})
-    driver_suffix = DatabaseConfig.model_validate({"backend": "postgres", "postgres_url": "postgresql+asyncpg://alice:secret1@pg.internal:5432/deerflow"})
-    other_db = DatabaseConfig.model_validate({"backend": "postgres", "postgres_url": "postgresql://alice:secret1@pg.internal:5432/other"})
+    before = DatabaseConfig.model_validate({"backend": "mysql", "mysql_url": "mysql://alice:secret1@mysql.internal:3306/deerflow"})
+    rotated = DatabaseConfig.model_validate({"backend": "mysql", "mysql_url": "mysql://bob:secret2@mysql.internal:3306/deerflow"})
+    driver_suffix = DatabaseConfig.model_validate({"backend": "mysql", "mysql_url": "mysql+asyncmy://alice:secret1@mysql.internal:3306/deerflow"})
+    other_db = DatabaseConfig.model_validate({"backend": "mysql", "mysql_url": "mysql://alice:secret1@mysql.internal:3306/other"})
     assert checkpoint_cache_db_hash(before) == checkpoint_cache_db_hash(rotated)
     assert checkpoint_cache_db_hash(before) == checkpoint_cache_db_hash(driver_suffix)
     assert checkpoint_cache_db_hash(before) != checkpoint_cache_db_hash(other_db)
@@ -234,7 +234,7 @@ def test_db_hash_stable_across_credential_rotation():
 def test_db_hash_unparseable_url_falls_back_to_raw():
     from deerflow.config.database_config import DatabaseConfig
 
-    cfg = DatabaseConfig.model_validate({"backend": "postgres", "postgres_url": "not-a-url"})
+    cfg = DatabaseConfig.model_validate({"backend": "mysql", "mysql_url": "not-a-url"})
     assert len(checkpoint_cache_db_hash(cfg)) == 12  # stable, never raises
 
 

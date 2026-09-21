@@ -170,13 +170,12 @@ class TestEnvPolicy:
             "api_key",
             "Some_Token_Here",
             # Connection-string credentials (no KEY/SECRET/TOKEN substring) — these
-            # routinely embed a password, e.g. postgresql://user:pw@host/db.
+            # routinely embed a password, e.g. mysql://user:pw@host/db.
             "DATABASE_URL",
             "REDIS_URL",
             "MONGODB_URI",
             "AMQP_URL",
             "SENTRY_DSN",
-            "POSTGRES_DSN",
             "CONN_STR",
             "GH_PAT",
             # Password vars for services whose connection strings are already blocked
@@ -194,12 +193,6 @@ class TestEnvPolicy:
             "REDIS_PASS",
             "FTP_PASS",
             "MAIL_PASS",
-            # Postgres file-based credential sources read by libpq/psql with no flag,
-            # the direct analog of MYSQL_PWD/REDISCLI_AUTH above. PGPASSFILE names a
-            # .pgpass (host:port:db:user:password); PGSERVICEFILE names a
-            # pg_service.conf that may carry a password field.
-            "PGPASSFILE",
-            "PGSERVICEFILE",
             # Credential *helpers*: each names a program that dispenses a credential
             # on demand. Inheriting the pointer is the same leak class as inheriting
             # the value, so ``*PASS*`` scrubbing them is intended. Pinned here so the

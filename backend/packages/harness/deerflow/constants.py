@@ -45,7 +45,7 @@ MCP_TMP_SUBDIR = f"{MCP_INTERNAL_DIRNAME}/tmp"
 DEFAULT_MCP_SESSION_INIT_TIMEOUT = 60.0
 
 # Durable MCP task storage/protocol limits. The runtime validators and ORM use
-# the same constants so SQLite cannot accept values that PostgreSQL later
+# the same constants so SQLite cannot accept values that MySQL later
 # rejects at its VARCHAR boundaries.
 MCP_TASK_SERVER_NAME_MAX_LENGTH = 128
 MCP_TASK_REMOTE_ID_MAX_LENGTH = 255

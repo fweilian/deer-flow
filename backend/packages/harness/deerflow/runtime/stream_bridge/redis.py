@@ -14,7 +14,7 @@ try:
     from redis.asyncio import Redis
     from redis.exceptions import RedisError, ResponseError
 except ImportError:  # pragma: no cover - only hit when the optional extra is missing
-    # ``redis`` is an optional extra (mirrors the ``postgres``/asyncpg path in
+    # ``redis`` is an optional extra, like the MySQL runtime driver path in
     # persistence/engine.py). This module is imported lazily from
     # ``make_stream_bridge`` only when ``stream_bridge.type == "redis"``, so the
     # hint surfaces exactly when a Redis bridge is requested without the package.

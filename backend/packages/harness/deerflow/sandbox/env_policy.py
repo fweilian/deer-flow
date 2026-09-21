@@ -27,8 +27,7 @@ _SECRET_NAME_PATTERNS: tuple[str, ...] = (
     "*TOKEN*",
     # ``*PASS*`` subsumes the full ``PASSWORD``/``PASSWD`` spellings *and* the
     # ubiquitous abbreviated form (``DB_PASS``, ``SMTP_PASS``, ``MYSQL_PASS``, ...),
-    # whose plaintext value is the password itself. It also covers ``PGPASSFILE``
-    # (libpq's ``.pgpass`` locator).
+    # whose plaintext value is the password itself.
     #
     # It deliberately also catches the ``*_ASKPASS`` credential helpers
     # (``GIT_ASKPASS``, ``SSH_ASKPASS``, ``SUDO_ASKPASS``). Those name a *program*
@@ -47,7 +46,7 @@ _SECRET_NAME_PATTERNS: tuple[str, ...] = (
 
 # Connection-string / credential-bearing variable names that carry no
 # KEY/SECRET/TOKEN/DSN substring but routinely embed a password (e.g.
-# ``postgresql://user:pw@host/db``). A blanket ``*URL*`` block is intentionally
+# ``mysql://user:pw@host/db``). A blanket ``*URL*`` block is intentionally
 # avoided — it would strip benign service URLs a skill may legitimately read.
 # A skill that genuinely needs one of these must declare it via required-secrets
 # (the caller then supplies it through context.secrets, and injection wins).
@@ -56,13 +55,10 @@ _SECRET_NAME_PATTERNS: tuple[str, ...] = (
 # ``MYSQL_PWD`` and ``REDISCLI_AUTH`` are the documented no-flag credential
 # sources for ``mysql`` and ``redis-cli``. ``REDIS_AUTH`` is *not* canonical for
 # any standard Redis client — it is blocked defensively because client libraries
-# and deployment charts commonly set it. ``PGSERVICEFILE`` is the Postgres analog:
-# libpq reads the ``pg_service.conf`` it points at (which may carry a password
-# field) with no flag; its sibling ``PGPASSFILE`` is already caught by ``*PASS*``.
+# and deployment charts commonly set it.
 # These need exact entries: ``PWD``/``AUTH``/``SERVICEFILE`` cannot be wildcarded,
 # since ``*PWD*`` would strip ``PWD``/``OLDPWD`` and no shared token is unique to
-# them. (``*PASS*`` already covers ``PGPASSWORD``, ``MYSQL_PASSWORD``, ``DB_PASS``,
-# ``PGPASSFILE``, ...)
+# them. (``*PASS*`` already covers ``MYSQL_PASSWORD``, ``DB_PASS``, ...)
 _BLOCKED_EXACT_NAMES: frozenset[str] = frozenset(
     {
         "DATABASE_URL",
@@ -72,8 +68,6 @@ _BLOCKED_EXACT_NAMES: frozenset[str] = frozenset(
         "MONGO_URL",
         "AMQP_URL",
         "RABBITMQ_URL",
-        "POSTGRES_URL",
-        "POSTGRESQL_URL",
         "MYSQL_URL",
         "CLICKHOUSE_URL",
         "CONNECTION_STRING",
@@ -83,7 +77,6 @@ _BLOCKED_EXACT_NAMES: frozenset[str] = frozenset(
         "MYSQL_PWD",
         "REDISCLI_AUTH",
         "REDIS_AUTH",
-        "PGSERVICEFILE",
         # ``SSH_AUTH_SOCK`` points at the host's ssh-agent socket. A sandbox
         # subprocess that inherits it can sign and authenticate with every key
         # the agent holds (git push, ssh logins) without ever reading a key

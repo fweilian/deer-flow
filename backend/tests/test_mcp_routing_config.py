@@ -14,7 +14,7 @@ def test_server_default_routing_applies_to_every_tool():
     config = ExtensionsConfig.model_validate(
         {
             "mcpServers": {
-                "postgres": {
+                "warehouse": {
                     "routing": {
                         "mode": "prefer",
                         "priority": 50,
@@ -25,7 +25,7 @@ def test_server_default_routing_applies_to_every_tool():
         }
     )
 
-    routing = resolve_effective_mcp_routing(config.mcp_servers["postgres"], "query")
+    routing = resolve_effective_mcp_routing(config.mcp_servers["warehouse"], "query")
 
     assert routing["mode"] == "prefer"
     assert routing["priority"] == 50
@@ -36,7 +36,7 @@ def test_tool_routing_override_only_replaces_explicit_fields():
     config = ExtensionsConfig.model_validate(
         {
             "mcpServers": {
-                "postgres": {
+                "warehouse": {
                     "routing": {
                         "mode": "prefer",
                         "priority": 20,
@@ -54,7 +54,7 @@ def test_tool_routing_override_only_replaces_explicit_fields():
         }
     )
 
-    routing = resolve_effective_mcp_routing(config.mcp_servers["postgres"], "query")
+    routing = resolve_effective_mcp_routing(config.mcp_servers["warehouse"], "query")
 
     assert routing == {
         "mode": "prefer",
@@ -68,7 +68,7 @@ def test_invalid_routing_mode_fails_validation():
         ExtensionsConfig.model_validate(
             {
                 "mcpServers": {
-                    "postgres": {
+                    "warehouse": {
                         "routing": {
                             "mode": "require",
                         }
@@ -99,7 +99,7 @@ def test_unknown_routing_fields_are_rejected():
         ExtensionsConfig.model_validate(
             {
                 "mcpServers": {
-                    "postgres": {
+                    "warehouse": {
                         "routing": {
                             "mode": "prefer",
                             "unknown": True,

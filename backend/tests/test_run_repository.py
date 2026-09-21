@@ -6,7 +6,7 @@ Uses a temp SQLite DB to test ORM-backed CRUD operations.
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects import mysql
 
 from deerflow.persistence.run import RunRepository
 from deerflow.runtime import CancelOutcome, RunManager, RunStatus, ThreadOperationKind
@@ -618,18 +618,8 @@ class TestRunRepository:
         assert len(captured) == 1
 
     @pytest.mark.anyio
-    async def test_aggregate_tokens_by_thread_compiles_on_postgres_dialect(self):
-        """Compile-smoke the new SELECT on the postgres dialect.
-
-        The project ships both SQLite and Postgres backends. The new aggregation
-        projects ``RunRow.token_usage_by_model`` (a JSON column) directly into
-        the row set instead of grouping on a scalar, so the SQL needs to compile
-        cleanly under PG's JSON/JSONB binding too. Pins:
-          * the JSON column is selected by name (PG would otherwise need a
-            ``::jsonb`` cast or coalesce around it)
-          * there is no GROUP BY / aggregate function left (the per-model
-            reduction now happens in Python — see issue #3645)
-        """
+    async def test_aggregate_tokens_by_thread_compiles_on_mysql_dialect(self):
+        """Compile-smoke the aggregation SELECT on the MySQL dialect."""
 
         captured = []
 
@@ -652,7 +642,7 @@ class TestRunRepository:
         repo = RunRepository(lambda: FakeSessionContext())
         await repo.aggregate_tokens_by_thread("t1")
 
-        compiled = str(captured[0].compile(dialect=postgresql.dialect()))
+        compiled = str(captured[0].compile(dialect=mysql.dialect()))
         assert "token_usage_by_model" in compiled
         assert "GROUP BY" not in compiled.upper()
 
@@ -998,30 +988,6 @@ class TestRunRepository:
         assert _is_unique_violation(ValueError("duplicate key in input data: 'email'")) is False
         assert _is_unique_violation(RuntimeError("unique violat detected in config")) is False
         assert _is_unique_violation(Exception("unique constraint failed (in a unit test mock)")) is False
-
-    @pytest.mark.anyio
-    async def test_is_unique_violation_detects_psycopg3_sqlstate(self):
-        """psycopg3 exposes the error code via ``sqlstate``, not ``pgcode``.
-
-        On Postgres (the only supported multi-worker backend), psycopg3's
-        ``sqlstate=23505`` must be detected as a unique violation without
-        falling through to the message-substring fallback.
-        """
-        from sqlalchemy.exc import IntegrityError as SAIntegrityError
-
-        from deerflow.runtime.runs.manager import _is_unique_violation
-
-        # Simulate psycopg3's sqlstate attribute on a wrapped IntegrityError
-        dbapi_err = Exception()
-        dbapi_err.sqlstate = "23505"  # psycopg3 uses sqlstate
-
-        sa_err = SAIntegrityError(
-            "duplicate key value violates unique constraint",
-            params=None,
-            orig=dbapi_err,
-        )
-
-        assert _is_unique_violation(sa_err) is True
 
     @pytest.mark.anyio
     async def test_create_thread_operation_atomic_tolerates_tz_naive_lease_on_sqlite(self, tmp_path):

@@ -75,23 +75,6 @@ imagePullSecrets:
 {{- printf "%s-app" (include "deer-flow.fullname" .) -}}
 {{- end -}}
 
-{{/* Name of the postgres StatefulSet/Service. */}}
-{{- define "deer-flow.postgresFullname" -}}
-{{- printf "%s-postgres" (include "deer-flow.fullname" .) -}}
-{{- end -}}
-
-{{/* Name of the Secret holding DATABASE_URL (and, in bundled mode, the
-     postgres superuser password). Resolution order:
-       1. postgresql.external.existingSecret (user-managed, key=database-url)
-       2. postgresql.existingSecret          (user-managed, bundled image)
-       3. chart-managed secret `<release>-postgres`
-     Only #3 is created by this chart; #1/#2 must exist already. */}}
-{{- define "deer-flow.databaseUrlSecret" -}}
-{{- if .Values.postgresql.external.existingSecret -}}{{- .Values.postgresql.external.existingSecret -}}
-{{- else if .Values.postgresql.existingSecret -}}{{- .Values.postgresql.existingSecret -}}
-{{- else -}}{{- include "deer-flow.postgresFullname" . -}}{{- end -}}
-{{- end -}}
-
 {{/* Name of the redis StatefulSet/Service. */}}
 {{- define "deer-flow.redisFullname" -}}
 {{- printf "%s-redis" (include "deer-flow.fullname" .) -}}

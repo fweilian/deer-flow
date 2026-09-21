@@ -25,7 +25,7 @@ image:
 
 # -- Gateway (backend) deployment.
 gateway:
-  replicas: 1               # Safe default. Postgres + the Redis stream bridge are
+  replicas: 1               # Safe default. MySQL + the Redis stream bridge are
                             # wired, but multi-replica needs issue #3948's run-control
                             # work (cancel/dedup/reconcile). Scheduler multi_instance
                              # recovery is safe only when its config prerequisites are met;
@@ -111,49 +111,6 @@ provisioner:
   nodeHost: ""
   # -- Sandbox container port (must match the sandboxImage's listening port).
   sandboxPort: 8080
-
-# -- PostgreSQL database. Bundled mode (default) deploys a single-instance
-#    postgres StatefulSet; set `enabled: false` to use an external managed DB.
-#    The gateway reads DATABASE_URL from the resolved Secret and config.yaml
-#    references it as $DATABASE_URL in database.postgres_url.
-postgresql:
-  # -- Deploy a bundled postgres StatefulSet. Disable to use an external DB.
-  enabled: true
-  image:
-    repository: postgres
-    tag: "16"
-  auth:
-    database: deerflow
-    username: deerflow
-    # -- Password auto-generated (32 chars, persisted across upgrades) when
-    #    empty. Ignored if existingSecret is set.
-    password: ""
-  # -- Use an existing Secret (key `database-url`, plus `postgres-password`
-  #    in bundled mode) instead of generating one. Skips Secret creation.
-  existingSecret: ""
-  primary:
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        cpu: "1"
-        memory: 1Gi
-    persistence:
-      enabled: true
-      storageClass: ""           # "" = cluster default
-      accessMode: ReadWriteOnce  # RWX (NFS) only needed if postgres itself is HA
-      size: 20Gi
-  # -- External postgres (used when `enabled: false`). Provide either a full
-  #    `databaseUrl` (chart wraps it into a Secret for you) or an
-  #    `existingSecret` you manage (key `database-url`).
-  external:
-    # -- Full DSN, e.g. postgresql://user:pass@host:5432/deerflow. Chart
-    #    writes it into the Secret so it never touches the gateway env directly.
-    databaseUrl: ""
-    # -- Secret you manage (key `database-url`). Use this with External Secrets
-    #    / Vault / Sealed Secrets so the DSN never appears in values files.
-    existingSecret: ""
 
 # -- Redis stream bridge. The gateway stores per-run SSE events in Redis Streams
 #    so live run events reach a client connected to any gateway pod (cross-pod
@@ -269,11 +226,11 @@ config: |
     replicas: 3
 
   database:
-    # PostgreSQL is the default backend (bundled StatefulSet, or external).
-    # DATABASE_URL is injected from the postgres Secret; $DATABASE_URL is
-    # resolved by the harness before the config is instantiated.
-    backend: postgres
-    postgres_url: $DATABASE_URL
+    # Production uses an externally managed MySQL 8.0.24+ database. Supply
+    # MYSQL_DATABASE_URL through `secrets`; Runtime verifies schema only and
+    # never performs DDL.
+    backend: mysql
+    mysql_url: $MYSQL_DATABASE_URL
     pool_recycle: 300
     command_timeout: 30
 
@@ -290,14 +247,6 @@ config: |
     force_path_style: true
     verify_tls: true
     key_prefix: deer-flow/v1
-
-  # The LangGraph Store (cross-thread memory + thread list) reads this legacy
-  # `checkpointer:` section — it does NOT fall back to `database:` the way the
-  # checkpointer does. Point it at the same postgres so the Store is shared
-  # across gateway pods (required for multi-replica operation).
-  checkpointer:
-    type: postgres
-    connection_string: $DATABASE_URL
 
   # Stream bridge: `redis` (default) stores per-run SSE events in Redis Streams
   # so live run events reach a client on any gateway pod (cross-pod SSE delivery

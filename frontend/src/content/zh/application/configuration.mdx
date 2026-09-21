@@ -161,26 +161,26 @@ database:
 
 SQLite 模式会把数据写入同一个 `deerflow.db` 文件。它适合开发或单用户部署，但生产并发流量可能触发 SQLite 的单写者限制，出现 `sqlite3.OperationalError: database is locked`。
 
-生产环境或多用户部署请使用 Postgres：
+生产环境或多用户部署请使用 MySQL：
 
 ```yaml
 database:
-  backend: postgres
-  postgres_url: $DATABASE_URL
+  backend: mysql
+  mysql_url: $MYSQL_DATABASE_URL
 
 run_events:
   backend: db
 ```
 
-在环境变量中设置 `DATABASE_URL`，例如 `postgresql://user:password@localhost:5432/deerflow`。
+在环境变量中设置 `MYSQL_DATABASE_URL`，例如 `mysql+asyncmy://user:password@localhost:3306/deerflow`。
 
-本地运行时安装 PostgreSQL 支持：
+本地运行时安装 MySQL 支持：
 
 ```bash
-cd backend && uv sync --all-packages --extra postgres
+cd backend && uv sync --all-packages --extra mysql
 ```
 
-Docker 或脚本启动场景，在安装或构建前设置 `UV_EXTRAS=postgres`。旧的独立 `checkpointer` 配置仍然兼容，但新的部署应优先使用 `database`。
+Docker 或脚本启动场景，在安装或构建前设置 `UV_EXTRAS=mysql`。旧的独立 `checkpointer` 配置仍然兼容，但新的部署应优先使用 `database`。
 
 ## 前端环境变量
 

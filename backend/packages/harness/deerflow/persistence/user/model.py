@@ -4,7 +4,7 @@ Lives in the harness persistence package so it is picked up by
 ``Base.metadata.create_all()`` alongside ``threads_meta``, ``runs``,
 ``run_events``, and ``feedback``. Using the shared engine means:
 
-- One SQLite/Postgres database, one connection pool
+- One SQLite/MySQL database, one connection pool
 - One schema initialisation codepath
 - Consistent async sessions across auth and persistence reads
 """
@@ -21,13 +21,9 @@ from deerflow.persistence.datetime_compat import UTCDateTime
 
 # Single source of truth for the index name, shared with
 # app.gateway.auth.repositories.sqlite._is_oauth_identity_violation (which
-# has to match a Postgres driver error's constraint_name against exactly
+# has to match a MySQL driver error's key name against exactly
 # this string). Previously that name was a separate hardcoded literal
-# there, with no test catching the two drifting apart. Migration files
-# under persistence/migrations/versions/ intentionally do NOT import this
-# -- migrations are frozen historical DDL, not a live view of the model --
-# so 0018_oauth_identity_pg_partial.py keeps its own literal by
-# convention (consistent with every other revision in that package).
+# there, with no test catching the two drifting apart.
 OAUTH_IDENTITY_INDEX_NAME = "idx_users_oauth_identity"
 
 
@@ -70,28 +66,13 @@ class UserRow(Base):
     token_version: Mapped[int] = mapped_column(nullable=False, default=0)
 
     __table_args__ = (
-        # sqlite_where alone is a SQLAlchemy dialect-specific kwarg -- it
-        # does not apply on the postgresql dialect, so a table created
-        # against Postgres with only sqlite_where builds a FULL
-        # (non-partial) unique index instead of a partial one. This is
-        # NOT a correctness bug: verified empirically against a live
-        # Postgres instance that a full index already enforces the
-        # intended semantics on its own -- Postgres (like SQLite) treats
-        # NULL as never-equal-to-NULL in a unique index, so real
-        # (provider, id) duplicates are already rejected and unlimited
-        # (NULL, NULL) rows are already allowed, per standard SQL NULL
-        # handling, independent of the WHERE predicate. postgresql_where
-        # is added for two smaller, real reasons instead: (1) it matches
-        # the comment above literally (a partial index, on both
-        # backends), and (2) a partial index only indexes non-NULL rows,
-        # so it stays smaller and cheaper to maintain as the
-        # plain-password-account rows (the common case) accumulate.
+        # SQLite uses a partial index for local development. The frozen MySQL
+        # baseline owns the production index.
         Index(
             OAUTH_IDENTITY_INDEX_NAME,
             "oauth_provider",
             "oauth_id",
             unique=True,
             sqlite_where=text("oauth_provider IS NOT NULL AND oauth_id IS NOT NULL"),
-            postgresql_where=text("oauth_provider IS NOT NULL AND oauth_id IS NOT NULL"),
         ),
     )

@@ -16,7 +16,7 @@ class _Args(BaseModel):
     query: str = Field(..., description="query")
 
 
-def _tool(name: str = "postgres_query") -> StructuredTool:
+def _tool(name: str = "warehouse_query") -> StructuredTool:
     async def _call(query: str) -> str:
         return query
 
@@ -77,11 +77,11 @@ def test_get_mcp_routing_returns_none_for_off_mode():
 async def test_get_mcp_tools_tags_effective_routing_metadata(transport: str):
     from deerflow.mcp.tools import get_mcp_tools
 
-    tool = _tool("postgres_query")
+    tool = _tool("warehouse_query")
     extensions_config = ExtensionsConfig.model_validate(
         {
             "mcpServers": {
-                "postgres": {
+                "warehouse": {
                     "type": transport,
                     "url": "http://localhost:8000/mcp",
                     "command": "npx",
@@ -107,7 +107,7 @@ async def test_get_mcp_tools_tags_effective_routing_metadata(transport: str):
         patch("deerflow.mcp.tools.ExtensionsConfig.from_file", return_value=extensions_config),
         patch(
             "deerflow.mcp.tools.build_servers_config",
-            return_value={"postgres": {"transport": transport, "url": "http://localhost:8000/mcp", "command": "npx"}},
+            return_value={"warehouse": {"transport": transport, "url": "http://localhost:8000/mcp", "command": "npx"}},
         ),
         patch("deerflow.mcp.tools.get_initial_oauth_headers", return_value={}),
         patch("deerflow.mcp.tools.build_oauth_tool_interceptor", return_value=None),

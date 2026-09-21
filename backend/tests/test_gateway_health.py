@@ -3,7 +3,6 @@
 import asyncio
 import pathlib
 import sqlite3
-import sys
 import time
 from contextlib import asynccontextmanager
 
@@ -181,7 +180,7 @@ async def test_concurrent_readiness_requests_do_not_open_concurrent_probe_connec
     """Public /health/ready must serialize connection-opening probes.
 
     An unauthenticated thundering herd must never translate into an unbounded
-    number of new database connections (e.g. past PostgreSQL
+    number of new database connections (e.g. past MySQL
     max_connections): at most one probe connection may be in flight at a time
     per process.
     """
@@ -266,19 +265,6 @@ async def test_probe_checkpointer_sqlite_in_memory_is_not_configured(conn_string
 
 
 @pytest.mark.anyio
-async def test_probe_checkpointer_postgres_without_psycopg_is_unreachable(monkeypatch):
-    monkeypatch.setitem(sys.modules, "psycopg", None)
-
-    result = await _probe_checkpointer_backend(
-        CheckpointerConfig(
-            type="postgres",
-            connection_string="postgresql://user:pass@localhost:5432/deerflow",
-        )
-    )
-
-    assert result == DATABASE_UNREACHABLE
-
-
 @pytest.mark.anyio
 async def test_probe_checkpointer_mysql_uses_mysql_probe(monkeypatch):
     async def _ok(conn_string: str) -> str:

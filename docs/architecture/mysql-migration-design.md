@@ -1,12 +1,17 @@
 # PostgreSQL → MySQL 8.0.24 迁移设计
 
-> **文档类型**：只读代码调查 + Schema 分析 + 迁移设计（**权威口径**）
+> **文档类型**：只读代码调查 + Schema 分析 + 迁移设计（冻结口径）
 > **调查基线**：`deer-flow` 仓库 HEAD = **`a55e5734`**（`feat_portal` 分支）
 > **目标数据库**：**MySQL 8.0.24** + InnoDB
 > **结论档位**：目标 **`Moderate`**（条件：Gate V5 通过）；**V5 通过前按 `Feasible with significant changes` 计**
 >
-> 本文只保留**当前设计与结论**，不记录设计演进过程。
-> 全部数字均在上表 HEAD 上由 ORM 元数据反射 + 全仓扫描重新统计（§16 证据清单）。
+> **G6 完成后的当前实现**：生产关系型后端仅为 MySQL 8.0.24；PostgreSQL runtime、
+> drivers、deployment dependency 与 legacy migration chain 均已删除。应用 schema 使用冻结的
+> `0001_mysql_baseline` 单 head，checkpoint schema 使用独立 MySQL 运维制品；生产 runtime
+> 不执行 DDL。
+>
+> 本文保留上表 `a55e5734` 调查基线的冻结设计证据。除前述 G6 最终状态外，文中所有旧路径、
+> PG 链和扫描数字均描述该**历史调查基线**，不描述当前 active source tree。
 >
 > **相关文档**：
 > [`mysql-goals.md`](./mysql-goals.md)（执行计划）、[`mysql-goal0-audit.md`](./mysql-goal0-audit.md)（G0 审计）、
@@ -202,9 +207,9 @@ mysql = [
 > `subagent_batch_items` 23 列 / 3 索引 / 3 JSON / 6 时间列；
 > `subagent_batches` 17 列 / 4 索引 / 1 JSON / 3 时间列。
 >
-> ⚠️ **历史 PG 迁移文件仍留在仓库**（`persistence/migrations/versions/0011_mcp_tasks.py`、
-> `0016_subagent_batches.py`）：它们属于**不可变的 PG 历史链**，只作审计用，**不由 Gateway 回放**。
-> **不要因为看到这两个文件就以为模块还在。**
+> ⚠️ 在该历史调查基线中，PG 迁移文件仍留在仓库（`persistence/migrations/versions/0011_mcp_tasks.py`、
+> `0016_subagent_batches.py`）。G6 已将整条 PG migration chain 从 active source tree 删除；
+> 不要将此历史证据误读为当前模块或迁移路径。
 
 ### 2.3 Runtime 范围（G0 之后生效）
 
@@ -3515,7 +3520,7 @@ Goal 5  删除 PostgreSQL
 | 配置模型 | `config/database_config.py:142-209`、`config/checkpointer_config.py:9-32`、`config/object_storage_config.py`、`config/app_config.py:323-329,473-519` |
 | PostgreSQL 适配层 | `persistence/postgres_schema.py`、`persistence/engine.py:30-50,58-92,117-131,169-233`、`persistence/bootstrap.py`（700 行） |
 | ORM 模型 | `persistence/base.py` + 12 个 `*/model.py`（**12 张应用表 / 139 列**，逐表列数见 §2.2） |
-| Migration（PG 链，**immutable、不被 MySQL 引用**） | `persistence/migrations/versions/0001_baseline.py` … `0023_user_preferences.py`（24 个文件）、`migrations/env.py:92-101`、`migrations/_helpers.py:31-128`、`migrations/_env_filters.py:28-35`、`migrations/AGENTS.md:118-142`（**含 `:128` 的"独立 alembic chain + 独立 `version_table`"先例**） |
+| Migration（历史调查基线中的 PG 链；G6 已删除） | `persistence/migrations/versions/0001_baseline.py` … `0023_user_preferences.py`（24 个文件）、`migrations/env.py:92-101`、`migrations/_helpers.py:31-128`、`migrations/_env_filters.py:28-35`、`migrations/AGENTS.md:118-142`（**含 `:128` 的"独立 alembic chain + 独立 `version_table`"先例**） |
 | **Bootstrap** | `persistence/bootstrap.py`：三分支状态机、`_MIGRATIONS_DIR`（**单 `script_location`**）、`_HEAD_REVISION:109` / `_KNOWN_REVISIONS:110` **模块级缓存**、`_get_head_revision():331-340`、`_get_known_revisions():345-351`、`_CANONICAL_0019_SCHEMA_FLOOR:134-171`、`_BASELINE_TABLE_NAMES:198-210`、`_BASELINE_INDEX_NAMES:215-249`、`_PG_LOCK_KEY:183`、`_read_database_revision()`（要求**恰好一行**）、`bootstrap_schema(engine, *, backend, postgres_schema="")` |
 | Checkpointer | `runtime/checkpointer/{provider,async_provider,cached_saver}.py`、`checkpoint_patches.py`、`runtime/checkpoint_mode.py:1-70`（`full` / `delta` 的定义） |
 | **Store（删除对象）** | `runtime/store/{provider,async_provider,_sqlite_utils}.py`；唯一真实消费者 `persistence/thread_meta/memory.py:25-27`；构造点 `app/gateway/deps.py:435`（**无条件**）与 `:498`；5 处 `store=` 挂载点 |
@@ -3557,4 +3562,3 @@ Goal 5  删除 PostgreSQL
 第三方包 wheel 的源码阅读、ORM 元数据反射、方言编译探针，
 以及**真实 MySQL 8.0.24 上的执行探针**
 （脚本、wheel、渲染出的 SQL 均置于 `/tmp`，不进仓库）。
-

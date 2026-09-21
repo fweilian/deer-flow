@@ -753,7 +753,7 @@ class TestThreadMetaRepository:
 
 
 class TestJsonMatchCompilation:
-    """Verify compiled SQL for both SQLite and PostgreSQL dialects."""
+    """Verify compiled SQL for SQLite and MySQL dialects."""
 
     def test_json_match_compiles_sqlite(self):
         from sqlalchemy import Column, MetaData, String, Table, create_engine
@@ -794,48 +794,6 @@ class TestJsonMatchCompilation:
         sql = str(str_expr.compile(dialect=engine.dialect, compile_kwargs={"literal_binds": True}))
         assert "json_type" in sql
         assert "'text'" in sql
-
-    def test_json_match_compiles_pg(self):
-        from sqlalchemy import Column, MetaData, String, Table
-        from sqlalchemy.dialects import postgresql
-        from sqlalchemy.types import JSON
-
-        from deerflow.persistence.json_compat import json_match
-
-        metadata = MetaData()
-        t = Table("t", metadata, Column("data", JSON), Column("id", String))
-        dialect = postgresql.dialect()
-
-        cases = [
-            (None, "json_typeof(t.data -> 'k') = 'null'"),
-            (True, "(json_typeof(t.data -> 'k') = 'boolean' AND (t.data ->> 'k') = 'true')"),
-            (False, "(json_typeof(t.data -> 'k') = 'boolean' AND (t.data ->> 'k') = 'false')"),
-        ]
-        for value, expected_fragment in cases:
-            expr = json_match(t.c.data, "k", value)
-            sql = expr.compile(dialect=dialect, compile_kwargs={"literal_binds": True})
-            assert str(sql) == expected_fragment, f"value={value!r}: {sql}"
-
-        # int: CASE guard prevents CAST error when 'number' also matches floats
-        int_expr = json_match(t.c.data, "k", 42)
-        sql = str(int_expr.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
-        assert "json_typeof" in sql
-        assert "'number'" in sql
-        assert "BIGINT" in sql
-        assert "CASE WHEN" in sql
-        assert "'^-?[0-9]+$'" in sql
-
-        # float: uses DOUBLE PRECISION cast
-        float_expr = json_match(t.c.data, "k", 3.14)
-        sql = str(float_expr.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
-        assert "json_typeof" in sql
-        assert "'number'" in sql
-        assert "DOUBLE PRECISION" in sql
-
-        str_expr = json_match(t.c.data, "k", "hello")
-        sql = str(str_expr.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
-        assert "json_typeof" in sql
-        assert "'string'" in sql
 
     def test_json_match_rejects_unsafe_key(self):
         from sqlalchemy import Column, MetaData, String, Table
@@ -904,7 +862,7 @@ class TestJsonMatchCompilation:
     def test_compiler_raises_on_escaped_key(self):
         """Compiler raises ValueError even when __init__ validation is bypassed."""
         from sqlalchemy import Column, MetaData, String, Table, create_engine
-        from sqlalchemy.dialects import postgresql
+        from sqlalchemy.dialects import mysql
         from sqlalchemy.types import JSON
 
         from deerflow.persistence.json_compat import json_match
@@ -920,7 +878,7 @@ class TestJsonMatchCompilation:
             str(elem.compile(dialect=engine.dialect, compile_kwargs={"literal_binds": True}))
 
         with pytest.raises(ValueError, match="Key escaped validation"):
-            str(elem.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+            str(elem.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
 
 
 class TestJsonValueMatches:

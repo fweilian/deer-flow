@@ -19,7 +19,7 @@ Usage::
 
     python scripts/migrate_agents_to_db.py [--dry-run]
 
-Requires ``database.backend`` to be ``sqlite``, ``postgres``, or ``mysql`` in config.yaml.
+Requires ``database.backend`` to be ``sqlite`` or ``mysql`` in config.yaml.
 """
 
 from __future__ import annotations
@@ -49,9 +49,9 @@ def main() -> int:
 
     config = get_app_config()
     db_backend = getattr(config.database, "backend", None)
-    if db_backend not in ("sqlite", "postgres", "mysql"):
+    if db_backend not in ("sqlite", "mysql"):
         logger.error(
-            "database.backend is %r; this importer needs 'sqlite', 'postgres', or 'mysql'. Set it in config.yaml (the same database the gateway uses).",
+            "database.backend is %r; this importer needs 'sqlite' or 'mysql'. Set it in config.yaml (the same database the gateway uses).",
             db_backend,
         )
         return 1

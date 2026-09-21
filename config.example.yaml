@@ -1699,13 +1699,6 @@ skill_evolution:
 #   type: sqlite
 #   connection_string: checkpoints.db
 #
-# checkpointer:
-#   type: postgres
-#   connection_string: postgresql://user:password@localhost:5432/deerflow
-#   # Optional: place LangGraph checkpointer/store tables in this schema.
-#   # Leave empty to use the server default search_path, usually public.
-#   postgres_schema: deerflow
-
 # ============================================================================
 # Database
 # ============================================================================
@@ -1714,7 +1707,6 @@ skill_evolution:
 #
 # backend: memory  -- No persistence, data lost on restart
 # backend: sqlite  -- Single-node deployment, files in sqlite_dir
-# backend: postgres -- Legacy production multi-node deployment
 # backend: mysql    -- MySQL 8.0.24 deployment (requires DBA-run migrations)
 #
 # If this section is omitted or empty in config.yaml, DeerFlow uses:
@@ -1724,26 +1716,23 @@ skill_evolution:
 # SQLite mode uses a single deerflow.db file with WAL journal mode
 # for the checkpointer, Store, and application data.
 #
-# Postgres mode: put your connection URL in .env as DATABASE_URL,
-# then reference it here with $DATABASE_URL.
-#
 # Install the driver — Issue #2754 fix lands `UV_EXTRAS` in every code path:
-#   Local      `make dev` auto-detects from `database.backend: postgres` below
-#              and passes `--extra postgres` to `uv sync` on every restart, so
-#              the extra is no longer wiped. To opt in explicitly (or layer
-#              extras like `postgres,ollama`), set in project-root .env:
-#                  UV_EXTRAS=postgres
+#   Local      `make dev` auto-detects from `database.backend: mysql` below
+#              and passes `--extra mysql` to `uv sync` on every restart. To
+#              opt in explicitly (or layer extras like `mysql,ollama`), set
+#              in project-root .env:
+#                  UV_EXTRAS=mysql
 #   Docker dev `make docker-start` reads `UV_EXTRAS` from project-root .env via
 #              `env_file`. Set:
-#                  UV_EXTRAS=postgres
-#              Multiple extras (`postgres,ollama`) supported here too — see
+#                  UV_EXTRAS=mysql
+#              Multiple extras (`mysql,ollama`) supported here too — see
 #              docker/dev-entrypoint.sh.
-#   Docker image build-arg `UV_EXTRAS=postgres docker compose build`
+#   Docker image build-arg `UV_EXTRAS=mysql docker compose build`
 #              supports comma- or whitespace-separated extras at build time
 #              (backend/Dockerfile expands them to repeated `--extra` flags).
 #
 # First-time bootstrap (before `make dev`):
-#   cd backend && uv sync --all-packages --extra postgres
+#   cd backend && uv sync --all-packages --extra mysql
 #   (--all-packages propagates the extra into workspace members — see PR #2584)
 #
 # NOTE: When both `checkpointer` and `database` are configured,
@@ -1755,57 +1744,12 @@ skill_evolution:
 #   sqlite_dir: .deer-flow/data
 #
 # database:
-#   backend: postgres
-#   postgres_url: $DATABASE_URL
-#   # Optional: place DeerFlow ORM tables and LangGraph checkpointer/store
-#   # tables in this schema. Leave empty to use the server default
-#   # search_path, usually public.
-#   postgres_schema: deerflow
-#
-# database:
 #   backend: mysql
 #   mysql_url: $MYSQL_DATABASE_URL
 #   # Install with: cd backend && uv sync --all-packages --extra mysql
 #   # Run the DBA-owned application and checkpoint migration artifacts before
-#   # starting Gateway. Runtime never creates MySQL schema. Checkpoint schema
-#   # validation is active now; final Application revision startup/readiness
-#   # binding is completed with the frozen Goal 5 baseline.
-#
-# postgres_schema only takes effect for new tables. On startup DeerFlow runs
-# CREATE SCHEMA IF NOT EXISTS and pins the connection search_path; it never
-# moves existing tables, so third-party tables in `public` are left untouched.
-#
-# Migrating an EXISTING deployment from `public` to a dedicated schema:
-#   1. Stop the DeerFlow services.
-#   2. Move EVERY DeerFlow-owned table AND the Alembic state into the new schema
-#      (run as the DB owner). Missing any table strands its rows: after restart
-#      DeerFlow recreates an empty counterpart in the target schema and the old
-#      rows stay invisible in `public`. Moving the ORM tables but leaving
-#      `alembic_version` behind is especially dangerous -- Gateway rejects a
-#      legacy schema rather than replaying historical migrations.
-#        CREATE SCHEMA IF NOT EXISTS deerflow;
-#        -- Application ORM tables:
-#        ALTER TABLE public.runs                  SET SCHEMA deerflow;
-#        ALTER TABLE public.run_events            SET SCHEMA deerflow;
-#        ALTER TABLE public.threads_meta          SET SCHEMA deerflow;
-#        ALTER TABLE public.feedback              SET SCHEMA deerflow;
-#        ALTER TABLE public.users                 SET SCHEMA deerflow;
-#        ALTER TABLE public.agents                SET SCHEMA deerflow;
-#        -- Scheduled-task tables:
-#        ALTER TABLE public.scheduled_tasks       SET SCHEMA deerflow;
-#        ALTER TABLE public.scheduled_task_runs   SET SCHEMA deerflow;
-#        -- Alembic migration state (REQUIRED -- see note above):
-#        ALTER TABLE public.alembic_version       SET SCHEMA deerflow;
-#      The DeerFlow-owned set grows over time; discover any tables the list
-#      above misses (as the DeerFlow DB owner/role) with:
-#        SELECT table_name FROM information_schema.tables WHERE table_schema='public';
-#      LangGraph checkpointer/store table names also vary by version -- list them
-#      the same way, then ALTER ... SET SCHEMA deerflow for each (e.g. checkpoints,
-#      checkpoint_blobs, checkpoint_writes, checkpoint_migrations, store,
-#      store_migrations).
-#   3. Set postgres_schema: deerflow here and restart.
-#   4. Verify with `SHOW search_path;` and a smoke test (create a run, read
-#      its history). The `public` schema should gain no new DeerFlow tables.
+#   # starting Gateway. Runtime verifies both schemas but never creates or
+#   # mutates MySQL DDL; the DBA owns all application and checkpoint artifacts.
 database:
   backend: sqlite
   sqlite_dir: .deer-flow/data
@@ -1815,27 +1759,27 @@ database:
 # ============================================================================
 # Where the ChannelManager records inbound webhook dedupe state.
 #
-# backend: auto     -- (default) Postgres whenever database.backend=postgres,
+# backend: auto     -- (default) MySQL whenever database.backend=mysql,
 #                       including multi-replica K8s where each pod runs a single
 #                       worker but shares one DB. Otherwise an in-process memory
 #                       store (single-DB, single-pod).
-#                       NOTE: multi-replica deployments must use a Postgres DB;
+#                       NOTE: multi-replica deployments must use a MySQL DB;
 #                       if database.backend is sqlite/memory, 'auto' falls back to
 #                       the per-pod memory store and cross-pod dedupe is disabled.
 # backend: memory   -- In-process store only. Per-pod: a webhook redelivered to
 #                       a DIFFERENT replica is NOT deduped. Not recommended for
 #                       multi-worker deployments (logs a startup WARNING).
-# backend: postgres -- Share dedupe state across pods via the application DB.
+# backend: mysql    -- Share dedupe state across pods via the application DB.
 #                       REQUIRED for any multi-replica deployment. If
-#                       database.backend is not 'postgres', a WARNING is logged and
+#                       database.backend is not 'mysql', a WARNING is logged and
 #                       the store falls back to the in-process memory store.
 #
 # dedupe_storage:
 #   backend: auto
 
-  # Recycle app ORM PostgreSQL/MySQL connections before the environment's idle cutoff.
+  # Recycle app ORM MySQL connections before the environment's idle cutoff.
   pool_recycle: 300
-  # App ORM PostgreSQL/MySQL connection timeout. Set to null to disable it or raise it
+  # App ORM MySQL connection timeout. Set to null to disable it or raise it
   # for intentionally long commands.
   command_timeout: 30
   # Restart required. Use one value across every process sharing this database.
@@ -1931,7 +1875,7 @@ run_events:
 #                   Node-local without a shared mount.
 # backend: db    -- Both definition types use the shared SQL persistence layer,
 #                   so every node sees them. Requires database.backend to be
-#                   'sqlite', 'postgres', or 'mysql' (rejected at startup on 'memory').
+#                   'sqlite' or 'mysql' (rejected at startup on 'memory').
 #
 # Switching an existing install to 'db'? Import the on-disk Custom Agents and
 # managed subagents once with:
@@ -1955,7 +1899,7 @@ agent_storage:
 # of the box. Values above max_recursion_limit are clamped.
 #
 # The scheduler is single-instance by default. Set multi_instance: true only
-# when every Gateway instance shares Postgres, run ownership heartbeats, and
+# when every Gateway instance shares MySQL, run ownership heartbeats, and
 # database-backed run events; startup recovery then preserves live peer runs.
 #
 # scheduler:
@@ -2307,15 +2251,6 @@ authorization:
 #     enabled: true                       # false skips import and registration
 #     required: false                     # true makes load failure abort Gateway startup
 #                                         # (install --required opts in)
-#     table_prefix: example_ext_          # optional: table-name prefix this extension
-#                                         # owns under its own MetaData/migration chain.
-#                                         # Keeps `alembic revision --autogenerate`, run
-#                                         # directly against a live database, from seeing
-#                                         # those tables and proposing to drop them.
-#                                         # (`make migrate-rev` diffs a throwaway SQLite
-#                                         # built from the migration chain, so it never
-#                                         # sees them in the first place.)
-#                                         # Rejected at startup if empty, or if it would
-#                                         # also match a host-owned table name.
+#     table_prefix: example_ext_          # optional extension-owned table-name prefix
 #     config:
 #       label: example                    # extension-private values, if any

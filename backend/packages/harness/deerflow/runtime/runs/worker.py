@@ -672,7 +672,7 @@ class _SubagentEventBuffer:
     The live SSE bridge already forwards these events for real-time display; this
     additionally writes them so the subtask card's step history survives a reload.
 
-    ``RunEventStore.put`` is documented as a low-frequency path — on Postgres each
+    ``RunEventStore.put`` is documented as a low-frequency path — on MySQL each
     call opens its own transaction and takes a per-thread advisory lock. A deep
     subagent (``general-purpose`` runs up to ``max_turns=150``) emits hundreds of
     ``task_running`` steps on the hot stream loop, so persisting each with
@@ -2264,7 +2264,7 @@ async def _linearize_delta_checkpoint_resume(
     starts from a message list that still contains the answer it was supposed
     to replace — regenerating in a branched thread surfaced this as the old
     assistant message reappearing beside the new one after a reload (#4458).
-    Reproduced on postgres, sqlite, and the in-memory saver; ``full`` mode is
+    Reproduced on sqlite and the in-memory saver; ``full`` mode is
     unaffected because its checkpoints carry complete ``channel_values`` and
     need no replay.
 
@@ -2456,7 +2456,7 @@ def _new_checkpoint_marker() -> dict[str, str]:
 def _bump_channel_version(checkpointer: Any, current_version: Any) -> Any:
     """Return a strictly-different next version for a checkpoint channel.
 
-    DB-backed LangGraph savers (PostgresSaver / v4 SqliteSaver blob layout)
+    DB-backed LangGraph savers (MySQL / v4 SqliteSaver blob layout)
     persist channel blobs keyed by ``channel_versions[<channel>]``, so the
     new value MUST differ from the prior value. We delegate to the
     checkpointer's ``get_next_version`` when available — that is the canonical
@@ -2710,7 +2710,7 @@ async def _ensure_interrupted_title(*, checkpointer: Any, thread_id: str, app_co
         checkpoint.update({"id": marker["id"], "ts": marker["ts"], "channel_values": channel_values})
 
         # Bump ``channel_versions["title"]`` and declare the bump in ``new_versions``
-        # so DB-backed savers (SqliteSaver v4 / PostgresSaver) actually persist the
+        # so DB-backed savers (SqliteSaver v4 / MySQL saver) actually persist the
         # new blob — those savers strip inline ``channel_values`` from ``put`` and
         # only write blobs for channels listed in ``new_versions``. The legacy
         # single-table sqlite saver ignores ``new_versions`` and inlines the

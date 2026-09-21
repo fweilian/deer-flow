@@ -97,13 +97,13 @@ async def test_mysql_engine_initialization_never_calls_schema_bootstrap(monkeypa
     engine = MagicMock()
     engine.connect.return_value = connect_cm
     engine.dispose = AsyncMock()
-    bootstrap = AsyncMock()
+    sqlite_bootstrap = AsyncMock()
     monkeypatch.setattr(engine_mod, "create_async_engine", lambda *_args, **_kwargs: engine)
-    monkeypatch.setattr("deerflow.persistence.bootstrap.bootstrap_schema", bootstrap)
+    monkeypatch.setattr("deerflow.persistence.bootstrap.bootstrap_sqlite_schema", sqlite_bootstrap)
 
     await engine_mod.init_engine("mysql", url="mysql+asyncmy://user:pass@db/deerflow")
 
-    bootstrap.assert_not_awaited()
+    sqlite_bootstrap.assert_not_awaited()
     await engine_mod.close_engine()
 
 
@@ -118,7 +118,7 @@ def test_unified_mysql_config_selects_async_only_checkpointer() -> None:
 
 @pytest.mark.integration
 def test_mysql_managed_subagent_store_uses_the_shared_sql_backend() -> None:
-    """Managed subagent CRUD must not retain a PostgreSQL-only store gate."""
+    """Managed subagent CRUD must not retain a removed-backend store gate."""
     uri = os.environ.get("TEST_MYSQL_URI")
     if not uri:
         pytest.skip("TEST_MYSQL_URI is not set")

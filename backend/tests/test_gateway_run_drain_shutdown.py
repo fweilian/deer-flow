@@ -2,12 +2,12 @@
 
 Guards bytedance/deer-flow issue #3373:
 
-    psycopg_pool.PoolClosed: the pool 'pool-1' is already closed
+    a checkpointer pool is already closed
 
 Root cause: chat runs are fire-and-forget background ``asyncio`` tasks
 (``app/gateway/services.py`` -> ``asyncio.create_task(run_agent(...))``) owned
 by nobody. On shutdown, ``langgraph_runtime``'s ``AsyncExitStack`` tore down the
-checkpointer's postgres pool while those tasks were still mid-graph. langgraph's
+checkpointer pool while those tasks were still mid-graph. langgraph's
 ``AsyncPregelLoop._checkpointer_put_after_previous`` then ran its
 ``finally: await checkpointer.aput(...)`` against the already-closed pool.
 
@@ -296,7 +296,7 @@ async def test_drain_flushes_real_graph_checkpoint_before_close():
 
     A real run is driven through ``graph.astream`` in a background task, then
     ``RunManager.shutdown()`` drains it. The checkpointer raises once closed
-    (mirroring ``psycopg_pool.PoolClosed``). Closing only happens AFTER the
+    (mirroring a closed checkpointer pool). Closing only happens AFTER the
     drain — as the gateway's AsyncExitStack does. The drain must let langgraph
     flush its final checkpoint while the checkpointer is still open, so no write
     lands against a closed checkpointer.

@@ -155,7 +155,7 @@ class ProjectRepository:
         async with self._sf() as session:
             async with session.begin():
                 # Lock the project row before touching it (FOR UPDATE on
-                # Postgres; the clause renders nothing on SQLite). Membership
+                # MySQL; the clause renders nothing on SQLite). Membership
                 # assignment (ThreadMetaRepository.set_project/create) takes
                 # the same row lock before writing ``project_id``, so an
                 # assigner either commits first and has its membership cleared

@@ -53,9 +53,7 @@ _RETRYABLE_SQLITE_ERROR_CODES = {
 }
 
 # Driver-native unique-constraint signals. These are stable across driver and
-# SQLAlchemy versions — message text is not (SQLite says "UNIQUE constraint
-# failed", Postgres says "duplicate key value violates unique constraint").
-_UNIQUE_PGCODE = "23505"
+# SQLAlchemy versions — message text is not.
 _SQLITE_UNIQUE_ERRORCODE = sqlite3.SQLITE_CONSTRAINT_UNIQUE
 
 
@@ -92,14 +90,13 @@ def _is_unique_violation(exc: BaseException) -> bool:
 
     SQLAlchemy wraps the driver's IntegrityError; the wrapped driver exception is
     reachable via ``exc.orig`` (and ``__cause__`` / ``__context__``). Prefer
-    driver-native signals — psycopg ``pgcode`` / ``sqlcode`` = "23505" and
-    sqlite3 ``sqlite_errorcode`` = ``SQLITE_CONSTRAINT_UNIQUE`` — over message
+    driver-native signals — sqlite3 ``sqlite_errorcode`` =
+    ``SQLITE_CONSTRAINT_UNIQUE`` and MySQL duplicate-key codes — over message
     matching, then fall back to message substrings for cases where the driver
     exception isn't reachable through the chain.
 
     Message text drifts across drivers and locales (SQLite raises
-    ``UNIQUE constraint failed: <table>.<index>``; Postgres raises
-    ``duplicate key value violates unique constraint``), so the code/attribute
+    ``UNIQUE constraint failed: <table>.<index>``), so the code/attribute
     checks are the load-bearing path.
     """
     pending: list[BaseException] = [exc]
@@ -110,13 +107,9 @@ def _is_unique_violation(exc: BaseException) -> bool:
             continue
         seen.add(id(current))
 
-        if getattr(current, "pgcode", None) == _UNIQUE_PGCODE:
-            return True
-        if getattr(current, "sqlcode", None) == _UNIQUE_PGCODE:
-            return True
-        if getattr(current, "sqlstate", None) == _UNIQUE_PGCODE:
-            return True
         if getattr(current, "sqlite_errorcode", None) == _SQLITE_UNIQUE_ERRORCODE:
+            return True
+        if mysql_error_code(current) == MYSQL_DUPLICATE_KEY:
             return True
 
         # Message fallbacks are belt-and-suspenders for drivers whose
@@ -148,8 +141,7 @@ def _is_active_run_conflict(exc: BaseException) -> bool:
     MySQL's 1062 is shared by every unique key. Only the generated-column
     guard for an active run represents the admission overlap contract; an
     idempotency or primary-key collision must retain its own error semantics.
-    PostgreSQL and SQLite keep their pre-existing generic unique classification
-    while those backends remain supported.
+    SQLite keeps its generic unique classification for development.
     """
     if mysql_error_code(exc) == MYSQL_DUPLICATE_KEY:
         key_name = mysql_duplicate_key_name(exc)
@@ -1883,7 +1875,7 @@ class RunManager:
     ) -> list[RunRecord]:
         """Mark persisted active runs as failed when their lease has expired.
 
-        In multi-worker deployments (Postgres), a run owned by Worker A that
+        In multi-worker deployments (MySQL), a run owned by Worker A that
         still shows ``pending`` / ``running`` after its lease expired means
         Worker A crashed or was partitioned. This worker (B) can safely claim
         and error it out because the lease was not renewed.
@@ -2319,13 +2311,13 @@ class RunManager:
 
         Chat runs execute in fire-and-forget background ``asyncio`` tasks that
         write checkpoints through a shared checkpointer. On shutdown the
-        checkpointer's resources (e.g. the postgres connection pool owned by the
+        checkpointer's resources (e.g. a database connection pool owned by the
         gateway's ``AsyncExitStack``) are torn down; if a run task is still
         mid-graph at that point, langgraph's
         ``AsyncPregelLoop._checkpointer_put_after_previous`` runs its
         ``finally: await checkpointer.aput(...)`` against the closed pool. Because
         that put runs in a langgraph-internal task (not on ``run_agent``'s call
-        stack), the resulting ``psycopg_pool.PoolClosed`` is not catchable by the
+        stack), the resulting driver pool-closed error is not catchable by the
         worker and surfaces as an unhandled exception during ``asyncio.run()``
         shutdown (bytedance/deer-flow issue #3373).
 

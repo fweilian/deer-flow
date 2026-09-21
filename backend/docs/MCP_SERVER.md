@@ -120,7 +120,7 @@ for details.
 ## Routing Hints
 
 Use `routing` when an MCP server should be preferred for specific requests, such
-as internal database questions that should use a PostgreSQL MCP tool before web
+as internal database questions that should use a MySQL MCP tool before web
 search. Routing hints are soft model guidance: they add a
 `<mcp_routing_hints>` prompt section, but they do not forbid other tools. Use
 agent-level allow/deny policy for hard restrictions. If `tool_search.enabled`
@@ -131,11 +131,11 @@ top-level `config.yaml -> tool_search.auto_promote_top_k` setting.
 ```json
 {
    "mcpServers": {
-      "postgres": {
+      "mysql": {
          "enabled": true,
          "type": "stdio",
          "command": "npx",
-         "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"],
+         "args": ["-y", "@modelcontextprotocol/server-mysql", "mysql://localhost/mydb"],
          "routing": {
             "mode": "prefer",
             "priority": 50,
@@ -332,7 +332,7 @@ into a different question. `result_artifact` must likewise serialize as JSON
 within 64 KiB; it is a small external reference, not a second result channel.
 Remote task IDs and task names are limited to 255 characters, and a task-enabled
 server name is limited to 128 characters, matching the durable SQL schema on
-both SQLite and PostgreSQL.
+both SQLite and MySQL.
 
 `error_code: "task_not_found"` is a permanent failure. Network and transport
 errors remain retryable with capped exponential backoff; the query API reports
@@ -346,7 +346,7 @@ runtime-internal. Query the current thread through:
 - `GET /api/threads/{thread_id}/mcp-tasks`
 - `GET /api/threads/{thread_id}/mcp-tasks/{task_id}`
 
-Task toolsets require `database.backend: sqlite` or `postgres`; startup fails
+Task toolsets require `database.backend: sqlite` or `mysql`; startup fails
 instead of falling back to a synchronous submit when persistence or the task
 runtime is disabled. Restart recovery also requires the remote service to keep
 the task alive and recognize its ID after DeerFlow reconnects. A stdio server
@@ -579,7 +579,7 @@ MCP servers expose tools that are automatically discovered and integrated into D
 
 MCP servers can provide access to:
 
-- **Databases** (e.g., PostgreSQL)
+- **Databases** (e.g., MySQL)
 - **External APIs** (e.g., GitHub, Brave Search)
 - **Browser automation** (e.g., Puppeteer)
 - **Custom MCP server implementations**

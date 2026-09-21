@@ -4,7 +4,7 @@ Memory and Redis bridges take their default idle heartbeat cadence from the star
 
 ### Checkpoint Channel Modes (`full` / `delta`)
 
-Checkpointer storage runs in one of two channel modes, selected by `checkpoint_channel_mode` in `config.yaml` (default `full`). `delta` mode adopts LangGraph 1.2's `DeltaChannel` for `messages`: checkpoints store a sentinel + per-step writes instead of the full message list, so storage/serde grows O(N) instead of O(N²) in turns. All checkpointer backends (memory/sqlite/postgres) serve both modes unchanged — the semantics live in the compiled graph's channel table, not in the saver.
+Checkpointer storage runs in one of two channel modes, selected by `checkpoint_channel_mode` in `config.yaml` (default `full`). `delta` mode adopts LangGraph 1.2's `DeltaChannel` for `messages`: checkpoints store a sentinel + per-step writes instead of the full message list, so storage/serde grows O(N) instead of O(N²) in turns. All checkpointer backends (memory, SQLite, and MySQL) serve both modes unchanged — the semantics live in the compiled graph's channel table, not in the saver.
 
 **Mode is process-frozen and restart-required.** `make_lead_agent` and the embedded `DeerFlowClient` freeze the resolved mode (`runtime/checkpoint_mode.py::freeze_checkpoint_channel_mode`) before compiling the graph with the mode-matched schema (`agents/thread_state.py::get_thread_state_schema`, plus `adapt_state_schema_for_mode` / `normalize_middleware_state_schemas` for middleware state). Adapted middleware schemas are cached by schema, mode, and resolved snapshot frequency so a pre-freeze ephemeral graph cannot leave a stale default-frequency schema behind. A second, different mode or frequency in the same process raises `CheckpointModeReconfigurationError`. To switch: edit config, restart.
 
@@ -18,7 +18,7 @@ Checkpointer storage runs in one of two channel modes, selected by `checkpoint_c
 
 **Replay checkpoint lookup prefers lineage and degrades only for an explicitly missing legacy parent link.** Branch and regenerate paths first walk `parent_config`, which prevents a global chronological scan from selecting a sibling created by regeneration. `CheckpointParentMissingError` alone enables the bounded newest-first history fallback in `app/gateway/checkpoint_lineage.py`; cycles, dangling/non-addressable parents, target mismatches, and depth exhaustion raise `CheckpointLineageIntegrityError` and fail closed instead of selecting a sibling. The compatibility scans request 400 raw checkpoints so up to 200 duration-only entries do not consume the effective branch-history budget; the fallback scans oldest-to-newest internally, skips duration-only checkpoints, and accepts only checkpoints with an addressable id as the replay base. A source history with no discoverable pre-user checkpoint preserves the historical single-checkpoint branch behavior instead of rejecting the branch; regeneration remains unavailable for that inherited response. Existing single-checkpoint branches are not mutated by regenerate preparation, and no raw checkpoint tuple is copied across threads because delta state depends on ancestry and pending writes. Regenerate source-run lookup uses the current thread's exact event, then the server-stamped `run_id` on the copied human message, then verified RunManager content matching; it does not read parent-thread events. When an interrupted response was streamed but never checkpointed, regeneration accepts only the latest visible human message's server-stamped `run_id` after verifying that it belongs to the same thread and still has `interrupted` status. Storage or checkpoint-mode failures are not treated as a missing base and still fail closed.
 
-**A delta-mode run cannot fork; `runtime/runs/worker.py` linearizes the resume instead.** Resuming from an older checkpoint (regenerate, or any client-supplied `checkpoint`) forks the lineage, and delta state for a fork is not materializable: `BaseCheckpointSaver.get_delta_channel_history` — and the bespoke overrides in `InMemorySaver`/`PostgresSaver` — collect **every** `pending_writes` entry stored on each on-path ancestor, but a shared parent also carries the writes of the sibling child that was abandoned. Those writes replay into the fork, so the run starts from a message list still containing the answer it was supposed to replace (#4458: regenerating in a branched thread showed the superseded assistant message beside the new one after a reload; reproduced on postgres, sqlite, and the in-memory saver). Write-to-child ownership belongs to the upstream delta contract, so DeerFlow does not reimplement the walk: `_linearize_delta_checkpoint_resume` materializes the requested checkpoint's complete state and writes every channel onto the **current head** (which has no siblings) through the state mutation graph, using `Overwrite` for reducer channels and resetting newer head-only channels to their schema default (or `None` when no constructible default exists); it then drops the `checkpoint_id` selector and lets the run proceed linearly, while the abandoned turn stays in history as the rewritten head's ancestry. The worker holds `_checkpoint_thread_lock` across `_capture_rollback_point` and the optional linear rewrite, making the rollback snapshot and rewrite atomic with graph streaming and the preceding run's duration-metadata checkpoint write. Capture preserves the complete real pre-run state; cancel-with-rollback then linearly replaces the current delta head with that captured state rather than forking the now-shared pre-run checkpoint, so the abandoned turn is restored without replaying the resume sibling's writes. The worker also recomputes the current-run message boundary from the rewritten state and fails closed (an unreadable resume checkpoint raises rather than falling back to the corrupt fork). `full` mode keeps forking — its checkpoints carry complete `channel_values` and need no replay — so LangGraph branching semantics are unchanged there. Root namespace only; subgraph namespaces are left alone.
+**A delta-mode run cannot fork; `runtime/runs/worker.py` linearizes the resume instead.** Resuming from an older checkpoint (regenerate, or any client-supplied `checkpoint`) forks the lineage, and delta state for a fork is not materializable: `BaseCheckpointSaver.get_delta_channel_history` collects **every** `pending_writes` entry stored on each on-path ancestor, but a shared parent also carries the writes of the sibling child that was abandoned. Those writes replay into the fork, so the run starts from a message list still containing the answer it was supposed to replace. Write-to-child ownership belongs to the upstream delta contract, so DeerFlow does not reimplement the walk: `_linearize_delta_checkpoint_resume` materializes the requested checkpoint's complete state and writes every channel onto the **current head** (which has no siblings) through the state mutation graph, using `Overwrite` for reducer channels and resetting newer head-only channels to their schema default (or `None` when no constructible default exists); it then drops the `checkpoint_id` selector and lets the run proceed linearly, while the abandoned turn stays in history as the rewritten head's ancestry. The worker holds `_checkpoint_thread_lock` across `_capture_rollback_point` and the optional linear rewrite, making the rollback snapshot and rewrite atomic with graph streaming and the preceding run's duration-metadata checkpoint write. Capture preserves the complete real pre-run state; cancel-with-rollback then linearly replaces the current delta head with that captured state rather than forking the now-shared pre-run checkpoint, so the abandoned turn is restored without replaying the resume sibling's writes. The worker also recomputes the current-run message boundary from the rewritten state and fails closed (an unreadable resume checkpoint raises rather than falling back to the corrupt fork). `full` mode keeps forking — its checkpoints carry complete `channel_values` and need no replay — so LangGraph branching semantics are unchanged there. Root namespace only; subgraph namespaces are left alone.
 
 **Wholesale state replacement uses a state-only mutation graph + `Overwrite`.** `update_state` values pass through channel reducers (`add_messages` merge in full, append in delta), so replacing reducer values requires `Overwrite` rather than an ordinary update. Full-mode rollback and context compaction replace `messages`; delta resume and delta rollback replace every materialized channel and reset current-head-only channels to their schema default (or `None`). These writes go through `build_state_mutation_graph(as_node, mode, state_schema)`, and `state_schema` MUST be the thread's effective schema (`graph_state_schema(assistant_graph)`), because the base-ThreadState fallback silently discards written channels contributed by custom `AgentMiddleware.state_schema`. Channels absent from a full-mode fork write inherit the parent's channel blobs, so middleware channels survive rollback/compaction (locked by `test_rollback_preserves_middleware_contributed_channels` and `test_compact_thread_context_preserves_middleware_contributed_channels`). The compiled mutation graph has one no-op node (entry = finish) whose checkpoint machinery (channels/versions/metadata) is identical to the agent graph's but schedules no pending tasks, so the restored/compacted head stays idle instead of re-triggering the agent. Never hand-write checkpoints via `checkpointer.aput` for this; raw writers elsewhere must preserve checkpoint parentage — severed ancestry breaks delta replay (see `runtime/runs/worker.py` writer parenting and `checkpoint_patches.py`).
 
@@ -115,7 +115,7 @@ undo the terminal takeover, and an existing detailed receipt is preserved when
 a worker crashed after writing it. Event stores serialize `put_if_absent` with
 ordinary thread writers: memory and JSONL provide the documented
 single-process guarantee, while the DB store adds per-thread in-process locks
-and PostgreSQL advisory locks for cross-process writers. Moving journal
+and MySQL transaction locks for cross-process writers. Moving journal
 construction ahead of preflight is receipt-only on early failure paths: a
 separate boundary flag preserves the previous completion-data semantics, so
 checkpoint incompatibility or cancellation while waiting for an older
@@ -207,50 +207,6 @@ the number of required IDs, whichever is larger; missing exact runs use targeted
 - `runtime/context_compaction.py` — compaction via accessor + mutation graph (reference consumer). Runs stamp their effective agent into server-owned checkpoint metadata; manual compaction uses that binding—not request `agent_name`—for memory policy and bucket. Missing/invalid legacy bindings and unreadable agent configs fail closed by skipping the optional flush while compaction may continue with the default model; a missing pre-binding checkpoint emits a warning so the skipped write is observable.
 - `runtime/checkpoint_cache/` + `runtime/checkpointer/cached_saver.py` — delta-mode checkpoint history cache; checkpoint state reads MUST go through `CheckpointStateAccessor`, and the checkpointer may be a `CachedHistorySaver` wrapper — never rely on concrete saver types
 - Tests: `tests/test_checkpoint_mode.py` (freeze/detect/gate), `tests/test_checkpoint_state.py` (accessor/mutation graph), `tests/test_delta_channel_checkpointers.py` (saver parity), `tests/test_threads_checkpoint_mode.py`, `tests/test_gateway_checkpoint_mode.py` (dual-mode e2e parity), `tests/test_context_compaction.py` (mutation-graph write, no scheduling), `tests/test_run_worker_rollback.py`, `tests/test_cached_history_saver.py` + `tests/test_cached_history_saver_integration.py` (history cache)
-
-**Checkpoint channel benchmark**: `scripts/benchmark/checkpoint/bench_channels.py`
-runs paired `full`/`delta` message-only StateGraphs in a fresh child process per
-case, using sync `InMemorySaver` or `SqliteSaver` so reducer, serialization, and
-saver costs stay separate from Gateway/async scheduling. Optional
-`AsyncPostgresSaver` cases are enabled only when `TEST_POSTGRES_URI` is set.
-Postgres cases use a unique thread and remove only that benchmark thread through
-the saver's public `adelete_thread` API after measurement. It reports deterministic
-correctness digests, write windows/percentiles, warm and graph-rebuilt cold reads,
-backend-neutral checkpoint/blob/write row and byte fields, aggregate logical
-checkpoint/write bytes, SQLite DB/WAL/SHM footprint, reducer replay time, and
-peak RSS as versioned JSONL. SQLite embeds channel blobs in its checkpoint
-payload, so its separate blob metrics are zero; Postgres reports its
-`checkpoint_blobs` table separately. Byte fields describe each saver's serialized
-representation and should not be treated as identical encodings across backends.
-The controller alternates mode order and rejects
-performance data when paired modes materialize different state. Its default 1 GiB
-estimated cumulative full-payload cap skips both modes of an oversized pair when
-`full` is selected, including every delta cadence in a `--snapshot-frequencies`
-sweep; intentional `--modes delta` diagnostics bypass this full-payload cap, so
-size those runs explicitly. Use `--allow-large-cases` only
-on a provisioned machine. Duplicate CSV matrix values are ignored with a warning;
-use `--repetitions` for repeated samples. Summarize paired successful repetitions
-with `scripts/benchmark/checkpoint/summarize_channels.py` (all ratios are
-`delta/full`). `--profile-dir /tmp/checkpoint-profiles` writes one cProfile
-artifact per case for attribution. Profiled rows carry `profiled: true`, and the
-summarizer automatically excludes them from baseline summaries with a warning.
-Storage-size collection relies on saver-specific diagnostic layouts; if those
-layouts change, the timing/correctness row remains successful while storage
-fields become `null` and `storage_stats_error` records the diagnostic failure.
-Example:
-
-```bash
-cd backend
-PYTHONPATH=. uv run python scripts/benchmark/checkpoint/bench_channels.py \
-  --backends sqlite --updates 100,500,999,1000,1001 --payload-bytes 128 \
-  --repetitions 7 --output /tmp/checkpoint-bench.jsonl
-TEST_POSTGRES_URI=postgresql://... \
-PYTHONPATH=. uv run python scripts/benchmark/checkpoint/bench_channels.py \
-  --backends sqlite,postgres --updates 100 --payload-bytes 128 \
-  --output /tmp/checkpoint-cross-backend.jsonl
-PYTHONPATH=. uv run python scripts/benchmark/checkpoint/summarize_channels.py \
-  /tmp/checkpoint-bench.jsonl
-```
 
 The production-shaped layer lives in
 `scripts/benchmark/checkpoint/bench_production.py`: per-case child processes

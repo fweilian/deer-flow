@@ -18,8 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 # Recycle pooled database connections before stale idle sockets can hang
 # pool_pre_ping. The command timeout bounds stalled ORM queries independently.
-POSTGRES_POOL_RECYCLE_SECONDS = 300
-POSTGRES_COMMAND_TIMEOUT_SECONDS = 30
+MYSQL_POOL_RECYCLE_SECONDS = 300
+MYSQL_COMMAND_TIMEOUT_SECONDS = 30
 
 
 def _json_serializer(obj: object) -> str:
@@ -27,34 +27,12 @@ def _json_serializer(obj: object) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 
-def _postgres_engine_kwargs(
-    *,
-    echo: bool,
-    pool_size: int,
-    pool_recycle: int = POSTGRES_POOL_RECYCLE_SECONDS,
-    command_timeout: float | None = POSTGRES_COMMAND_TIMEOUT_SECONDS,
-    connect_args: dict[str, object] | None = None,
-) -> dict[str, object]:
-    """Build the shared SQLAlchemy engine options for PostgreSQL."""
-    merged_connect_args = dict(connect_args or {})
-    if command_timeout is not None:
-        merged_connect_args["command_timeout"] = command_timeout
-    return {
-        "echo": echo,
-        "pool_size": pool_size,
-        "pool_pre_ping": True,
-        "pool_recycle": pool_recycle,
-        "connect_args": merged_connect_args,
-        "json_serializer": _json_serializer,
-    }
-
-
 def _mysql_engine_kwargs(
     *,
     echo: bool,
     pool_size: int,
-    pool_recycle: int = POSTGRES_POOL_RECYCLE_SECONDS,
-    command_timeout: float | None = POSTGRES_COMMAND_TIMEOUT_SECONDS,
+    pool_recycle: int = MYSQL_POOL_RECYCLE_SECONDS,
+    command_timeout: float | None = MYSQL_COMMAND_TIMEOUT_SECONDS,
 ) -> dict[str, object]:
     """Build SQLAlchemy options for the MySQL asyncmy application pool."""
     connect_args: dict[str, object] = {}
@@ -100,43 +78,26 @@ async def init_engine(
     url: str = "",
     echo: bool = False,
     pool_size: int = 5,
-    pool_recycle: int = POSTGRES_POOL_RECYCLE_SECONDS,
-    command_timeout: float | None = POSTGRES_COMMAND_TIMEOUT_SECONDS,
+    pool_recycle: int = MYSQL_POOL_RECYCLE_SECONDS,
+    command_timeout: float | None = MYSQL_COMMAND_TIMEOUT_SECONDS,
     sqlite_dir: str = "",
-    postgres_schema: str = "",
 ) -> None:
     """Create the async engine and session factory.
 
     Args:
-        backend: "memory", "sqlite", "postgres", or "mysql".
-        url: SQLAlchemy async URL (for sqlite/postgres/mysql).
+        backend: "memory", "sqlite", or "mysql".
+        url: SQLAlchemy async URL (for sqlite/mysql).
         echo: Echo SQL to log.
-        pool_size: Postgres connection pool size.
-        pool_recycle: Seconds before Postgres connections are recycled.
-        command_timeout: Timeout in seconds for app ORM Postgres commands, or None to disable.
+        pool_size: MySQL connection pool size.
+        pool_recycle: Seconds before MySQL connections are recycled.
+        command_timeout: Timeout in seconds for app ORM MySQL commands, or None to disable.
         sqlite_dir: Directory to create for SQLite (ensured to exist).
-        postgres_schema: Target PostgreSQL schema. Ignored for non-postgres.
     """
     global _engine, _session_factory
 
     if backend == "memory":
         logger.info("Persistence backend=memory -- ORM engine not initialized")
         return
-
-    if backend == "postgres":
-        try:
-            import asyncpg  # noqa: F401
-        except ImportError:
-            raise ImportError(
-                "database.backend is set to 'postgres' but asyncpg is not installed.\n"
-                "Install it with:\n"
-                "    cd backend && uv sync --all-packages --extra postgres\n"
-                "On the next `make dev` the postgres extra is auto-detected from\n"
-                "config.yaml (database.backend: postgres) and reinstalled, so it\n"
-                "will not be wiped again. Set UV_EXTRAS=postgres in .env to opt in\n"
-                "explicitly. Or switch to backend: sqlite in config.yaml for\n"
-                "single-node deployment."
-            ) from None
 
     if backend == "mysql":
         try:
@@ -168,9 +129,7 @@ async def init_engine(
         # tight for cross-process bootstrap: the second-N-th Gateway process
         # may need to wait while the first runs ``ALTER TABLE`` /
         # ``CREATE TABLE`` for a fresh schema. The same widened timeout is
-        # mirrored on the alembic-spawned engine in
-        # ``migrations/env.py::run_migrations_online`` so its connections
-        # behave identically.
+        # retained for local development and test connections.
         @event.listens_for(_engine.sync_engine, "connect")
         def _enable_sqlite_wal(dbapi_conn, _record):  # noqa: ARG001 — SQLAlchemy contract
             cursor = dbapi_conn.cursor()
@@ -181,20 +140,6 @@ async def init_engine(
                 cursor.execute("PRAGMA busy_timeout=30000;")
             finally:
                 cursor.close()
-    elif backend == "postgres":
-        from deerflow.persistence.postgres_schema import build_asyncpg_connect_args
-
-        pg_connect_args = build_asyncpg_connect_args(postgres_schema)
-        _engine = create_async_engine(
-            url,
-            **_postgres_engine_kwargs(
-                echo=echo,
-                pool_size=pool_size,
-                pool_recycle=pool_recycle,
-                command_timeout=command_timeout,
-                connect_args=pg_connect_args,
-            ),
-        )
     elif backend == "mysql":
         _engine = create_async_engine(
             url,
@@ -211,22 +156,11 @@ async def init_engine(
 
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
-    if backend in {"sqlite", "postgres"}:
-        # SQLite remains the default local-development backend and PostgreSQL
-        # remains supported during the migration window. Preserve their
-        # established bootstrap contract so a clean checkout and repository
-        # tests get a usable schema. The production MySQL branch below is
-        # deliberately separate and never reaches this DDL-capable path.
-        if backend == "postgres" and postgres_schema:
-            from sqlalchemy.schema import CreateSchema
+    if backend == "sqlite":
+        from deerflow.persistence.bootstrap import bootstrap_sqlite_schema
 
-            async with _engine.begin() as conn:
-                await conn.execute(CreateSchema(postgres_schema, if_not_exists=True))
-
-        from deerflow.persistence.bootstrap import bootstrap_schema
-
-        await bootstrap_schema(_engine, backend=backend, postgres_schema=postgres_schema)
-        logger.info("Persistence engine initialized with fresh-schema bootstrap: backend=%s", backend)
+        await bootstrap_sqlite_schema(_engine)
+        logger.info("Persistence engine initialized with SQLite development schema")
         return
 
     # Production MySQL owns connections only. Schema DDL belongs exclusively
@@ -276,7 +210,6 @@ async def init_engine_from_config(config) -> None:
         pool_recycle=config.pool_recycle,
         command_timeout=config.command_timeout,
         sqlite_dir=config.sqlite_dir if config.backend == "sqlite" else "",
-        postgres_schema=config.postgres_schema if config.backend == "postgres" else "",
     )
 
 
