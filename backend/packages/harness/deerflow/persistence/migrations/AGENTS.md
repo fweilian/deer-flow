@@ -1,6 +1,15 @@
 ### Schema Migrations (`packages/harness/deerflow/persistence/migrations/`)
 
-DeerFlow's application tables (`runs`, `threads_meta`, `feedback`, `users`, `run_events`, plus the four `channel_*` tables) are owned by alembic. SQLite/PostgreSQL retain a development bootstrap for clean databases. Production MySQL uses the independent `migrations_mysql/` chain and is zero-DDL at Runtime; its application and checkpoint artifacts are applied by DBA tooling. LangGraph's checkpointer tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) live in the same database but are owned by LangGraph and excluded from application alembic's view via `migrations/_env_filters.py::include_object`.
+DeerFlow's current application schema has 12 tables (`runs`, `threads_meta`,
+`feedback`, `users`, `run_events`, `scheduled_tasks`, `scheduled_task_runs`,
+`agents`, `managed_subagents`, `personal_access_tokens`, `projects`, and
+`user_preferences`). SQLite/PostgreSQL retain a development bootstrap for clean
+databases. Production MySQL uses the independent `migrations_mysql/` chain and
+is zero-DDL at Runtime; its application and checkpoint artifacts are applied by
+DBA tooling. LangGraph's checkpointer tables (`checkpoints`,
+`checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) live in the
+same database but are owned by LangGraph and excluded from application
+alembic's view via `migrations/_env_filters.py::include_object`.
 
 **Convention**: every ORM model change (new column, new table, new index) MUST be reflected in the schema artifact that owns its backend. The historical SQLite/PostgreSQL revisions remain under `migrations/versions/`, but current Runtime does not replay them. MySQL changes live under `migrations_mysql/versions/`; Gateway never executes them.
 

@@ -235,13 +235,31 @@ async def init_engine(
     if backend == "mysql":
         from sqlalchemy import text
 
-        async with _engine.connect() as conn:
-            isolation = (await conn.execute(text("SELECT @@transaction_isolation"))).scalar_one()
-        if str(isolation).upper() != "READ-COMMITTED":
+        from deerflow.persistence.bootstrap import _get_head_revision
+        from deerflow.persistence.mysql_schema import SCHEMA_ERROR
+
+        try:
+            expected_revision = await asyncio.to_thread(_get_head_revision, backend="mysql")
+            async with _engine.connect() as conn:
+                isolation = (await conn.execute(text("SELECT @@transaction_isolation"))).scalar_one()
+                try:
+                    revision_rows = (await conn.execute(text("SELECT version_num FROM alembic_version"))).all()
+                except Exception as exc:
+                    # The connection itself is valid, but the DBA-owned
+                    # application revision table is absent or unreadable.
+                    # Keep this on the same fail-closed contract as an
+                    # outdated revision rather than leaking a driver-specific
+                    # missing-table error from Runtime startup.
+                    raise RuntimeError(SCHEMA_ERROR) from exc
+            if str(isolation).upper() != "READ-COMMITTED":
+                raise RuntimeError(f"MySQL transaction isolation must be READ-COMMITTED; server reported {isolation!r}")
+            if len(revision_rows) != 1 or revision_rows[0][0] != expected_revision:
+                raise RuntimeError(SCHEMA_ERROR)
+        except Exception:
             await _engine.dispose()
             _engine = None
             _session_factory = None
-            raise RuntimeError(f"MySQL transaction isolation must be READ-COMMITTED; server reported {isolation!r}")
+            raise
     logger.info("Persistence engine initialized without schema bootstrap: backend=mysql")
 
 

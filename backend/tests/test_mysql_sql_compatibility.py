@@ -72,6 +72,7 @@ def test_json_match_mysql_uses_native_json_and_uppercase_type_names(value, requi
     compiled = str(json_match(table.c.metadata_json, "deerflow_pinned", value).compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
     if value is not None:
         assert "JSON_EXTRACT" in compiled
+        assert "JSON_TYPE(JSON_EXTRACT" in compiled
     for fragment in required_fragments:
         assert fragment in compiled
 
@@ -270,6 +271,33 @@ def test_mysql_server_enforces_generated_active_and_oauth_unique_semantics() -> 
             times.drop(connection, checkfirst=True)
             for table in (runs, occurrences, users):
                 connection.execute(text(f"DROP TABLE IF EXISTS {table}"))
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_mysql_server_executes_json_match_for_thread_metadata_queries() -> None:
+    """Pin the JSON predicate used by thread search/order on actual MySQL."""
+    uri = os.environ.get("TEST_MYSQL_URI")
+    if not uri:
+        pytest.skip("TEST_MYSQL_URI is not set")
+    from deerflow.config.database_config import DatabaseConfig
+
+    engine = create_engine(DatabaseConfig(backend="mysql", mysql_url=uri).app_sync_sqlalchemy_url)
+    table = Table(
+        f"g5_metadata_{uuid4().hex}",
+        MetaData(),
+        Column("id", Integer, primary_key=True),
+        Column("metadata_json", JSON, nullable=False),
+    )
+    try:
+        with engine.begin() as connection:
+            table.create(connection)
+            connection.execute(table.insert(), [{"id": 1, "metadata_json": {"deerflow_pinned": True}}, {"id": 2, "metadata_json": {"deerflow_pinned": False}}])
+            rows = connection.execute(select(table.c.id).where(json_match(table.c.metadata_json, "deerflow_pinned", True))).scalars().all()
+            assert rows == [1]
+    finally:
+        with engine.begin() as connection:
+            table.drop(connection, checkfirst=True)
         engine.dispose()
 
 

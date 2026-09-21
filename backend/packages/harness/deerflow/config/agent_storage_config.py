@@ -12,7 +12,7 @@ Backends:
   remains the default so zero-config development is unaffected.
 - db: Rows in the ``agents`` and ``managed_subagents`` tables of the existing
   SQL persistence layer, shared by every node. Requires ``database.backend``
-  to be ``sqlite`` or ``postgres`` (validated at startup).
+  to be ``sqlite``, ``postgres``, or ``mysql`` (validated at startup).
 
 Agent *memory* (``memory.json``) is a separate concern handled by the deermem
 storage layer and is not affected by this switch.

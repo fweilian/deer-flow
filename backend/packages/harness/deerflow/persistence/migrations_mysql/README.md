@@ -16,6 +16,9 @@ The script deliberately maps the runtime `mysql+asyncmy` URL to the migration
 process's `mysql+pymysql` URL. Gateway never calls this script, Alembic
 `upgrade`, `stamp`, or `create_all`.
 
-`0001_mysql_baseline` is intentionally not present yet: Goal 2 establishes
-this isolated infrastructure and its verification primitive; the final
-business-schema baseline is accepted later by the migration plan.
+`0001_mysql_baseline` is the frozen fresh-cutover root. It creates exactly the
+12 application tables and their MySQL-specific correctness keys. Checkpoint
+tables remain exclusively owned by `database/mysql/checkpoint/`.
+
+The baseline is intentionally immutable: a later MySQL business-schema change
+must be a new `0002+` revision, never an edit to `0001_mysql_baseline`.

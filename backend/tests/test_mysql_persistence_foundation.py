@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import runpy
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -61,6 +63,14 @@ def test_mysql_config_generates_async_and_sync_urls() -> None:
     assert sync_url_config.app_sqlalchemy_url == "mysql+asyncmy://alice:secret@db.example/deerflow"
 
 
+def test_mysql_migrator_normalizes_neutral_and_async_runtime_urls() -> None:
+    """DBA migration must never fall through to SQLAlchemy's MySQLdb dialect."""
+    script = Path(__file__).resolve().parents[1] / "scripts" / "migrate_mysql.py"
+    migration_url = runpy.run_path(str(script))["_migration_url"]
+    assert migration_url("mysql://alice:secret@db.example/deerflow").drivername == "mysql+pymysql"
+    assert migration_url("mysql+asyncmy://alice:secret@db.example/deerflow").drivername == "mysql+pymysql"
+
+
 def test_mysql_engine_kwargs_harden_the_pool_and_set_read_committed() -> None:
     kwargs = engine_mod._mysql_engine_kwargs(echo=False, pool_size=7, pool_recycle=123, command_timeout=9)
 
@@ -77,8 +87,10 @@ async def test_mysql_engine_initialization_never_calls_schema_bootstrap(monkeypa
     monkeypatch.setitem(sys.modules, "asyncmy", object())
     isolation = MagicMock()
     isolation.scalar_one.return_value = "READ-COMMITTED"
+    revision = MagicMock()
+    revision.all.return_value = [("0001_mysql_baseline",)]
     connection = MagicMock()
-    connection.execute = AsyncMock(return_value=isolation)
+    connection.execute = AsyncMock(side_effect=[isolation, revision])
     connect_cm = AsyncMock()
     connect_cm.__aenter__.return_value = connection
     connect_cm.__aexit__.return_value = False
@@ -102,6 +114,28 @@ def test_unified_mysql_config_selects_async_only_checkpointer() -> None:
 
     assert resolved.type == "mysql"
     assert resolved.connection_string == "mysql://user:pass@db/deerflow"
+
+
+@pytest.mark.integration
+def test_mysql_managed_subagent_store_uses_the_shared_sql_backend() -> None:
+    """Managed subagent CRUD must not retain a PostgreSQL-only store gate."""
+    uri = os.environ.get("TEST_MYSQL_URI")
+    if not uri:
+        pytest.skip("TEST_MYSQL_URI is not set")
+
+    from deerflow.persistence.managed_subagents import ManagedSubagentDefinition
+    from deerflow.persistence.managed_subagents.sql import SqlManagedSubagentStore
+
+    name = f"g5-managed-{uuid4().hex[:20]}"
+    store = SqlManagedSubagentStore(DatabaseConfig(backend="mysql", mysql_url=uri).app_sync_sqlalchemy_url)
+    definition = ManagedSubagentDefinition(name=name, description="G5 MySQL worker", system_prompt="Work carefully.")
+    try:
+        store.create(definition)
+        assert store.get(name).description == "G5 MySQL worker"
+        store.update(definition.model_copy(update={"enabled": False}))
+        assert store.get(name).enabled is False
+    finally:
+        store.delete(name)
 
 
 @pytest.mark.anyio
@@ -146,6 +180,58 @@ def test_checkpoint_artifact_is_complete_and_derived_from_pinned_saver() -> None
     readme = (artifact_dir / "README.md").read_text(encoding="utf-8")
     assert "SAVER_VERSION = 3.0.0" in readme
     assert "MIGRATIONS_COUNT = 22" in readme
+
+
+@pytest.mark.integration
+def test_mysql_final_baseline_migrates_an_empty_database() -> None:
+    """The frozen root creates the complete application schema in one pass."""
+    uri = os.environ.get("TEST_MYSQL_URI")
+    if not uri:
+        pytest.skip("TEST_MYSQL_URI is not set")
+
+    from alembic import command
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.engine import make_url
+
+    import deerflow.persistence.models  # noqa: F401 - populate Base metadata
+    from deerflow.persistence.base import Base
+    from deerflow.persistence.bootstrap import _get_alembic_config
+
+    root_url = make_url(DatabaseConfig(backend="mysql", mysql_url=uri).app_sync_sqlalchemy_url)
+    database = f"g5_baseline_{uuid4().hex}"
+    admin = create_engine(root_url)
+    try:
+        with admin.begin() as connection:
+            assert str(connection.execute(text("SELECT VERSION()")).scalar_one()).startswith("8.0.24")
+            connection.execute(text(f"CREATE DATABASE `{database}`"))
+
+        target_url = root_url.set(database=database)
+        command.upgrade(_get_alembic_config(type("Engine", (), {"url": target_url})(), backend="mysql"), "head")
+        target = create_engine(target_url)
+        try:
+            inspector = inspect(target)
+            assert set(inspector.get_table_names()) == {"alembic_version", *Base.metadata.tables}
+            assert len(Base.metadata.tables) == 12
+            assert sum(len(table.columns) for table in Base.metadata.tables.values()) == 139
+            generated_columns = {
+                "runs": {"active_thread_id"},
+                "scheduled_task_runs": {"active_task_id"},
+            }
+            for table_name, table in Base.metadata.tables.items():
+                reflected = {column["name"] for column in inspector.get_columns(table_name)}
+                assert reflected == {column.name for column in table.columns} | generated_columns.get(table_name, set())
+            with target.connect() as connection:
+                assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0001_mysql_baseline"
+            assert inspector.get_columns("runs")[-1]["name"] == "active_thread_id"
+            assert inspector.get_columns("scheduled_task_runs")[-1]["name"] == "active_task_id"
+            assert {index["name"] for index in inspector.get_indexes("runs")} >= {"uq_runs_thread_active"}
+            assert {index["name"] for index in inspector.get_indexes("scheduled_task_runs")} >= {"uq_scheduled_task_run_active"}
+        finally:
+            target.dispose()
+    finally:
+        with admin.begin() as connection:
+            connection.execute(text(f"DROP DATABASE IF EXISTS `{database}`"))
+        admin.dispose()
 
 
 @pytest.mark.integration

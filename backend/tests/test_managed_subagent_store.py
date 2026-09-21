@@ -129,11 +129,20 @@ def test_store_factory_follows_agent_storage_backend(tmp_path):
     )
     assert isinstance(make_managed_subagent_store(db_config), SqlManagedSubagentStore)
 
+    mysql_config = SimpleNamespace(
+        agent_storage=SimpleNamespace(backend="db"),
+        database=SimpleNamespace(
+            backend="mysql",
+            app_sync_sqlalchemy_url=f"sqlite:///{tmp_path}/factory-mysql-contract.db",
+        ),
+    )
+    assert isinstance(make_managed_subagent_store(mysql_config), SqlManagedSubagentStore)
+
 
 def test_store_factory_rejects_memory_database():
     config = SimpleNamespace(
         agent_storage=SimpleNamespace(backend="db"),
         database=SimpleNamespace(backend="memory"),
     )
-    with pytest.raises(ValueError, match="sqlite.*postgres"):
+    with pytest.raises(ValueError, match="sqlite.*postgres.*mysql"):
         make_managed_subagent_store(config)

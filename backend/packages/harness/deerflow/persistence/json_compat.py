@@ -241,7 +241,10 @@ def _compile_mysql(element: JsonMatch, compiler: SQLCompiler, **kw: Any) -> str:
         raise ValueError(f"Key escaped validation: {element.key!r}")
     col = compiler.process(element.column, **kw)
     path = f'$."{element.key}"'
-    typeof = f"JSON_TYPE({col}, '{path}')"
+    # MySQL's JSON_TYPE accepts one JSON value, not a document/path pair.
+    # Extract first so metadata filters and the pinned/archive ordering
+    # predicates execute on the server rather than failing with ER_WRONG_PARAMCOUNT.
+    typeof = f"JSON_TYPE(JSON_EXTRACT({col}, '{path}'))"
     extract = f"JSON_UNQUOTE(JSON_EXTRACT({col}, '{path}'))"
     return _build_clause(compiler, typeof, extract, element.value, _MYSQL, **kw)
 
